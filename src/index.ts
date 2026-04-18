@@ -5,12 +5,18 @@ import './lib/otel.js'; // MUST be first import — registers OTel instrumentati
 // the real environment (systemd / Docker / CI), not from .env.
 import 'dotenv/config';
 import http from 'node:http';
+import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs, type CommandOptions } from './cli.js';
 import logger from './logger.js';
-import AuthManager, { buildScopesFromEndpoints } from './auth.js';
+import AuthManager, { buildScopesFromEndpoints, getTokenCachePath } from './auth.js';
 import MicrosoftGraphServer, { parseHttpOption } from './server.js';
 import { registerShutdownHooks } from './lib/shutdown.js';
 import { version } from './version.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * Probe /healthz and return an exit code suitable for Docker HEALTHCHECK.
@@ -59,6 +65,37 @@ async function runHealthCheck(args: CommandOptions): Promise<number> {
  * from transient crashes.
  */
 const EX_CONFIG = 78;
+
+/**
+ * Advisory probe for v1 OS-keychain (keytar) leftovers on stdio startup
+ * (SECUR-07 / D-04). Runs ONLY when:
+ *   - we're in stdio mode (HTTP/SSE transports never used the keychain)
+ *   - the file-based token cache does not yet exist (so the probe is a
+ *     one-time nudge, not recurring startup noise)
+ *
+ * The probe is spawned as a separate process so a missing keytar does
+ * not pull the native module into our address space. Exit code is
+ * advisory only (2 = leftovers present); the server continues regardless
+ * so a broken or missing probe cannot block startup.
+ */
+function maybeProbeKeytarLeftovers(args: CommandOptions): void {
+  if (args.http) return;
+  try {
+    const cachePath = getTokenCachePath();
+    if (existsSync(cachePath)) return;
+
+    // Dev (src/index.ts) and prod (dist/index.js) resolve the same relative path.
+    const probePath = path.resolve(__dirname, '..', 'bin', 'check-keytar-leftovers.cjs');
+    if (!existsSync(probePath)) return;
+
+    // Advisory: the probe writes to stderr if leftovers are detected. Result
+    // is intentionally ignored — a probe failure is never fatal.
+    const result = spawnSync(process.execPath, [probePath], { stdio: 'inherit' });
+    void result;
+  } catch {
+    // Probe failures must not block server startup.
+  }
+}
 
 /**
  * Fail-fast validation for production HTTP-mode config (plan 01-07 /
@@ -226,6 +263,13 @@ async function main(): Promise<void> {
       }
       process.exit(0);
     }
+
+    // Advisory probe for v1 OS-keychain leftovers (SECUR-07 / D-04). Stdio
+    // only; skipped when the file cache already exists. Runs AFTER auth
+    // bootstrap so we've already confirmed tokens would have loaded from
+    // the file cache — if we got here without tokens, the probe can tell
+    // the user how to migrate them.
+    maybeProbeKeytarLeftovers(args);
 
     const server = new MicrosoftGraphServer(authManager, args);
     await server.initialize(version);
