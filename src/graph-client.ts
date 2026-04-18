@@ -7,6 +7,48 @@ import { getCloudEndpoints } from './cloud-config.js';
 import { getRequestTokens } from './request-context.js';
 
 /**
+ * Maximum recursion depth for `removeODataProps`. A well-formed Graph response
+ * is shallow (typically < 10 levels); 100 is a comfortable safety ceiling that
+ * guards against pathological or adversarial payloads stack-overflowing the
+ * process. Deeper levels are silently truncated — the caller gets the top-100
+ * layers with @odata.* stripped and the rest passed through as-is.
+ */
+const MAX_REMOVE_ODATA_DEPTH = 100;
+
+/**
+ * Recursively strip `@odata.*` properties from a Graph response, preserving
+ * `@odata.nextLink` (pagination contract — see test/odata-nextlink.test.ts).
+ *
+ * Depth-guarded at MAX_REMOVE_ODATA_DEPTH and cycle-guarded via a WeakSet so
+ * self-referencing payloads (malicious or buggy upstream responses) cannot
+ * stack-overflow the Node runtime (T-01-09a DoS mitigation).
+ *
+ * Returns a new object; does not mutate `obj`. Primitives pass through
+ * unchanged. Arrays are mapped element-wise.
+ *
+ * Formerly defined as two inline `const` declarations inside
+ * `formatJsonResponse` (src/graph-client.ts lines 303-313 and 339-349 in
+ * v1) — hoisted to a single module-level implementation by Plan 01-09.
+ */
+export function removeODataProps<T>(obj: T, depth = 0, seen: WeakSet<object> = new WeakSet()): T {
+  if (depth > MAX_REMOVE_ODATA_DEPTH) return obj;
+  if (obj === null || obj === undefined || typeof obj !== 'object') return obj;
+  if (seen.has(obj as object)) return obj;
+  seen.add(obj as object);
+
+  if (Array.isArray(obj)) {
+    return obj.map((item) => removeODataProps(item, depth + 1, seen)) as unknown as T;
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+    if (key.startsWith('@odata.') && key !== '@odata.nextLink') continue;
+    result[key] = removeODataProps(value, depth + 1, seen);
+  }
+  return result as T;
+}
+
+/**
  * Returns true if the given HTTP Content-Type header indicates a binary
  * payload that must not be decoded as UTF-8 text. Graph returns binary for
  * endpoints like /me/photo/$value, /chats/.../hostedContents/{id}/$value, and
@@ -299,25 +341,12 @@ class GraphClient {
         };
       }
 
-      // Remove OData properties
-      const removeODataProps = (obj: Record<string, unknown>): void => {
-        if (typeof obj === 'object' && obj !== null) {
-          Object.keys(obj).forEach((key) => {
-            if (key.startsWith('@odata.') && key !== '@odata.nextLink') {
-              delete obj[key];
-            } else if (typeof obj[key] === 'object') {
-              removeODataProps(obj[key] as Record<string, unknown>);
-            }
-          });
-        }
-      };
-
-      removeODataProps(responseData.data as Record<string, unknown>);
+      // Strip @odata.* properties (preserves @odata.nextLink) via module-level
+      // helper with depth + WeakSet cycle guards (Plan 01-09 / T-01-09a).
+      const stripped = removeODataProps(responseData.data);
 
       return {
-        content: [
-          { type: 'text', text: this.serializeData(responseData.data, this.outputFormat, true) },
-        ],
+        content: [{ type: 'text', text: this.serializeData(stripped, this.outputFormat, true) }],
         _meta: meta,
       };
     }
@@ -335,23 +364,12 @@ class GraphClient {
       };
     }
 
-    // Remove OData properties
-    const removeODataProps = (obj: Record<string, unknown>): void => {
-      if (typeof obj === 'object' && obj !== null) {
-        Object.keys(obj).forEach((key) => {
-          if (key.startsWith('@odata.') && key !== '@odata.nextLink') {
-            delete obj[key];
-          } else if (typeof obj[key] === 'object') {
-            removeODataProps(obj[key] as Record<string, unknown>);
-          }
-        });
-      }
-    };
-
-    removeODataProps(data as Record<string, unknown>);
+    // Strip @odata.* properties (preserves @odata.nextLink) via module-level
+    // helper with depth + WeakSet cycle guards (Plan 01-09 / T-01-09a).
+    const stripped = removeODataProps(data);
 
     return {
-      content: [{ type: 'text', text: this.serializeData(data, this.outputFormat, true) }],
+      content: [{ type: 'text', text: this.serializeData(stripped, this.outputFormat, true) }],
     };
   }
 }

@@ -1,5 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import path from 'path';
+import os from 'node:os';
+import path from 'node:path';
+
+// Portable tmpdir-based paths so these tests pass on Windows + BSD + macOS +
+// Linux alike. Previously this suite used a hardcoded POSIX tmp path which
+// failed on Windows (Plan 01-09 / Test-portability fix).
+const TEST_TOKEN_CACHE = path.join(os.tmpdir(), 'ms365-mcp-test-cache', '.token-cache.json');
+const TEST_SELECTED_ACCOUNT = path.join(
+  os.tmpdir(),
+  'ms365-mcp-test-cache',
+  '.selected-account.json'
+);
 
 describe('token cache path configuration', () => {
   beforeEach(() => {
@@ -30,17 +41,17 @@ describe('token cache path configuration', () => {
     });
 
     it('should return env var path when set', async () => {
-      vi.stubEnv('MS365_MCP_TOKEN_CACHE_PATH', '/tmp/test-cache/.token-cache.json');
+      vi.stubEnv('MS365_MCP_TOKEN_CACHE_PATH', TEST_TOKEN_CACHE);
       const { getTokenCachePath } = await importHelpers();
       const result = getTokenCachePath();
-      expect(result).toBe('/tmp/test-cache/.token-cache.json');
+      expect(result).toBe(TEST_TOKEN_CACHE);
     });
 
     it('should trim whitespace from env var', async () => {
-      vi.stubEnv('MS365_MCP_TOKEN_CACHE_PATH', '  /tmp/test-cache/.token-cache.json  ');
+      vi.stubEnv('MS365_MCP_TOKEN_CACHE_PATH', `  ${TEST_TOKEN_CACHE}  `);
       const { getTokenCachePath } = await importHelpers();
       const result = getTokenCachePath();
-      expect(result).toBe('/tmp/test-cache/.token-cache.json');
+      expect(result).toBe(TEST_TOKEN_CACHE);
     });
 
     it('should return default path when env var is undefined', async () => {
@@ -62,17 +73,17 @@ describe('token cache path configuration', () => {
     });
 
     it('should return env var path when set', async () => {
-      vi.stubEnv('MS365_MCP_SELECTED_ACCOUNT_PATH', '/tmp/test-cache/.selected-account.json');
+      vi.stubEnv('MS365_MCP_SELECTED_ACCOUNT_PATH', TEST_SELECTED_ACCOUNT);
       const { getSelectedAccountPath } = await importHelpers();
       const result = getSelectedAccountPath();
-      expect(result).toBe('/tmp/test-cache/.selected-account.json');
+      expect(result).toBe(TEST_SELECTED_ACCOUNT);
     });
 
     it('should trim whitespace from env var', async () => {
-      vi.stubEnv('MS365_MCP_SELECTED_ACCOUNT_PATH', '  /tmp/test-cache/.selected-account.json  ');
+      vi.stubEnv('MS365_MCP_SELECTED_ACCOUNT_PATH', `  ${TEST_SELECTED_ACCOUNT}  `);
       const { getSelectedAccountPath } = await importHelpers();
       const result = getSelectedAccountPath();
-      expect(result).toBe('/tmp/test-cache/.selected-account.json');
+      expect(result).toBe(TEST_SELECTED_ACCOUNT);
     });
 
     it('should return default path when env var is undefined', async () => {

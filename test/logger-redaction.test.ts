@@ -85,7 +85,9 @@ describe('logger-redaction: D-01 STRICT redaction policy (OPS-02)', () => {
     const parsed = await captureLogLine(loggerConfig, (log) => {
       log.info({ req: { headers: { authorization: 'Bearer super-secret-token' } } }, 'req');
     });
-    expect((parsed as { req?: { headers?: { authorization?: unknown } } }).req?.headers?.authorization).toBe('[REDACTED]');
+    expect(
+      (parsed as { req?: { headers?: { authorization?: unknown } } }).req?.headers?.authorization
+    ).toBe('[REDACTED]');
   });
 
   it('redacts req.body', async () => {
@@ -106,14 +108,18 @@ describe('logger-redaction: D-01 STRICT redaction policy (OPS-02)', () => {
     const parsed = await captureLogLine(loggerConfig, (log) => {
       log.info({ data: { refresh_token: 'refresh-secret' } }, 'token');
     });
-    expect((parsed as { data?: { refresh_token?: unknown } }).data?.refresh_token).toBe('[REDACTED]');
+    expect((parsed as { data?: { refresh_token?: unknown } }).data?.refresh_token).toBe(
+      '[REDACTED]'
+    );
   });
 
   it('redacts client_secret via wildcard', async () => {
     const parsed = await captureLogLine(loggerConfig, (log) => {
       log.info({ payload: { client_secret: 'my-app-secret' } }, 'payload');
     });
-    expect((parsed as { payload?: { client_secret?: unknown } }).payload?.client_secret).toBe('[REDACTED]');
+    expect((parsed as { payload?: { client_secret?: unknown } }).payload?.client_secret).toBe(
+      '[REDACTED]'
+    );
   });
 
   it('redacts access_token via wildcard', async () => {
@@ -127,18 +133,19 @@ describe('logger-redaction: D-01 STRICT redaction policy (OPS-02)', () => {
     const parsed = await captureLogLine(loggerConfig, (log) => {
       log.info({ req: { headers: { prefer: 'respond-async' } } }, 'req');
     });
-    expect((parsed as { req?: { headers?: { prefer?: unknown } } }).req?.headers?.prefer).toBe('[REDACTED]');
+    expect((parsed as { req?: { headers?: { prefer?: unknown } } }).req?.headers?.prefer).toBe(
+      '[REDACTED]'
+    );
   });
 
   it('redacts req.headers["x-microsoft-refresh-token"]', async () => {
     const parsed = await captureLogLine(loggerConfig, (log) => {
-      log.info(
-        { req: { headers: { 'x-microsoft-refresh-token': 'refresh-token-value' } } },
-        'req'
-      );
+      log.info({ req: { headers: { 'x-microsoft-refresh-token': 'refresh-token-value' } } }, 'req');
     });
     expect(
-      (parsed as { req?: { headers?: Record<string, unknown> } }).req?.headers?.['x-microsoft-refresh-token']
+      (parsed as { req?: { headers?: Record<string, unknown> } }).req?.headers?.[
+        'x-microsoft-refresh-token'
+      ]
     ).toBe('[REDACTED]');
   });
 
@@ -175,8 +182,7 @@ describe('logger-redaction: path normalization (normalizePath)', () => {
 
   it('normalizes lowercase base64url Outlook message ID (starts with a)', async () => {
     const { normalizePath } = await import('../src/lib/redact.js');
-    const input =
-      '/users/aQMkADAwATM3ZmYAZS1iMjcyLTg3MGItMDACLTAwCgBGAAADMkAAAAA=';
+    const input = '/users/aQMkADAwATM3ZmYAZS1iMjcyLTg3MGItMDACLTAwCgBGAAADMkAAAAA=';
     const result = normalizePath(input);
     expect(result).toContain('/{id}');
     expect(result).not.toContain('aQMkADAwATM3ZmYAZS1iMjcyLTg3MGItMDACLTAwCgBGAAADMkAAAAA=');

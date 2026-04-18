@@ -39,29 +39,20 @@ describe('logger-correlation: requestId threading (OPS-01)', () => {
 
     const results: Record<string, string | undefined> = {};
 
-    const req1 = requestContext.run(
-      { requestId: 'req-AAA', tenantId: null },
-      async () => {
-        await new Promise((resolve) => setTimeout(resolve, 15));
-        results['req1'] = getRequestId();
-      }
-    );
+    const req1 = requestContext.run({ requestId: 'req-AAA', tenantId: null }, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      results['req1'] = getRequestId();
+    });
 
-    const req2 = requestContext.run(
-      { requestId: 'req-BBB', tenantId: null },
-      async () => {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        results['req2'] = getRequestId();
-      }
-    );
+    const req2 = requestContext.run({ requestId: 'req-BBB', tenantId: null }, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      results['req2'] = getRequestId();
+    });
 
-    const req3 = requestContext.run(
-      { requestId: 'req-CCC', tenantId: null },
-      async () => {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        results['req3'] = getRequestId();
-      }
-    );
+    const req3 = requestContext.run({ requestId: 'req-CCC', tenantId: null }, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      results['req3'] = getRequestId();
+    });
 
     await Promise.all([req1, req2, req3]);
 

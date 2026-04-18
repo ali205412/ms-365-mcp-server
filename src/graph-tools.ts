@@ -40,6 +40,18 @@ const endpointsData = JSON.parse(
   readFileSync(path.join(__dirname, 'endpoints.json'), 'utf8')
 ) as EndpointConfig[];
 
+/**
+ * Pre-built Map of `toolName` -> `EndpointConfig` for O(1) lookup from
+ * `registerGraphTools` and `buildToolsRegistry`. Formerly these loops called
+ * Array#find on endpointsData once per `api.endpoints` entry, which is O(N)
+ * per iteration / O(N^2) overall — a measurable contributor to cold-start
+ * time for containers with tight Docker HEALTHCHECK start-period budgets
+ * (Plan 01-09 / T-01-09b performance mitigation).
+ */
+const endpointsMap: Map<string, EndpointConfig> = new Map(
+  endpointsData.map((e) => [e.toolName, e])
+);
+
 /** When set to a positive integer, caps Graph `$top` on list requests (see README). */
 function maxTopFromEnv(): number | undefined {
   const raw = process.env.MS365_MCP_MAX_TOP;
@@ -517,7 +529,7 @@ export function registerGraphTools(
   let failedCount = 0;
 
   for (const tool of api.endpoints) {
-    const endpointConfig = endpointsData.find((e) => e.toolName === tool.alias);
+    const endpointConfig = endpointsMap.get(tool.alias);
     if (!orgMode && endpointConfig && !endpointConfig.scopes && endpointConfig.workScopes) {
       logger.info(`Skipping work account tool ${tool.alias} - not in org mode`);
       skippedCount++;
@@ -763,7 +775,7 @@ export function buildToolsRegistry(
   >();
 
   for (const tool of api.endpoints) {
-    const endpointConfig = endpointsData.find((e) => e.toolName === tool.alias);
+    const endpointConfig = endpointsMap.get(tool.alias);
 
     if (!orgMode && endpointConfig && !endpointConfig.scopes && endpointConfig.workScopes) {
       continue;
