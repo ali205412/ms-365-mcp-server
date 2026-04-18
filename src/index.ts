@@ -9,6 +9,7 @@ import { parseArgs, type CommandOptions } from './cli.js';
 import logger from './logger.js';
 import AuthManager, { buildScopesFromEndpoints } from './auth.js';
 import MicrosoftGraphServer, { parseHttpOption } from './server.js';
+import { registerShutdownHooks } from './lib/shutdown.js';
 import { version } from './version.js';
 
 /**
@@ -63,6 +64,14 @@ async function main(): Promise<void> {
       const exitCode = await runHealthCheck(args);
       process.exit(exitCode);
     }
+
+    // Register graceful-shutdown hooks early (plan 01-05 / OPS-09). In stdio
+    // mode the null server skips server.close() but still flushes pino +
+    // OTel on Ctrl-C. In HTTP mode this call is a pre-listen safety net —
+    // src/server.ts re-registers with the real http.Server once app.listen
+    // returns, and registerShutdownHooks's removeAllListeners guard makes
+    // that later registration win.
+    registerShutdownHooks(null, logger);
 
     const includeWorkScopes = args.orgMode || false;
     if (includeWorkScopes) {
