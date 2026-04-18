@@ -34,7 +34,6 @@ vi.mock('../src/lib/health.js', () => ({
 }));
 
 // Reusable signal-handler registry captured via vi.spyOn(process, 'on').
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SignalHandler = (signal: string) => void | Promise<void>;
 
 function installProcessSpies(): {
@@ -191,9 +190,7 @@ describe('graceful shutdown (OPS-09 / plan 01-05)', () => {
     const health = await import('../src/lib/health.js');
 
     // First call: not draining yet. Second call: draining from prior run.
-    vi.mocked(health.isDraining)
-      .mockReturnValueOnce(false)
-      .mockReturnValueOnce(true);
+    vi.mocked(health.isDraining).mockReturnValueOnce(false).mockReturnValueOnce(true);
 
     const server = makeStubServer();
     const logger = makeStubLogger();
