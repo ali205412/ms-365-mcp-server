@@ -22,6 +22,8 @@ import { requestContext, getRequestTokens } from './request-context.js';
 import { mountHealth } from './lib/health.js';
 import { registerShutdownHooks } from './lib/shutdown.js';
 import { validateRedirectUri, type RedirectUriPolicy } from './lib/redirect-uri.js';
+import { createCorsMiddleware, type CorsMode } from './lib/cors.js';
+import type { CloudType } from './cloud-config.js';
 import crypto from 'node:crypto';
 import pinoHttp from 'pino-http';
 import { nanoid } from 'nanoid';
@@ -124,6 +126,251 @@ export function createRegisterHandler(policy: RedirectUriPolicy) {
       client_name: body.client_name || 'MCP Client',
     });
   };
+}
+
+/**
+ * PKCE store entry for the two-leg PKCE bridge. The HTTP setup owns the
+ * Map; the factory reads and mutates it per request. Typed here (rather
+ * than inlined on the class) so the token-handler factory can accept the
+ * Map as a dependency-injected parameter — tests use a fresh Map per
+ * spec, production uses the per-instance Map on `MicrosoftGraphServer`.
+ */
+export interface PkceStoreEntry {
+  clientCodeChallenge: string;
+  clientCodeChallengeMethod: string;
+  serverCodeVerifier: string;
+  createdAt: number;
+}
+
+export type PkceStore = Map<string, PkceStoreEntry>;
+
+/**
+ * Secrets slice the /token handler needs. Decoupled from the full
+ * `AppSecrets` interface so tests can inject a minimal stub without
+ * bootstrapping the secrets provider.
+ */
+export interface TokenHandlerSecrets {
+  clientId: string;
+  clientSecret?: string;
+  tenantId?: string;
+  cloudType: CloudType;
+}
+
+export interface TokenHandlerConfig {
+  secrets: TokenHandlerSecrets;
+  pkceStore: PkceStore;
+}
+
+/**
+ * Build the token-exchange (POST /token) handler.
+ *
+ * Plan 01-07 (SECUR-05 + T-01-07) scrubs three log sites that leaked
+ * request body in v1:
+ *
+ *   Site A — entry info log at "/token called": pino-native meta-first
+ *     arg order; only `method`, `url`, `contentType`, `grant_type`
+ *     values appear in the record. `body` is never attached.
+ *   Site B — grant_type-missing error: meta carries ONLY the non-
+ *     sensitive shape (`grant_type`, `has_code`, `has_refresh_token`).
+ *     The raw body is never spread. Defense-in-depth: pino's
+ *     `redact.paths` (plan 01-02) would catch a regression, but the
+ *     invariant is maintained at the call site first.
+ *   Site C — catch-block: stringify `error.message` and optional `code`
+ *     only. Never spread the raw Error into the log meta — fetch
+ *     failure wrappers carry `.response.body` which would leak.
+ *
+ * Exported so tests can mount the handler on a minimal Express app
+ * without bootstrapping MicrosoftGraphServer / MSAL / secrets.
+ */
+export function createTokenHandler(config: TokenHandlerConfig) {
+  const { secrets, pkceStore } = config;
+
+  return async (req: Request, res: Response): Promise<void> => {
+    try {
+      // Site A — pino-native order (meta, message). `body` NEVER goes in
+      // the meta object; only the three request-shape fields + the
+      // caller-advertised grant_type land in the log record. If the
+      // request arrives without a body, grant_type is reported as
+      // `undefined` — the grant_type-missing branch below then logs the
+      // authoritative [MISSING] marker.
+      logger.info(
+        {
+          method: req.method,
+          url: req.url,
+          contentType: req.get('Content-Type'),
+          grant_type: (req.body as Record<string, unknown> | undefined)?.grant_type,
+        },
+        'Token endpoint called'
+      );
+
+      const body = req.body as Record<string, unknown> | undefined;
+
+      if (!body) {
+        // No body: log only the empty-body sentinel. Nothing sensitive
+        // exists to log in this branch; kept as a separate site so the
+        // shape stays explicit.
+        logger.error({}, 'Token endpoint: Request body is undefined');
+        res.status(400).json({
+          error: 'invalid_request',
+          error_description: 'Request body is required',
+        });
+        return;
+      }
+
+      if (!body.grant_type) {
+        // Site B — redacted meta. Emits only shape booleans + the
+        // grant_type value (which is the MISSING marker here). The raw
+        // `body` reference is explicitly NEVER attached — tests enforce
+        // this invariant at the logger mock call level.
+        logger.error(
+          {
+            grant_type: '[MISSING]',
+            has_code: Boolean(body.code),
+            has_refresh_token: Boolean(body.refresh_token),
+            has_client_secret: Boolean(body.client_secret),
+          },
+          'Token endpoint: grant_type is missing'
+        );
+        res.status(400).json({
+          error: 'invalid_request',
+          error_description: 'grant_type parameter is required',
+        });
+        return;
+      }
+
+      if (body.grant_type === 'authorization_code') {
+        const tenantId = secrets.tenantId || 'common';
+        const clientId = secrets.clientId;
+        const clientSecret = secrets.clientSecret;
+
+        // Shape-only info log — `has_code` / `has_code_verifier` are
+        // booleans, `redirect_uri` is advertised publicly in OAuth
+        // metadata (no secret), clientId is non-secret, tenantId is
+        // non-secret. We intentionally do NOT log the raw code or
+        // code_verifier values.
+        logger.info(
+          {
+            redirect_uri: body.redirect_uri,
+            has_code: Boolean(body.code),
+            has_code_verifier: Boolean(body.code_verifier),
+            clientId,
+            tenantId,
+            hasClientSecret: Boolean(clientSecret),
+          },
+          'Token endpoint: authorization_code exchange'
+        );
+
+        // Two-leg PKCE: if the client sent a code_verifier, hash it and
+        // look it up against each stored challenge. The matching entry
+        // carries the server's code_verifier (for Microsoft).
+        let serverCodeVerifier: string | undefined;
+        if (body.code_verifier) {
+          const clientVerifier = body.code_verifier as string;
+          const clientChallengeComputed = crypto
+            .createHash('sha256')
+            .update(clientVerifier)
+            .digest('base64url');
+
+          for (const [state, pkceData] of pkceStore) {
+            if (pkceData.clientCodeChallenge === clientChallengeComputed) {
+              serverCodeVerifier = pkceData.serverCodeVerifier;
+              pkceStore.delete(state);
+              logger.info(
+                { state: state.substring(0, 8) + '...' },
+                'Two-leg PKCE: matched client verifier, using server verifier'
+              );
+              break;
+            }
+          }
+        }
+
+        const result = await exchangeCodeForToken(
+          body.code as string,
+          body.redirect_uri as string,
+          clientId,
+          clientSecret,
+          tenantId,
+          serverCodeVerifier || (body.code_verifier as string | undefined),
+          secrets.cloudType
+        );
+        res.json(result);
+      } else if (body.grant_type === 'refresh_token') {
+        const tenantId = secrets.tenantId || 'common';
+        const clientId = secrets.clientId;
+        const clientSecret = secrets.clientSecret;
+
+        if (clientSecret) {
+          logger.info({}, 'Refresh endpoint: Using confidential client with client_secret');
+        } else {
+          logger.info({}, 'Refresh endpoint: Using public client without client_secret');
+        }
+
+        const result = await refreshAccessToken(
+          body.refresh_token as string,
+          clientId,
+          clientSecret,
+          tenantId,
+          secrets.cloudType
+        );
+        res.json(result);
+      } else {
+        res.status(400).json({
+          error: 'unsupported_grant_type',
+          error_description: `Grant type '${body.grant_type}' is not supported`,
+        });
+      }
+    } catch (error) {
+      // Site C — stringify the error message only. Never spread the raw
+      // Error (fetch-failure wrappers carry `.response.body` which would
+      // leak refresh tokens / codes into the log record). The optional
+      // `code` field is useful for filtering without being sensitive.
+      logger.error(
+        {
+          err: error instanceof Error ? error.message : String(error),
+          code: (error as { code?: string } | undefined)?.code,
+        },
+        'Token endpoint error'
+      );
+      res.status(500).json({
+        error: 'server_error',
+        error_description: 'Internal server error during token exchange',
+      });
+    }
+  };
+}
+
+/**
+ * Resolve the prod-mode CORS allowlist from environment variables.
+ *
+ * Precedence:
+ *   1. MS365_MCP_CORS_ORIGINS (plural, comma-separated) — canonical.
+ *   2. MS365_MCP_CORS_ORIGIN  (singular, v1 compat) — honored with a
+ *      warn log so operators know to migrate. Removal target is v2.1
+ *      (tracked in CHANGELOG by plan 01-08).
+ *   3. Empty array — src/index.ts fails-fast with exit(78) in prod
+ *      HTTP mode before this function is consulted by the middleware.
+ *
+ * Computed once per HTTP setup and closure-captured by
+ * createCorsMiddleware so the split+trim cost is not paid per request.
+ */
+function computeCorsAllowlist(): string[] {
+  const plural = process.env.MS365_MCP_CORS_ORIGINS;
+  if (plural && plural.trim()) {
+    return plural
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
+  const singular = process.env.MS365_MCP_CORS_ORIGIN;
+  if (singular && singular.trim()) {
+    logger.warn(
+      'MS365_MCP_CORS_ORIGIN (singular) is deprecated — use MS365_MCP_CORS_ORIGINS (plural, comma-separated)'
+    );
+    return [singular.trim()];
+  }
+
+  return [];
 }
 
 class MicrosoftGraphServer {
@@ -298,27 +545,6 @@ class MicrosoftGraphServer {
       app.use(express.json());
       app.use(express.urlencoded({ extended: true }));
 
-      // Add CORS headers for all routes
-      const corsOrigin = process.env.MS365_MCP_CORS_ORIGIN || 'http://localhost:3000';
-      app.use((req, res, next) => {
-        res.header('Access-Control-Allow-Origin', corsOrigin);
-        res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-        res.header(
-          'Access-Control-Allow-Headers',
-          'Origin, X-Requested-With, Content-Type, Accept, Authorization, mcp-protocol-version'
-        );
-
-        // Handle preflight requests
-        if (req.method === 'OPTIONS') {
-          res.sendStatus(200);
-          return;
-        }
-
-        next();
-      });
-
-      const oauthProvider = new MicrosoftOAuthProvider(this.authManager, this.secrets!);
-
       // Public URL resolution for browser-facing OAuth endpoints.
       //
       // When running behind a reverse proxy, the request's Host header only
@@ -347,12 +573,25 @@ class MicrosoftGraphServer {
         null;
       const publicBase = publicUrlRaw ? new URL(publicUrlRaw).href.replace(/\/$/, '') : null;
 
-      // Redirect-URI allowlist policy (plan 01-06 / D-02). Computed ONCE per
-      // HTTP setup; closure-captured by createRegisterHandler below. Phase 3
-      // will extend this to include a per-tenant allowlist without touching
-      // createRegisterHandler or validateRedirectUri.
+      // Redirect-URI allowlist policy (plan 01-06 / D-02) and CORS mode gate
+      // (plan 01-07 / SECUR-04). Both read the same `isProdMode` flag and
+      // `publicUrlHost`; computing them ONCE here keeps the hot path free of
+      // per-request env parsing. Phase 3 will extend this to a per-tenant
+      // allowlist without touching createRegisterHandler / createCorsMiddleware.
       const publicUrlHost = publicBase ? new URL(publicBase).hostname : null;
       const isProdMode = process.env.NODE_ENV === 'production';
+
+      // CORS policy (plan 01-07 / D-02 / SECUR-04). Dev mode echoes ACAO to
+      // any http(s)://localhost:* / http(s)://127.0.0.1:* origin; prod mode
+      // requires an exact allowlist match against MS365_MCP_CORS_ORIGINS
+      // (comma-separated). The deprecated singular MS365_MCP_CORS_ORIGIN
+      // is honored with a warn log. src/index.ts fails-fast with exit(78)
+      // in prod HTTP mode when the resolved allowlist is empty.
+      const corsMode: CorsMode = isProdMode ? 'prod' : 'dev';
+      const corsAllowlist = computeCorsAllowlist();
+      app.use(createCorsMiddleware({ mode: corsMode, allowlist: corsAllowlist }));
+
+      const oauthProvider = new MicrosoftOAuthProvider(this.authManager, this.secrets!);
 
       // OAuth Authorization Server Discovery
       app.get('/.well-known/oauth-authorization-server', async (req, res) => {
@@ -512,123 +751,20 @@ class MicrosoftGraphServer {
         res.redirect(microsoftAuthUrl.toString());
       });
 
-      // Token exchange endpoint
-      app.post('/token', async (req, res) => {
-        try {
-          // Log token endpoint call (redact sensitive data)
-          logger.info('Token endpoint called', {
-            method: req.method,
-            url: req.url,
-            contentType: req.get('Content-Type'),
-            grant_type: req.body?.grant_type,
-          });
-
-          const body = req.body;
-
-          // Add debugging and validation
-          if (!body) {
-            logger.error('Token endpoint: Request body is undefined');
-            res.status(400).json({
-              error: 'invalid_request',
-              error_description: 'Request body is required',
-            });
-            return;
-          }
-
-          if (!body.grant_type) {
-            logger.error('Token endpoint: grant_type is missing', { body });
-            res.status(400).json({
-              error: 'invalid_request',
-              error_description: 'grant_type parameter is required',
-            });
-            return;
-          }
-
-          if (body.grant_type === 'authorization_code') {
-            const tenantId = this.secrets?.tenantId || 'common';
-            const clientId = this.secrets!.clientId;
-            const clientSecret = this.secrets?.clientSecret;
-
-            logger.info('Token endpoint: authorization_code exchange', {
-              redirect_uri: body.redirect_uri,
-              has_code: !!body.code,
-              has_code_verifier: !!body.code_verifier,
-              clientId,
-              tenantId,
-              hasClientSecret: !!clientSecret,
-            });
-
-            // Two-leg PKCE: check if we have a stored PKCE mapping for this exchange
-            // We need to find the matching state — it's not sent in the token request,
-            // but the code is unique per authorization, so we verify the client's
-            // code_verifier against all stored challenges and use the server's verifier
-            let serverCodeVerifier: string | undefined;
-
-            if (body.code_verifier) {
-              // Look through pkceStore for a matching client code_challenge
-              const clientVerifier = body.code_verifier as string;
-              const clientChallengeComputed = crypto
-                .createHash('sha256')
-                .update(clientVerifier)
-                .digest('base64url');
-
-              for (const [state, pkceData] of this.pkceStore) {
-                if (pkceData.clientCodeChallenge === clientChallengeComputed) {
-                  // Client's code_verifier matches stored code_challenge — two-leg PKCE
-                  serverCodeVerifier = pkceData.serverCodeVerifier;
-                  this.pkceStore.delete(state);
-                  logger.info('Two-leg PKCE: matched client verifier, using server verifier', {
-                    state: state.substring(0, 8) + '...',
-                  });
-                  break;
-                }
-              }
-            }
-
-            const result = await exchangeCodeForToken(
-              body.code as string,
-              body.redirect_uri as string,
-              clientId,
-              clientSecret,
-              tenantId,
-              serverCodeVerifier || (body.code_verifier as string | undefined),
-              this.secrets!.cloudType
-            );
-            res.json(result);
-          } else if (body.grant_type === 'refresh_token') {
-            const tenantId = this.secrets?.tenantId || 'common';
-            const clientId = this.secrets!.clientId;
-            const clientSecret = this.secrets?.clientSecret;
-
-            // Log whether using public or confidential client
-            if (clientSecret) {
-              logger.info('Refresh endpoint: Using confidential client with client_secret');
-            } else {
-              logger.info('Refresh endpoint: Using public client without client_secret');
-            }
-
-            const result = await refreshAccessToken(
-              body.refresh_token as string,
-              clientId,
-              clientSecret,
-              tenantId,
-              this.secrets!.cloudType
-            );
-            res.json(result);
-          } else {
-            res.status(400).json({
-              error: 'unsupported_grant_type',
-              error_description: `Grant type '${body.grant_type}' is not supported`,
-            });
-          }
-        } catch (error) {
-          logger.error('Token endpoint error:', error);
-          res.status(500).json({
-            error: 'server_error',
-            error_description: 'Internal server error during token exchange',
-          });
-        }
-      });
+      // Token exchange endpoint — plan 01-07 factory-ized handler. All three
+      // v1 log-site body leaks (info entry, grant_type missing, catch-block)
+      // are scrubbed inside createTokenHandler; tests mount the same factory
+      // on a minimal Express app to assert the invariant at the logger mock
+      // call level. The factory is dependency-injected with secrets and the
+      // per-instance PKCE store so the two-leg PKCE handshake continues to
+      // work unchanged.
+      app.post(
+        '/token',
+        createTokenHandler({
+          secrets: this.secrets!,
+          pkceStore: this.pkceStore,
+        })
+      );
 
       app.use(
         mcpAuthRouter({
