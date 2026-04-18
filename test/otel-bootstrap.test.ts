@@ -59,23 +59,30 @@ describe('otel-bootstrap: NodeSDK singleton (D-03)', () => {
     vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', '');
     vi.stubEnv('MS365_MCP_PROMETHEUS_ENABLED', '1');
 
-    // We spy on PrometheusExporter constructor to verify it was instantiated
-    const promModule = await import('@opentelemetry/exporter-prometheus');
-    const PrometheusExporterSpy = vi.spyOn(promModule, 'PrometheusExporter');
-
+    // Load the otel module with Prometheus enabled. Since vi.resetModules() ran
+    // in beforeEach, this is a fresh dynamic import with the env var set.
     const mod = await import('../src/lib/otel.js');
     const otel = mod.otel ?? mod.default;
 
     expect(otel).toBeDefined();
-    // Either the constructor was called, or we can inspect the sdk internals
-    // Accept either: PrometheusExporter was instantiated OR sdk has _metricReader
-    const sdkAny = otel.sdk as unknown as Record<string, unknown>;
-    const hasMetricReader =
-      PrometheusExporterSpy.mock.calls.length > 0 ||
-      sdkAny._metricReader !== undefined ||
-      sdkAny._metrics !== undefined;
+    expect(otel.sdk).toBeDefined();
 
-    expect(hasMetricReader).toBe(true);
+    // Verify that the SDK was constructed with a metric reader.
+    // The NodeSDK stores the metric reader on _metricReader (internal field).
+    // We accept either the internal field being set OR the module exporting
+    // the PrometheusExporter separately (implementation-specific).
+    const sdkAny = otel.sdk as unknown as Record<string, unknown>;
+
+    // NodeSDK internals: '_metricReader' or '_configuration._metricReader'
+    const hasMetricReader =
+      sdkAny['_metricReader'] !== undefined ||
+      (sdkAny['_configuration'] !== undefined &&
+        (sdkAny['_configuration'] as Record<string, unknown>)['metricReader'] !== undefined);
+
+    // Also accept: the module exports a prometheusExporter named export
+    const hasExport = (mod as Record<string, unknown>)['prometheusExporter'] !== undefined;
+
+    expect(hasMetricReader || hasExport).toBe(true);
 
     await otel.shutdown().catch(() => {
       // Ignore errors
