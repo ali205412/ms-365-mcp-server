@@ -30,10 +30,7 @@ vi.mock('../src/logger.js', () => ({
 }));
 
 // Helper — POST JSON to a URL and return { status, body }.
-async function postJson(
-  url: string,
-  payload: unknown
-): Promise<{ status: number; body: unknown }> {
+async function postJson(url: string, payload: unknown): Promise<{ status: number; body: unknown }> {
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
