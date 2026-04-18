@@ -47,7 +47,9 @@ const resource = resourceFromAttributes({
 
 // ── Trace exporter ──────────────────────────────────────────────────────────
 const otlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim();
-const traceExporter = otlpEndpoint ? new OTLPTraceExporter({ url: `${otlpEndpoint}/v1/traces` }) : undefined;
+const traceExporter = otlpEndpoint
+  ? new OTLPTraceExporter({ url: `${otlpEndpoint}/v1/traces` })
+  : undefined;
 
 // ── Metric reader ────────────────────────────────────────────────────────────
 const prometheusEnabled =
@@ -92,7 +94,7 @@ const shutdown = async (): Promise<void> => {
   );
   try {
     await Promise.race([sdk.shutdown(), timeoutPromise]);
-  } catch (_err) {
+  } catch {
     // Swallow shutdown errors — we must not block process exit
   }
 };

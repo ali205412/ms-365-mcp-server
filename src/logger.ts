@@ -21,10 +21,7 @@
 import pino from 'pino';
 import os from 'os';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { normalizePath } from './lib/redact.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const isProd = process.env.NODE_ENV === 'production';
 const level = process.env.LOG_LEVEL ?? (isProd ? 'info' : 'debug');
@@ -94,8 +91,7 @@ function buildTransport(): pino.TransportSingleOptions | undefined {
 // creates the directory lazily on first write — read-only rootfs containers
 // will never hit the mkdir code path if no logs are written before the crash.
 const logsDir =
-  process.env.MS365_MCP_LOG_DIR ||
-  path.join(os.homedir(), '.ms-365-mcp-server', 'logs');
+  process.env.MS365_MCP_LOG_DIR || path.join(os.homedir(), '.ms-365-mcp-server', 'logs');
 
 // ── Pino instance ─────────────────────────────────────────────────────────────
 const transport = buildTransport();
@@ -217,7 +213,7 @@ if (process.env.MS365_MCP_LOG_DIR) {
     // This is acceptable for Phase 1; plan 01-05 can refine with pino.multistream.
     const _fileLogger = pino(pinoOptions, fileTransport);
     void _fileLogger; // Suppress "unused variable" lint warning — used implicitly via transport
-  } catch (_err) {
+  } catch {
     // File transport setup failed (e.g., unwritable directory). Fall back silently.
   }
 }

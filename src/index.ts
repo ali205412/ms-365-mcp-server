@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-
+import './lib/otel.js'; // MUST be first import — registers OTel instrumentation hooks before anything else loads
+// Note: OTel reads OTEL_EXPORTER_OTLP_ENDPOINT from process.env at SDK start time.
+// This MUST run BEFORE dotenv/config so that in production the env var comes from
+// the real environment (systemd / Docker / CI), not from .env.
 import 'dotenv/config';
 import { parseArgs } from './cli.js';
 import logger from './logger.js';

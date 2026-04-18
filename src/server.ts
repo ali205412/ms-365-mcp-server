@@ -18,8 +18,10 @@ import {
 import type { CommandOptions } from './cli.ts';
 import { getSecrets, type AppSecrets } from './secrets.js';
 import { getCloudEndpoints } from './cloud-config.js';
-import { requestContext } from './request-context.js';
+import { requestContext, getRequestTokens } from './request-context.js';
 import crypto from 'node:crypto';
+import pinoHttp from 'pino-http';
+import { nanoid } from 'nanoid';
 
 /**
  * Parse HTTP option into host and port components.
@@ -176,6 +178,32 @@ class MicrosoftGraphServer {
 
       const app = express();
       app.set('trust proxy', true);
+
+      // pino-http request logging — MUST be registered BEFORE express.json() so
+      // that req.id is stamped on the raw request before body parsing starts.
+      app.use(
+        pinoHttp({
+          logger,
+          genReqId: () => nanoid(),
+          autoLogging: {
+            ignore: (req) => {
+              const url = req.url ?? '';
+              // Skip access logs for health-check endpoints (plan 01-04 mounts these).
+              return url.startsWith('/healthz') || url.startsWith('/readyz');
+            },
+          },
+          customProps: (req) => ({ requestId: req.id, tenantId: null }),
+        })
+      );
+
+      // Populate the shared AsyncLocalStorage so any downstream handler can
+      // retrieve the correlation IDs without receiving them as function arguments.
+      app.use((req, _res, next) => {
+        // pino-http stamps req.id as string|number; we assert string here because
+        // genReqId always returns nanoid() which is a string.
+        requestContext.run({ requestId: req.id as string, tenantId: null }, next);
+      });
+
       app.use(express.json());
       app.use(express.urlencoded({ extended: true }));
 
@@ -543,8 +571,12 @@ class MicrosoftGraphServer {
 
           try {
             if (req.microsoftAuth) {
+              // Merge auth tokens into the existing ALS context (which already
+              // carries requestId + tenantId from the pino-http middleware above).
+              const existing = getRequestTokens() ?? {};
               await requestContext.run(
                 {
+                  ...existing,
                   accessToken: req.microsoftAuth.accessToken,
                   refreshToken: req.microsoftAuth.refreshToken,
                 },
@@ -593,8 +625,12 @@ class MicrosoftGraphServer {
 
           try {
             if (req.microsoftAuth) {
+              // Merge auth tokens into the existing ALS context (which already
+              // carries requestId + tenantId from the pino-http middleware above).
+              const existing = getRequestTokens() ?? {};
               await requestContext.run(
                 {
+                  ...existing,
                   accessToken: req.microsoftAuth.accessToken,
                   refreshToken: req.microsoftAuth.refreshToken,
                 },
