@@ -27,9 +27,7 @@ describe('Dockerfile hardening — SECUR-06 static assertions', () => {
 
   it('Test 3: Dockerfile ENTRYPOINT contains /sbin/tini', () => {
     const content = readDockerfile();
-    const entrypointLine = content
-      .split('\n')
-      .find((line) => line.trim().startsWith('ENTRYPOINT'));
+    const entrypointLine = content.split('\n').find((line) => line.trim().startsWith('ENTRYPOINT'));
     expect(entrypointLine).toBeDefined();
     expect(entrypointLine).toContain('/sbin/tini');
   });
