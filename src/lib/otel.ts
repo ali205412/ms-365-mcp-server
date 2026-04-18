@@ -21,7 +21,13 @@ import { resourceFromAttributes } from '@opentelemetry/resources';
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
-import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-node';
+// PeriodicExportingMetricReader is exported from @opentelemetry/sdk-metrics.
+// The @opentelemetry/sdk-node meta-package aggregates metrics exports under
+// its `metrics` namespace but does NOT re-export the reader as a top-level
+// named export — a direct named import from 'sdk-node' fails at runtime
+// under ESM strict import semantics (Node 22). Import it from the actual
+// owning package so both ESM and CJS module resolvers agree.
+import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 import { PrometheusExporter } from '@opentelemetry/exporter-prometheus';
 import { readFileSync } from 'fs';
 import path from 'path';

@@ -51,6 +51,69 @@ async function runHealthCheck(args: CommandOptions): Promise<number> {
   });
 }
 
+/**
+ * Sysexits EX_CONFIG — "the configuration file was invalid in some way"
+ * (https://man.openbsd.org/sysexits.3). Used for fail-fast exits when a
+ * required production env var is missing. Distinct from the generic exit 1
+ * so operators + Docker restart policies can differentiate config errors
+ * from transient crashes.
+ */
+const EX_CONFIG = 78;
+
+/**
+ * Fail-fast validation for production HTTP-mode config (plan 01-07 /
+ * D-02 / SECUR-04).
+ *
+ * In prod HTTP mode both MS365_MCP_PUBLIC_URL and an explicit CORS
+ * allowlist MUST be set — running half-configured would silently produce
+ * broken OAuth metadata (unreachable issuer URLs) and/or an open-gate
+ * CORS posture. We exit EX_CONFIG (78) before any server resources are
+ * allocated so the operator gets a loud, early error with remediation
+ * guidance.
+ *
+ * Stdio mode skips both checks: those env vars are HTTP-only. Dev mode
+ * (NODE_ENV != 'production') is permissive — loopback is auto-allowed
+ * and OAuth metadata uses the request origin.
+ *
+ * The deprecated singular MS365_MCP_CORS_ORIGIN (v1) and
+ * MS365_MCP_BASE_URL (v1) are honored as fallbacks so existing
+ * deployments don't break on upgrade — they emit a warn log in
+ * src/server.ts at startup (computeCorsAllowlist / publicBase resolution).
+ */
+function validateProdHttpConfig(args: CommandOptions): void {
+  if (!args.http) return;
+  if (process.env.NODE_ENV !== 'production') return;
+
+  const hasPublicUrl =
+    !!process.env.MS365_MCP_PUBLIC_URL?.trim() || !!process.env.MS365_MCP_BASE_URL?.trim();
+  if (!hasPublicUrl) {
+    const message =
+      'MS365_MCP_PUBLIC_URL is required in production HTTP mode (NODE_ENV=production). ' +
+      'Set it to the externally-reachable origin (e.g., https://mcp.example.com). ' +
+      'Deprecated MS365_MCP_BASE_URL is accepted as a fallback. ' +
+      'Dev mode (NODE_ENV != production) permits it to be unset.';
+    logger.error(message);
+    // Secondary write to stderr so tests can grep the variable name even
+    // when pino's transport routes the log record to stdout in prod mode.
+    process.stderr.write(`[STARTUP CONFIG ERROR] ${message}\n`);
+    process.exit(EX_CONFIG); // process.exit(78) — sysexits EX_CONFIG
+  }
+
+  const hasPluralCors = !!process.env.MS365_MCP_CORS_ORIGINS?.trim();
+  const hasSingularCors = !!process.env.MS365_MCP_CORS_ORIGIN?.trim();
+  if (!hasPluralCors && !hasSingularCors) {
+    const message =
+      'MS365_MCP_CORS_ORIGINS is required in production HTTP mode (NODE_ENV=production). ' +
+      'Set it to a comma-separated list of allowed origins ' +
+      '(e.g., https://app.example.com,https://desktop.example.com). ' +
+      'Deprecated MS365_MCP_CORS_ORIGIN (singular) is accepted as a fallback. ' +
+      'Dev mode (NODE_ENV != production) permits it to be unset (any http://localhost:* origin is auto-allowed).';
+    logger.error(message);
+    process.stderr.write(`[STARTUP CONFIG ERROR] ${message}\n`);
+    process.exit(EX_CONFIG); // process.exit(78) — sysexits EX_CONFIG
+  }
+}
+
 async function main(): Promise<void> {
   try {
     const args = parseArgs();
@@ -64,6 +127,13 @@ async function main(): Promise<void> {
       const exitCode = await runHealthCheck(args);
       process.exit(exitCode);
     }
+
+    // Fail-fast validation for production HTTP-mode config (plan 01-07 /
+    // D-02). MUST run AFTER the --health-check short-circuit (so the probe
+    // stays cheap on healthy containers) but BEFORE any MSAL / secrets /
+    // server bootstrapping (so a misconfigured deployment exits cleanly
+    // without allocating resources). Stdio mode + dev mode are permissive.
+    validateProdHttpConfig(args);
 
     // Register graceful-shutdown hooks early (plan 01-05 / OPS-09). In stdio
     // mode the null server skips server.close() but still flushes pino +

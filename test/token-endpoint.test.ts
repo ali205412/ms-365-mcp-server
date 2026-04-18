@@ -135,9 +135,7 @@ async function postJson(url: string, body: Record<string, unknown>): Promise<num
  * pino-style (meta, msg). If a test value appears anywhere, this
  * catches it.
  */
-function allLogCallsJoined(
-  loggerMock: Record<string, ReturnType<typeof vi.fn>>
-): string {
+function allLogCallsJoined(loggerMock: Record<string, ReturnType<typeof vi.fn>>): string {
   const all: string[] = [];
   for (const fn of Object.values(loggerMock)) {
     if (typeof fn !== 'function' || !('mock' in fn)) continue;
@@ -179,8 +177,10 @@ describe('/token — SECUR-05 (no body in error logs)', () => {
 
   it('Test 1: missing grant_type does NOT log the body or any refresh_token value', async () => {
     server = await startTokenServer();
-    const loggerMock = (await import('../src/logger.js'))
-      .default as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    const loggerMock = (await import('../src/logger.js')).default as unknown as Record<
+      string,
+      ReturnType<typeof vi.fn>
+    >;
 
     await postJson(`${server.url}/token`, {
       // No grant_type -> falls through to the "grant_type is missing" site.
@@ -215,8 +215,10 @@ describe('/token — SECUR-05 (no body in error logs)', () => {
 
   it('Test 2: happy-path info log shape does not leak body (grant_type only)', async () => {
     server = await startTokenServer();
-    const loggerMock = (await import('../src/logger.js'))
-      .default as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    const loggerMock = (await import('../src/logger.js')).default as unknown as Record<
+      string,
+      ReturnType<typeof vi.fn>
+    >;
 
     // refresh_token path — exchange mocked to throw, but the info log at
     // handler entry runs before the catch.
@@ -240,8 +242,10 @@ describe('/token — SECUR-05 (no body in error logs)', () => {
 
   it('Test 3: catch-block logs message only — never the raw error object', async () => {
     server = await startTokenServer();
-    const loggerMock = (await import('../src/logger.js'))
-      .default as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    const loggerMock = (await import('../src/logger.js')).default as unknown as Record<
+      string,
+      ReturnType<typeof vi.fn>
+    >;
 
     // Trigger catch: authorization_code with a mocked exchange that throws.
     await postJson(`${server.url}/token`, {
