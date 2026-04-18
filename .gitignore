@@ -156,6 +156,9 @@ CLAUDE.md
 .claude/
 .serena/
 
+# GSD planning workspace (commit_docs: false — local only)
+.planning/
+
 # MCP configuration (contains sensitive keys)
 .mcp.json
 
