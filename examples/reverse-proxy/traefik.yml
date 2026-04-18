@@ -1,0 +1,89 @@
+# Secondary reverse-proxy reference for ms-365-mcp-server v2 using Traefik v3
+# (OPS-10). Dynamic-config file — place under Traefik's file provider directory
+# (e.g. /etc/traefik/dynamic/ms-365-mcp.yml). Static config (entry points,
+# cert resolvers) is NOT included here.
+#
+# Traefik defaults work well for MCP:
+#   - `passHostHeader: true` (default) preserves the Host header upstream.
+#   - No per-service buffering setting is needed for SSE — Traefik v3
+#     streams responses by default; the `responses.IDLETIMEOUT` entry-point
+#     setting is what you tune for long-lived streams.
+#
+# Entry-point prerequisite (set in the static config, not here):
+#   entryPoints:
+#     websecure:
+#       address: ':443'
+#       transport:
+#         respondingTimeouts:
+#           readTimeout:  3600s
+#           writeTimeout: 3600s
+#           idleTimeout:  3600s   # must be >= MCP SSE session duration
+#
+# The container is reachable at 127.0.0.1:3000 per the Compose reference;
+# the metrics endpoint at 127.0.0.1:9464 per OTel convention.
+
+http:
+  services:
+    ms365-mcp:
+      loadBalancer:
+        servers:
+          - url: http://127.0.0.1:3000
+        passHostHeader: true
+
+    ms365-mcp-metrics:
+      loadBalancer:
+        servers:
+          - url: http://127.0.0.1:9464
+
+  routers:
+    # Main MCP + OAuth + health router. All paths on the container's
+    # primary listener go through here. Path matching matches Caddyfile
+    # + nginx.conf — /mcp, /authorize, /token, /register, /.well-known/*,
+    # /healthz, /readyz all hit the same upstream.
+    ms365-mcp:
+      rule: >-
+        Host(`mcp.example.com`) &&
+        (
+          PathPrefix(`/mcp`) ||
+          PathPrefix(`/authorize`) ||
+          PathPrefix(`/token`) ||
+          PathPrefix(`/register`) ||
+          PathPrefix(`/.well-known/`) ||
+          Path(`/healthz`) ||
+          Path(`/readyz`)
+        )
+      service: ms365-mcp
+      entryPoints:
+        - websecure
+      tls:
+        # Replace with your cert-resolver name from the static config.
+        certResolver: letsencrypt
+
+    # Metrics router — separate so the scrape auth middleware can be
+    # applied independently. Uncomment `middlewares` below and define
+    # the basic-auth middleware (see the commented block further down)
+    # to require credentials.
+    ms365-mcp-metrics:
+      rule: 'Host(`mcp.example.com`) && Path(`/metrics`)'
+      service: ms365-mcp-metrics
+      entryPoints:
+        - websecure
+      tls:
+        certResolver: letsencrypt
+      # middlewares:
+      #   - ms365-metrics-auth
+
+# Reference basic-auth middleware (optional). Put the generated
+# htpasswd-style entry in the `users` list; any Prometheus scrape must
+# then carry a matching Authorization header.
+# http:
+#   middlewares:
+#     ms365-metrics-auth:
+#       basicAuth:
+#         users:
+#           - 'prometheus:$apr1$exampleexample$REPLACEME'
+#         realm: 'ms-365-mcp-server metrics'
+#
+# SSE note: Traefik does NOT need `proxy_buffering off` or `flush_interval`
+# equivalents — it streams by default. If your SSE clients time out, raise
+# the entryPoint `idleTimeout` in the static config, not here.
