@@ -21,6 +21,7 @@ import { getCloudEndpoints } from './cloud-config.js';
 import { requestContext, getRequestTokens } from './request-context.js';
 import { mountHealth } from './lib/health.js';
 import { registerShutdownHooks } from './lib/shutdown.js';
+import { validateRedirectUri, type RedirectUriPolicy } from './lib/redirect-uri.js';
 import crypto from 'node:crypto';
 import pinoHttp from 'pino-http';
 import { nanoid } from 'nanoid';
@@ -52,6 +53,77 @@ export function parseHttpOption(httpOption: string | boolean): {
   // No colon, treat as port only
   const port = parseInt(httpString) || 3000;
   return { host: undefined, port };
+}
+
+/**
+ * Build the dynamic-client-registration (POST /register) handler.
+ *
+ * Plan 01-06 (AUTH-06 + AUTH-07 + T-01-06c) hardens three behaviours at the
+ * same code site:
+ *
+ *   1. Every `redirect_uris` entry is validated against the D-02 allowlist
+ *      (see src/lib/redirect-uri.ts). The first failure short-circuits a 400
+ *      response that echoes back the rejected URI + validator reason so the
+ *      caller can fix configuration.
+ *   2. `client_id` is generated via `crypto.randomBytes(8).toString('hex')`
+ *      (16 hex chars, 64 bits of entropy). This replaces the v1
+ *      `mcp-client-${Date.now()}` pattern which collided under concurrent
+ *      registrations and created a cache-pollution vector.
+ *   3. The info-level log records ONLY counts and shape (`client_name`,
+ *      `grant_types`, `redirect_uri_count`) — never the raw body. This
+ *      prevents PII leakage (T-01-06c).
+ *
+ * Exported so plan 01-06 tests can wire the handler onto a minimal
+ * test-harness Express app without bootstrapping MicrosoftGraphServer.
+ */
+export function createRegisterHandler(policy: RedirectUriPolicy) {
+  return async (req: import('express').Request, res: import('express').Response): Promise<void> => {
+    const body = (req.body as Record<string, unknown>) ?? {};
+
+    // 1. Scrubbed info log — NO body contents. Pino-native arg order: (meta, message).
+    logger.info(
+      {
+        client_name: body.client_name,
+        grant_types: body.grant_types,
+        redirect_uri_count: Array.isArray(body.redirect_uris) ? body.redirect_uris.length : 0,
+      },
+      'Client registration request'
+    );
+
+    // 2. Validate every redirect_uri in the registration request.
+    const redirectUris: unknown[] = Array.isArray(body.redirect_uris) ? body.redirect_uris : [];
+    for (const uri of redirectUris) {
+      if (typeof uri !== 'string') {
+        res.status(400).json({
+          error: 'invalid_redirect_uri',
+          reason: 'redirect_uris must be strings',
+        });
+        return;
+      }
+      const result = validateRedirectUri(uri, policy);
+      if (!result.ok) {
+        res.status(400).json({
+          error: 'invalid_redirect_uri',
+          redirect_uri: uri,
+          reason: result.reason,
+        });
+        return;
+      }
+    }
+
+    // 3. Crypto-random client ID (replaces Date.now — no concurrent collisions).
+    const clientId = `mcp-client-${crypto.randomBytes(8).toString('hex')}`;
+
+    res.status(201).json({
+      client_id: clientId,
+      client_id_issued_at: Math.floor(Date.now() / 1000),
+      redirect_uris: redirectUris,
+      grant_types: body.grant_types || ['authorization_code', 'refresh_token'],
+      response_types: body.response_types || ['code'],
+      token_endpoint_auth_method: body.token_endpoint_auth_method || 'none',
+      client_name: body.client_name || 'MCP Client',
+    });
+  };
 }
 
 class MicrosoftGraphServer {
@@ -275,6 +347,13 @@ class MicrosoftGraphServer {
         null;
       const publicBase = publicUrlRaw ? new URL(publicUrlRaw).href.replace(/\/$/, '') : null;
 
+      // Redirect-URI allowlist policy (plan 01-06 / D-02). Computed ONCE per
+      // HTTP setup; closure-captured by createRegisterHandler below. Phase 3
+      // will extend this to include a per-tenant allowlist without touching
+      // createRegisterHandler or validateRedirectUri.
+      const publicUrlHost = publicBase ? new URL(publicBase).hostname : null;
+      const isProdMode = process.env.NODE_ENV === 'production';
+
       // OAuth Authorization Server Discovery
       app.get('/.well-known/oauth-authorization-server', async (req, res) => {
         const protocol = req.secure ? 'https' : 'http';
@@ -320,22 +399,16 @@ class MicrosoftGraphServer {
       });
 
       if (this.options.enableDynamicRegistration) {
-        app.post('/register', async (req, res) => {
-          const body = req.body;
-          logger.info('Client registration request', { body });
-
-          const clientId = `mcp-client-${Date.now()}`;
-
-          res.status(201).json({
-            client_id: clientId,
-            client_id_issued_at: Math.floor(Date.now() / 1000),
-            redirect_uris: body.redirect_uris || [],
-            grant_types: body.grant_types || ['authorization_code', 'refresh_token'],
-            response_types: body.response_types || ['code'],
-            token_endpoint_auth_method: body.token_endpoint_auth_method || 'none',
-            client_name: body.client_name || 'MCP Client',
-          });
-        });
+        // Plan 01-06: validate redirect_uris against the D-02 allowlist, use
+        // crypto.randomBytes for client IDs, and scrub the info log body.
+        // Factory documentation lives at src/server.ts createRegisterHandler.
+        app.post(
+          '/register',
+          createRegisterHandler({
+            mode: isProdMode ? 'prod' : 'dev',
+            publicUrlHost,
+          })
+        );
       }
 
       // Authorization endpoint - redirects to Microsoft
