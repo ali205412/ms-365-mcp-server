@@ -1,0 +1,88 @@
+# Primary reverse-proxy reference for ms-365-mcp-server v2 (OPS-10).
+#
+# Terminates TLS, preserves X-Forwarded-* (so src/server.ts `app.set('trust
+# proxy', true)` sees the real client IP + scheme), and disables buffering
+# for SSE streams so long-lived MCP notifications pass through in real time.
+#
+# Replace mcp.example.com with your public hostname. The container is
+# reachable at 127.0.0.1:3000 per examples/docker-compose/docker-compose.yml.
+#
+# Caddy TLS (threat ref T-01-08d from plan 01-08 threat model):
+#   `tls on_demand` will auto-issue certs for any hostname that resolves to
+#   this server. If your server has a broad public IP with DNS pointed at
+#   it, an attacker can trick Caddy into minting certs for unrelated hosts.
+#   In production, tighten to an explicit `tls <email>` block or use the
+#   `ask` directive with a gated endpoint:
+#       tls <email> {
+#         on_demand
+#         ask http://localhost:3000/internal/cert-allowlist
+#       }
+#   The snippet below keeps `on_demand` for dev-friendliness; production
+#   deployments MUST replace it.
+
+mcp.example.com {
+  # Production: replace with a fixed `tls <email>` block or gate on_demand
+  # via an `ask` directive. See CHANGELOG.md and plan 01-08 T-01-08d.
+  tls {
+    on_demand
+  }
+
+  # MCP endpoints (Streamable HTTP + legacy SSE shim).
+  #
+  # SSE (Server-Sent Events) is a long-lived streaming response; Caddy's
+  # default buffering would hold events until a chunk boundary, breaking
+  # the real-time notification contract. `flush_interval -1` disables
+  # buffering entirely (matches nginx's `proxy_buffering off`).
+  handle /mcp* {
+    reverse_proxy 127.0.0.1:3000 {
+      header_up Host {host}
+      header_up X-Forwarded-For {remote}
+      header_up X-Forwarded-Proto {scheme}
+
+      flush_interval -1
+      transport http {
+        read_timeout 1h
+        write_timeout 1h
+      }
+    }
+  }
+
+  # OAuth 2.1 proxy endpoints (authorize / token / register / metadata).
+  # No SSE concerns here; straight forwarding with preserved headers is
+  # enough. These endpoints MUST receive X-Forwarded-Proto=https so the
+  # OAuth metadata generation emits https:// issuer/authorization URLs
+  # rather than mirroring the container's http:// upstream.
+  handle /authorize /token /register /.well-known/* {
+    reverse_proxy 127.0.0.1:3000 {
+      header_up Host {host}
+      header_up X-Forwarded-For {remote}
+      header_up X-Forwarded-Proto {scheme}
+    }
+  }
+
+  # Health probes — no auth, no origin validation, no buffering concerns.
+  # Caddy's default access logging for /healthz and /readyz can generate
+  # 2880+ log lines/day per probe source; silence them here.
+  handle /healthz /readyz {
+    reverse_proxy 127.0.0.1:3000
+    log_skip
+  }
+
+  # Prometheus metrics endpoint (port 9464 per OTel convention, separate
+  # from the main listener — see docker-compose.yml).
+  #
+  # Uncomment the basic_auth block to require credentials for scrape
+  # targets outside localhost. Leave open for same-host Prometheus.
+  handle /metrics {
+    # basic_auth {
+    #   prometheus $2a$14$SOME_BCRYPT_HASH
+    # }
+    reverse_proxy 127.0.0.1:9464
+  }
+
+  # Log format: JSON for aggregation compatibility (Loki / Grafana / ES).
+  log {
+    output stdout
+    format json
+  }
+}

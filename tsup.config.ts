@@ -32,7 +32,6 @@ export default defineConfig({
     'dotenv',
     'express',
     'js-yaml',
-    'keytar',
     'nanoid',
     'pino',
     'pino-http',

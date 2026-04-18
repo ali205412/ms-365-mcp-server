@@ -1,4 +1,5 @@
 import { Command, Option } from 'commander';
+import { spawnSync } from 'child_process';
 import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -75,7 +76,38 @@ program
     // MS365_MCP_BASE_URL do not crash at startup. Use --public-url /
     // MS365_MCP_PUBLIC_URL instead. Hidden from --help; undocumented.
     new Option('--base-url <url>', 'deprecated: use --public-url').hideHelp()
-  );
+  )
+  // No-op default action — the real startup logic lives in src/index.ts
+  // main(). Commander's default behavior once a subcommand is registered
+  // is to print help + exit(1) when no subcommand is given; attaching a
+  // no-op action keeps the parent program runnable (so `ms-365-mcp-server
+  // --http` still launches the server). parseArgs() below returns
+  // program.opts() to the caller which then drives the server lifecycle.
+  .action(() => {});
+
+// One-shot migration subcommand (SECUR-07 / D-04). The heavy lifting lives
+// in bin/migrate-tokens.mjs so the same script is usable both as
+// `npx ms-365-mcp-server migrate-tokens` and directly with
+// `node bin/migrate-tokens.mjs`. We shell out with process.execPath so
+// the migrator runs under the same Node version + ESM loader.
+program
+  .command('migrate-tokens')
+  .description('Migrate v1 OS-keychain (keytar) tokens to v2 file-based storage')
+  .option('--dry-run', 'Report what would be migrated without writing')
+  .option('--clear-keytar', 'Delete OS-keychain entries after successful migration')
+  .action((opts: { dryRun?: boolean; clearKeytar?: boolean }) => {
+    const scriptArgs: string[] = [];
+    if (opts.dryRun) scriptArgs.push('--dry-run');
+    if (opts.clearKeytar) scriptArgs.push('--clear-keytar');
+    // Dist layout: when compiled, cli.js sits at dist/cli.js and the
+    // migrator script is at <repo>/bin/migrate-tokens.mjs. Both dev (src/)
+    // and prod (dist/) resolve the same relative path via __dirname.
+    const scriptPath = path.resolve(__dirname, '..', 'bin', 'migrate-tokens.mjs');
+    const result = spawnSync(process.execPath, [scriptPath, ...scriptArgs], {
+      stdio: 'inherit',
+    });
+    process.exit(result.status ?? 1);
+  });
 
 export interface CommandOptions {
   v?: boolean;

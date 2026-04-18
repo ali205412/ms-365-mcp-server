@@ -1,0 +1,104 @@
+# Reference Docker Compose stack for ms-365-mcp-server v2 (Phase 1).
+#
+# This Phase 1 reference ships the MCP server alone. Phase 3 extends this
+# file with postgres + redis services for multi-tenant state. The container
+# image already bakes in the SECUR-06 hardening from plan 01-03 (non-root
+# nodejs UID 1001, tini as PID 1, HEALTHCHECK hitting /healthz, STOPSIGNAL
+# SIGTERM); this Compose file stacks OPS-10 orchestration-layer defenses
+# (read-only root FS, dropped capabilities, no privilege escalation, tmpfs
+# /tmp) on top.
+#
+# Usage:
+#   cp .env.example .env
+#   # Edit .env to set MS365_MCP_PUBLIC_URL + MS365_MCP_CORS_ORIGINS
+#   # Ensure ./data exists and is owned by UID 1001 (the nodejs user in
+#   # the image): `mkdir -p data && sudo chown 1001:1001 data && chmod 700 data`
+#   docker compose -f examples/docker-compose/docker-compose.yml up -d
+#
+# Security posture (matches plan 01-08 T-01-08e mitigations):
+#   - Non-root user (baked into image at UID 1001)
+#   - Read-only root FS + tmpfs /tmp for ephemeral scratch
+#   - All capabilities dropped (nothing from CAP_NET_ADMIN down)
+#   - no-new-privileges bit set (no setuid escape via exec)
+#   - Writable /app/data bind-mount ONLY for the token cache (stdio users)
+#   - HEALTHCHECK inherits from Dockerfile (plan 01-03); stop_grace_period
+#     30s comfortably exceeds the 25s graceful shutdown budget (plan 01-05)
+#     and the 10s OTel flush race inside it
+#   - Localhost-only port bindings — operator publishes via reverse proxy
+#     (see examples/reverse-proxy/) rather than exposing 3000/9464 directly
+
+services:
+  mcp:
+    image: ghcr.io/softeria/ms-365-mcp-server:latest
+    container_name: ms-365-mcp-server
+    restart: unless-stopped
+
+    # HTTP mode; bind to all interfaces inside the container so the port
+    # mapping below can reach it. The :3000 listener is localhost-only from
+    # the host's perspective (see `ports`).
+    command: ['--http', '0.0.0.0:3000']
+
+    environment:
+      NODE_ENV: production
+      # Required in production HTTP mode (D-02 / plan 01-07 fail-fast gate):
+      MS365_MCP_PUBLIC_URL: ${MS365_MCP_PUBLIC_URL}
+      MS365_MCP_CORS_ORIGINS: ${MS365_MCP_CORS_ORIGINS}
+      # Token cache lives in the writable ./data bind-mount (stdio-mode users
+      # only — HTTP mode doesn't persist tokens on disk). v1 users migrate
+      # keychain entries here via `migrate-tokens`.
+      MS365_MCP_TOKEN_CACHE_PATH: /app/data/.token-cache.json
+      MS365_MCP_SELECTED_ACCOUNT_PATH: /app/data/.selected-account.json
+      # Optional observability — set to emit OTLP traces/metrics. Leave
+      # unset for silent (no-op) bootstrap (plan 01-02 D-03).
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      MS365_MCP_PROMETHEUS_ENABLED: ${MS365_MCP_PROMETHEUS_ENABLED:-}
+      # Override graceful-shutdown budget from the plan 01-05 default (25s).
+      # This value MUST be strictly less than stop_grace_period below so the
+      # failsafe setTimeout(exit(1)) inside the handler fires before Docker
+      # sends SIGKILL.
+      MS365_MCP_SHUTDOWN_GRACE_MS: ${MS365_MCP_SHUTDOWN_GRACE_MS:-25000}
+
+    ports:
+      # Expose on loopback only; use the reverse-proxy reference configs
+      # (Caddyfile / nginx.conf / traefik.yml) for TLS + public exposure.
+      - '127.0.0.1:3000:3000'
+      # Prometheus scrape target — only reached when MS365_MCP_PROMETHEUS_ENABLED=1.
+      - '127.0.0.1:9464:9464'
+
+    volumes:
+      # Writable bind-mount for the token cache. Create the host directory
+      # with `mkdir -p data && sudo chown 1001:1001 data && chmod 700 data`
+      # BEFORE `docker compose up` so the nodejs user (UID 1001 from plan
+      # 01-03) can write.
+      - ./data:/app/data:rw
+
+    # Orchestration-layer hardening (plan 01-03 T-01-03b mitigation at the
+    # orchestrator level; the Dockerfile's USER + HEALTHCHECK + tini do not
+    # enforce these on their own).
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    # docker stop sends SIGTERM and waits up to stop_grace_period seconds
+    # before sending SIGKILL. Must exceed the in-process drain budget
+    # (MS365_MCP_SHUTDOWN_GRACE_MS default 25s, plan 01-05) AND the OTel
+    # exporter flush race (10s inside the drain handler). 30s is the safe
+    # default; bump this and MS365_MCP_SHUTDOWN_GRACE_MS together if your
+    # deployment runs longer-tail in-flight requests.
+    stop_grace_period: 30s
+
+    # HEALTHCHECK inherits from the Dockerfile (plan 01-03). Override with
+    # a `healthcheck:` block here only if you need per-deployment tuning.
+
+# Phase 3 will extend this file with `postgres:` + `redis:` services +
+# a `networks:` block. Phase 1 deployments have no external state.
+
+# If you prefer a named volume to the ./data bind-mount (e.g. when running
+# on a shared filesystem where UID mapping is awkward), uncomment below
+# and change the mcp.volumes entry to `mcp-data:/app/data:rw`.
+# volumes:
+#   mcp-data:
