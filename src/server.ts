@@ -20,6 +20,7 @@ import { getSecrets, type AppSecrets } from './secrets.js';
 import { getCloudEndpoints } from './cloud-config.js';
 import { requestContext, getRequestTokens } from './request-context.js';
 import { mountHealth } from './lib/health.js';
+import { registerShutdownHooks } from './lib/shutdown.js';
 import crypto from 'node:crypto';
 import pinoHttp from 'pino-http';
 import { nanoid } from 'nanoid';
@@ -678,8 +679,14 @@ class MicrosoftGraphServer {
         res.send('Microsoft 365 MCP Server is running');
       });
 
+      // Bind the http.Server return value so we can register graceful-shutdown
+      // hooks against it (plan 01-05). registerShutdownHooks internally calls
+      // process.removeAllListeners('SIGTERM'|'SIGINT') first, so this
+      // HTTP-mode registration supersedes any earlier stdio-mode registration
+      // from src/index.ts.
+      let httpServer: import('node:http').Server;
       if (host) {
-        app.listen(port, host, () => {
+        httpServer = app.listen(port, host, () => {
           logger.info(`Server listening on ${host}:${port}`);
           logger.info(`  - MCP endpoint: http://${host}:${port}/mcp`);
           logger.info(`  - OAuth endpoints: http://${host}:${port}/auth/*`);
@@ -688,7 +695,7 @@ class MicrosoftGraphServer {
           );
         });
       } else {
-        app.listen(port, () => {
+        httpServer = app.listen(port, () => {
           logger.info(`Server listening on all interfaces (0.0.0.0:${port})`);
           logger.info(`  - MCP endpoint: http://localhost:${port}/mcp`);
           logger.info(`  - OAuth endpoints: http://localhost:${port}/auth/*`);
@@ -697,6 +704,7 @@ class MicrosoftGraphServer {
           );
         });
       }
+      registerShutdownHooks(httpServer, logger);
     } else {
       const transport = new StdioServerTransport();
       await this.server!.connect(transport);

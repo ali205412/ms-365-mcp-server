@@ -38,9 +38,22 @@
  *   - T-01-05d: Double signal — mitigated by isDraining() idempotency guard.
  */
 import type { Server } from 'node:http';
-import type { Logger } from 'pino';
 import { isDraining, setDraining } from './health.js';
 import { otel } from './otel.js';
+
+/**
+ * Minimal logger contract used by the shutdown handler. Accepts both the pino
+ * native `Logger` interface and the Winston-to-pino adapter exported by
+ * src/logger.ts (which provides .info/.error but is not a full pino.Logger).
+ * Structural typing: any object exposing these methods is accepted. Arguments
+ * are typed as `unknown` to match pino's overloaded (obj, msg) / (msg) /
+ * (obj) signatures and the Winston-style (msg, meta?) adapter.
+ */
+export interface ShutdownLogger {
+  info: (arg1: unknown, arg2?: unknown) => void;
+  error: (arg1: unknown, arg2?: unknown) => void;
+  flush?: () => void;
+}
 
 const GRACE_MS = Number.parseInt(process.env.MS365_MCP_SHUTDOWN_GRACE_MS ?? '25000', 10);
 
@@ -51,10 +64,11 @@ const OTEL_SHUTDOWN_TIMEOUT_MS = 10_000;
  *
  * @param server - The http.Server returned by app.listen(...), or null for
  *   stdio mode (no HTTP to close).
- * @param logger - pino Logger used for lifecycle audit lines. .flush is
- *   called via optional chaining so logger mocks without .flush still work.
+ * @param logger - Logger for lifecycle audit lines. Accepts either a pino
+ *   Logger directly or the Winston-to-pino adapter from src/logger.ts. .flush
+ *   is optional so logger mocks without .flush still work.
  */
-export function registerShutdownHooks(server: Server | null, logger: Logger): void {
+export function registerShutdownHooks(server: Server | null, logger: ShutdownLogger): void {
   const shutdown = async (signal: string): Promise<void> => {
     if (isDraining()) {
       // Idempotent: double-signal is a no-op. Guards against operator double
