@@ -19,6 +19,7 @@ import type { CommandOptions } from './cli.ts';
 import { getSecrets, type AppSecrets } from './secrets.js';
 import { getCloudEndpoints } from './cloud-config.js';
 import { requestContext, getRequestTokens } from './request-context.js';
+import { mountHealth } from './lib/health.js';
 import crypto from 'node:crypto';
 import pinoHttp from 'pino-http';
 import { nanoid } from 'nanoid';
@@ -29,7 +30,10 @@ import { nanoid } from 'nanoid';
  * @param httpOption - The HTTP option value (string or boolean)
  * @returns Object with host (undefined if not specified) and port number
  */
-function parseHttpOption(httpOption: string | boolean): { host: string | undefined; port: number } {
+export function parseHttpOption(httpOption: string | boolean): {
+  host: string | undefined;
+  port: number;
+} {
   if (typeof httpOption === 'boolean') {
     return { host: undefined, port: 3000 };
   }
@@ -178,6 +182,20 @@ class MicrosoftGraphServer {
 
       const app = express();
       app.set('trust proxy', true);
+
+      // Health endpoints (OPS-03 / OPS-04) — MUST be mounted BEFORE pino-http,
+      // CORS, body parsers, and ANY auth middleware so that:
+      //   1. Health probes never exercise auth (T-01-04b: broken auth config
+      //      must not fail the liveness probe).
+      //   2. pino-http autoLogging.ignore is a belt-and-braces guard; mounting
+      //      first means even a regression in the ignore predicate cannot spam
+      //      2880 health-probe log lines/day (T-01-04a).
+      //   3. OPTIONS preflight on /healthz does not hit CORS origin validation
+      //      that might 403 in prod.
+      // Phase 3 will push a Postgres/Redis readinessChecks entry here;
+      // Phase 6 will push "at least one tenant loaded". Phase 1 baseline has
+      // no checks — default empty array is correct.
+      mountHealth(app);
 
       // pino-http request logging — MUST be registered BEFORE express.json() so
       // that req.id is stamped on the raw request before body parsing starts.

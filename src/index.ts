@@ -4,15 +4,65 @@ import './lib/otel.js'; // MUST be first import — registers OTel instrumentati
 // This MUST run BEFORE dotenv/config so that in production the env var comes from
 // the real environment (systemd / Docker / CI), not from .env.
 import 'dotenv/config';
-import { parseArgs } from './cli.js';
+import http from 'node:http';
+import { parseArgs, type CommandOptions } from './cli.js';
 import logger from './logger.js';
 import AuthManager, { buildScopesFromEndpoints } from './auth.js';
-import MicrosoftGraphServer from './server.js';
+import MicrosoftGraphServer, { parseHttpOption } from './server.js';
 import { version } from './version.js';
+
+/**
+ * Probe /healthz and return an exit code suitable for Docker HEALTHCHECK.
+ *
+ * Behaviour:
+ *   - stdio mode (no --http): exits 0 — the stdio transport is invoked
+ *     per-request by the MCP client, so process-is-alive is the only
+ *     meaningful liveness signal.
+ *   - HTTP mode: HTTP GET /healthz on the configured port with 3s timeout.
+ *     Exit 0 on HTTP 200, exit 1 on any other status, connection refused,
+ *     or timeout.
+ *
+ * This short-circuit MUST NOT initialize MSAL, load secrets, or start a
+ * server — it is invoked by the Docker HEALTHCHECK every 30s and must be
+ * cheap.
+ */
+async function runHealthCheck(args: CommandOptions): Promise<number> {
+  if (!args.http) {
+    // stdio mode: no HTTP server to probe. If we reached this line, the
+    // process is alive and healthy enough to execute Node.
+    return 0;
+  }
+
+  const { host, port } = parseHttpOption(args.http);
+  const probeHost = host ?? '127.0.0.1';
+
+  return new Promise<number>((resolve) => {
+    const req = http.get({ hostname: probeHost, port, path: '/healthz', timeout: 3000 }, (res) => {
+      // Drain the response so the socket closes cleanly.
+      res.resume();
+      resolve(res.statusCode === 200 ? 0 : 1);
+    });
+    req.on('error', () => resolve(1));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(1);
+    });
+  });
+}
 
 async function main(): Promise<void> {
   try {
     const args = parseArgs();
+
+    // --health-check short-circuit for Docker HEALTHCHECK (OPS-03).
+    // MUST run BEFORE AuthManager creation or secrets loading — the probe is
+    // invoked every 30s and must stay cheap. It also MUST exit before any
+    // side-effectful startup (MSAL, secrets, logger file IO) so a broken
+    // config cannot cause the probe to hang or fail spuriously.
+    if (args.healthCheck) {
+      const exitCode = await runHealthCheck(args);
+      process.exit(exitCode);
+    }
 
     const includeWorkScopes = args.orgMode || false;
     if (includeWorkScopes) {
