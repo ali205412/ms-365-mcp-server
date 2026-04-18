@@ -1,0 +1,33 @@
+# VCS
+.git
+.gitignore
+
+# Deps and build artifacts
+node_modules
+dist
+coverage
+*.tsbuildinfo
+
+# Tests and dev scaffolding
+test
+src/__tests__
+vitest.config.js
+
+# Planning and docs
+.planning
+*.md
+CHANGELOG.md
+LICENSE
+
+# Generator inputs (regenerated at build time via npm run generate)
+openapi
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Editor / tooling
+.vscode
+.idea
+.claude
