@@ -130,11 +130,30 @@ const SCOPE_HIERARCHY: ScopeHierarchy = {
   'Contacts.ReadWrite': ['Contacts.Read'],
 };
 
+/**
+ * Memoization cache for `buildScopesFromEndpoints`. Keyed by the argument
+ * tuple (includeWorkAccountScopes, enabledToolsPattern, readOnly) — these
+ * change rarely (effectively never within a process lifetime; driven by
+ * CLI flags / env), so caching the result across repeated calls is safe.
+ *
+ * Before memoization, `buildScopesFromEndpoints` iterated the full
+ * endpoints array once per invocation. It is called from the AuthManager
+ * constructor AND from /.well-known/oauth-* metadata routes on every
+ * probe (src/server.ts). Plan 01-09 / T-01-09c performance mitigation.
+ *
+ * Clone-on-return prevents downstream mutation from corrupting the cache.
+ */
+const scopeCache = new Map<string, string[]>();
+
 function buildScopesFromEndpoints(
   includeWorkAccountScopes: boolean = false,
   enabledToolsPattern?: string,
   readOnly: boolean = false
 ): string[] {
+  const cacheKey = `${includeWorkAccountScopes}:${enabledToolsPattern ?? ''}:${readOnly}`;
+  const cached = scopeCache.get(cacheKey);
+  if (cached) return [...cached];
+
   const scopesSet = new Set<string>();
 
   // Create regex for tool filtering if pattern is provided
@@ -192,7 +211,8 @@ function buildScopesFromEndpoints(
     logger.info(`Built ${scopes.length} scopes for filtered tools: ${scopes.join(', ')}`);
   }
 
-  return scopes;
+  scopeCache.set(cacheKey, scopes);
+  return [...scopes];
 }
 
 interface LoginTestResult {
