@@ -7,25 +7,10 @@ import path from 'path';
 import { getSecrets, type AppSecrets } from './secrets.js';
 import { getCloudEndpoints, getDefaultClientId } from './cloud-config.js';
 
-// Ok so this is a hack to lazily import keytar only when needed
-// since --http mode may not need it at all, and keytar can be a pain to install (looking at you alpine)
-let keytar: typeof import('keytar') | null = null;
-async function getKeytar() {
-  if (keytar === undefined) {
-    return null;
-  }
-  if (keytar === null) {
-    try {
-      keytar = await import('keytar');
-      return keytar;
-    } catch (error) {
-      logger.info('keytar not available, using file-based credential storage');
-      keytar = undefined as any;
-      return null;
-    }
-  }
-  return keytar;
-}
+// Token cache storage is file-based only (v2, SECUR-07 / D-04).
+// v1 users should run `npx ms-365-mcp-server migrate-tokens` once to copy
+// their OS-keychain entries to the file cache at getTokenCachePath() +
+// getSelectedAccountPath(). See CHANGELOG.md for migration details.
 
 interface EndpointConfig {
   pathPattern: string;
@@ -46,9 +31,6 @@ const endpoints = {
   default: endpointsData,
 };
 
-const SERVICE_NAME = 'ms-365-mcp-server';
-const TOKEN_CACHE_ACCOUNT = 'msal-token-cache';
-const SELECTED_ACCOUNT_KEY = 'selected-account';
 const FALLBACK_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_TOKEN_CACHE_PATH = path.join(FALLBACK_DIR, '..', '.token-cache.json');
 const DEFAULT_SELECTED_ACCOUNT_PATH = path.join(FALLBACK_DIR, '..', '.selected-account.json');
@@ -95,21 +77,31 @@ function unwrapCache(raw: string): { data: string; savedAt?: number } {
   return { data: raw };
 }
 
+/**
+ * Reconciles two cache strings when both exist (e.g., after a migration left
+ * a stale source alongside the current one). Returns the envelope's inner
+ * data for the newest savedAt. Retained as an exported helper for cache-stamp
+ * unit tests and any future multi-source reconciliation (Phase 3).
+ *
+ * Primary vs secondary is a priority order: when neither has a savedAt
+ * timestamp, primary wins. When only one has a timestamp, that one wins.
+ * When both are timestamped, the newest wins (ties go to primary).
+ */
 function pickNewest(
-  keytarRaw: string | undefined,
-  fileRaw: string | undefined
+  primaryRaw: string | undefined,
+  secondaryRaw: string | undefined
 ): string | undefined {
-  if (!keytarRaw && !fileRaw) return undefined;
-  if (keytarRaw && !fileRaw) return unwrapCache(keytarRaw).data;
-  if (!keytarRaw && fileRaw) return unwrapCache(fileRaw).data;
+  if (!primaryRaw && !secondaryRaw) return undefined;
+  if (primaryRaw && !secondaryRaw) return unwrapCache(primaryRaw).data;
+  if (!primaryRaw && secondaryRaw) return unwrapCache(secondaryRaw).data;
 
-  const kt = unwrapCache(keytarRaw!);
-  const file = unwrapCache(fileRaw!);
+  const primary = unwrapCache(primaryRaw!);
+  const secondary = unwrapCache(secondaryRaw!);
 
-  if (kt.savedAt === undefined && file.savedAt === undefined) return kt.data;
-  if (kt.savedAt !== undefined && file.savedAt === undefined) return kt.data;
-  if (kt.savedAt === undefined && file.savedAt !== undefined) return file.data;
-  return kt.savedAt! >= file.savedAt! ? kt.data : file.data;
+  if (primary.savedAt === undefined && secondary.savedAt === undefined) return primary.data;
+  if (primary.savedAt !== undefined && secondary.savedAt === undefined) return primary.data;
+  if (primary.savedAt === undefined && secondary.savedAt !== undefined) return secondary.data;
+  return primary.savedAt! >= secondary.savedAt! ? primary.data : secondary.data;
 }
 
 /**
@@ -250,25 +242,13 @@ class AuthManager {
 
   async loadTokenCache(): Promise<void> {
     try {
-      let keytarRaw: string | undefined;
-      try {
-        const kt = await getKeytar();
-        if (kt) {
-          keytarRaw = (await kt.getPassword(SERVICE_NAME, TOKEN_CACHE_ACCOUNT)) ?? undefined;
-        }
-      } catch (keytarError) {
-        logger.warn(`Keychain access failed: ${(keytarError as Error).message}`);
-      }
-
-      let fileRaw: string | undefined;
       const cachePath = getTokenCachePath();
       if (existsSync(cachePath)) {
-        fileRaw = readFileSync(cachePath, 'utf8');
-      }
-
-      const cacheData = pickNewest(keytarRaw, fileRaw);
-      if (cacheData) {
-        this.msalApp.getTokenCache().deserialize(cacheData);
+        const fileRaw = readFileSync(cachePath, 'utf8');
+        const cacheData = unwrapCache(fileRaw).data;
+        if (cacheData) {
+          this.msalApp.getTokenCache().deserialize(cacheData);
+        }
       }
 
       // Load selected account
@@ -280,25 +260,12 @@ class AuthManager {
 
   private async loadSelectedAccount(): Promise<void> {
     try {
-      let keytarRaw: string | undefined;
-      try {
-        const kt = await getKeytar();
-        if (kt) {
-          keytarRaw = (await kt.getPassword(SERVICE_NAME, SELECTED_ACCOUNT_KEY)) ?? undefined;
-        }
-      } catch (keytarError) {
-        logger.warn(
-          `Keychain access failed for selected account: ${(keytarError as Error).message}`
-        );
-      }
-
-      let fileRaw: string | undefined;
       const accountPath = getSelectedAccountPath();
-      if (existsSync(accountPath)) {
-        fileRaw = readFileSync(accountPath, 'utf8');
+      if (!existsSync(accountPath)) {
+        return;
       }
-
-      const selectedAccountData = pickNewest(keytarRaw, fileRaw);
+      const fileRaw = readFileSync(accountPath, 'utf8');
+      const selectedAccountData = unwrapCache(fileRaw).data;
       if (selectedAccountData) {
         const parsed = JSON.parse(selectedAccountData);
         this.selectedAccountId = parsed.accountId;
@@ -312,25 +279,9 @@ class AuthManager {
   async saveTokenCache(): Promise<void> {
     try {
       const stamped = wrapCache(this.msalApp.getTokenCache().serialize());
-
-      try {
-        const kt = await getKeytar();
-        if (kt) {
-          await kt.setPassword(SERVICE_NAME, TOKEN_CACHE_ACCOUNT, stamped);
-        } else {
-          const cachePath = getTokenCachePath();
-          ensureParentDir(cachePath);
-          fs.writeFileSync(cachePath, stamped, { mode: 0o600 });
-        }
-      } catch (keytarError) {
-        logger.warn(
-          `Keychain save failed, falling back to file storage: ${(keytarError as Error).message}`
-        );
-
-        const cachePath = getTokenCachePath();
-        ensureParentDir(cachePath);
-        fs.writeFileSync(cachePath, stamped, { mode: 0o600 });
-      }
+      const cachePath = getTokenCachePath();
+      ensureParentDir(cachePath);
+      fs.writeFileSync(cachePath, stamped, { mode: 0o600 });
     } catch (error) {
       logger.error(`Error saving token cache: ${(error as Error).message}`);
     }
@@ -339,25 +290,9 @@ class AuthManager {
   private async saveSelectedAccount(): Promise<void> {
     try {
       const stamped = wrapCache(JSON.stringify({ accountId: this.selectedAccountId }));
-
-      try {
-        const kt = await getKeytar();
-        if (kt) {
-          await kt.setPassword(SERVICE_NAME, SELECTED_ACCOUNT_KEY, stamped);
-        } else {
-          const accountPath = getSelectedAccountPath();
-          ensureParentDir(accountPath);
-          fs.writeFileSync(accountPath, stamped, { mode: 0o600 });
-        }
-      } catch (keytarError) {
-        logger.warn(
-          `Keychain save failed for selected account, falling back to file storage: ${(keytarError as Error).message}`
-        );
-
-        const accountPath = getSelectedAccountPath();
-        ensureParentDir(accountPath);
-        fs.writeFileSync(accountPath, stamped, { mode: 0o600 });
-      }
+      const accountPath = getSelectedAccountPath();
+      ensureParentDir(accountPath);
+      fs.writeFileSync(accountPath, stamped, { mode: 0o600 });
     } catch (error) {
       logger.error(`Error saving selected account: ${(error as Error).message}`);
     }
@@ -580,16 +515,6 @@ class AuthManager {
       this.accessToken = null;
       this.tokenExpiry = null;
       this.selectedAccountId = null;
-
-      try {
-        const kt = await getKeytar();
-        if (kt) {
-          await kt.deletePassword(SERVICE_NAME, TOKEN_CACHE_ACCOUNT);
-          await kt.deletePassword(SERVICE_NAME, SELECTED_ACCOUNT_KEY);
-        }
-      } catch (keytarError) {
-        logger.warn(`Keychain deletion failed: ${(keytarError as Error).message}`);
-      }
 
       const cachePath = getTokenCachePath();
       if (fs.existsSync(cachePath)) {
