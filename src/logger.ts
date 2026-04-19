@@ -41,6 +41,7 @@ const REDACT_PATHS: string[] = [
   'req.headers.prefer',
   'req.headers["x-microsoft-refresh-token"]',
   'req.headers["x-tenant-*"]',
+  'req.headers["x-admin-api-key"]',
   'req.body',
   'res.body',
   '*.refresh_token',
@@ -52,6 +53,20 @@ const REDACT_PATHS: string[] = [
   '*.access_token',
   'query.$filter',
   'query.$search',
+  // ── Phase 3 (plan 03-01) — pre-seeded for 03-03 + 03-04 + 03-06 so
+  //     subsequent plans do not need to re-touch this file in a chained edit.
+  //     See 03-PATTERNS.md "pino redaction" rule.
+  '*.wrapped_dek',
+  '*.client_secret_resolved',
+  'audit_row.meta.client_secret',
+  '*.MS365_MCP_DATABASE_URL',
+  '*.dek',
+  '*.kek',
+  '*.MS365_MCP_KEK',
+  '*.MS365_MCP_KEK_PREVIOUS',
+  '*.codeVerifier',
+  '*.serverCodeVerifier',
+  '*.clientCodeChallenge',
 ];
 
 // ── Destination selection ─────────────────────────────────────────────────────

@@ -14,6 +14,8 @@ import logger from './logger.js';
 import AuthManager, { buildScopesFromEndpoints, getTokenCachePath } from './auth.js';
 import MicrosoftGraphServer, { parseHttpOption } from './server.js';
 import { registerShutdownHooks } from './lib/shutdown.js';
+import type { ReadinessCheck } from './lib/health.js';
+import * as postgres from './lib/postgres.js';
 import { version } from './version.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -151,6 +153,40 @@ function validateProdHttpConfig(args: CommandOptions): void {
   }
 }
 
+/**
+ * Phase 3 (plan 03-01 Task 2) graceful-shutdown orchestrator.
+ *
+ * Runs in parallel with the Phase 1 shutdown handler installed by
+ * `registerShutdownHooks()`. The Phase 1 handler owns server.close +
+ * pino.flush + OTel shutdown; this orchestrator owns Phase 3 substrate
+ * teardown in the order documented in 03-CONTEXT.md: tenantPool.drain →
+ * redis.quit → pg.end. pkce-store and kek have no runtime shutdown — Redis
+ * TTL handles PKCE entries, and the KEK buffer is statically bound.
+ *
+ * The `region:phase3-shutdown-*` markers create the same disjoint-edit
+ * contract as the startup anchors: sibling plans fill their own region only.
+ */
+async function phase3ShutdownOrchestrator(): Promise<void> {
+  try {
+    // region:phase3-shutdown-tenant-pool (filled by 03-05)
+    // endregion:phase3-shutdown-tenant-pool
+
+    // region:phase3-shutdown-redis       (filled by 03-02)
+    // endregion:phase3-shutdown-redis
+
+    // region:phase3-shutdown-postgres    (filled by 03-01 Task 2 — THIS plan)
+    await postgres.shutdown();
+    // endregion:phase3-shutdown-postgres
+  } catch (err) {
+    // Shutdown errors must not throw out of the signal handler — swallow
+    // and log so the Phase 1 shutdown handler can still exit cleanly.
+    logger.error(
+      { err: err instanceof Error ? err.message : String(err) },
+      'phase3ShutdownOrchestrator: error during teardown (non-fatal)'
+    );
+  }
+}
+
 async function main(): Promise<void> {
   try {
     const args = parseArgs();
@@ -195,6 +231,40 @@ async function main(): Promise<void> {
       console.log(JSON.stringify({ mode, readOnly, filter, permissions: sorted }, null, 2));
       process.exit(0);
     }
+
+    // ── Phase 3 bootstrap scaffolding (plan 03-01 Task 2) ─────────────────
+    // The `region:phase3-*` markers below create a disjoint edit contract
+    // for the sibling wave-2/3 plans (03-02, 03-03, 03-04, 03-05). Each
+    // sibling plan's Task 2 edits ONLY inside its own region; surrounding
+    // bootstrap code is off-limits. The marker comments are LOAD-BEARING —
+    // do not delete them. grep counts must remain exactly 2 per name.
+    //
+    // Startup order (per 03-CONTEXT.md): postgres → redis → kek → pkce-store
+    // → tenant-pool. Only HTTP mode needs these substrates; stdio reuses the
+    // file-backed token cache + in-memory PKCE per D-04.
+    const isHttpMode = Boolean(args.http);
+    const readinessChecks: ReadinessCheck[] = [];
+
+    // region:phase3-postgres  (filled by 03-01 Task 2 — THIS plan)
+    // Plan 03-01: Postgres bootstrap — runs BEFORE Redis (03-02), migrations (03-01 bin/migrate),
+    // tenant-pool (03-05), transports (03-09).
+    if (isHttpMode) {
+      postgres.getPool(); // throws fast if env missing
+      readinessChecks.push(postgres.readinessCheck);
+    }
+    // endregion:phase3-postgres
+
+    // region:phase3-redis       (filled by 03-02 Task 2)
+    // endregion:phase3-redis
+
+    // region:phase3-kek         (filled by 03-04 Task 2)
+    // endregion:phase3-kek
+
+    // region:phase3-pkce-store  (filled by 03-03 Task 2)
+    // endregion:phase3-pkce-store
+
+    // region:phase3-tenant-pool (filled by 03-05 Task 2/3)
+    // endregion:phase3-tenant-pool
 
     const authManager = await AuthManager.create(scopes);
     await authManager.loadTokenCache();
@@ -271,9 +341,24 @@ async function main(): Promise<void> {
     // the user how to migrate them.
     maybeProbeKeytarLeftovers(args);
 
-    const server = new MicrosoftGraphServer(authManager, args);
+    const server = new MicrosoftGraphServer(authManager, args, readinessChecks);
     await server.initialize(version);
     await server.start();
+
+    // Phase 3 (plan 03-01 Task 2) — register a secondary SIGTERM/SIGINT
+    // handler AFTER server.start() so it stacks on top of the handler
+    // installed inside server.start() by registerShutdownHooks(). Both
+    // handlers fire in parallel; registering here means no later
+    // `removeAllListeners` call wipes ours. Per 03-CONTEXT graceful-shutdown
+    // order: tenantPool.drain → redis.quit → pg.end → (pino flush + OTel
+    // shutdown handled by shutdown.ts).
+    if (isHttpMode) {
+      const invokePhase3Shutdown = (): void => {
+        void phase3ShutdownOrchestrator();
+      };
+      process.on('SIGTERM', invokePhase3Shutdown);
+      process.on('SIGINT', invokePhase3Shutdown);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const stack = error instanceof Error ? error.stack : undefined;
