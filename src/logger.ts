@@ -153,32 +153,51 @@ function adaptArgs(arg1: LogArg, arg2?: LogArg): [object, string] {
   return [arg1 as object, (arg2 as string | undefined) ?? ''];
 }
 
-const adapted = {
-  info(arg1: LogArg, arg2?: LogArg): void {
-    const [meta, msg] = adaptArgs(arg1, arg2);
-    pinoInstance.info(meta, msg);
-  },
-  warn(arg1: LogArg, arg2?: LogArg): void {
-    const [meta, msg] = adaptArgs(arg1, arg2);
-    pinoInstance.warn(meta, msg);
-  },
-  error(arg1: LogArg, arg2?: LogArg): void {
-    const [meta, msg] = adaptArgs(arg1, arg2);
-    pinoInstance.error(meta, msg);
-  },
-  debug(arg1: LogArg, arg2?: LogArg): void {
-    const [meta, msg] = adaptArgs(arg1, arg2);
-    pinoInstance.debug(meta, msg);
-  },
-  // Expose flush for graceful-shutdown integration (plan 01-05)
-  flush(): void {
-    pinoInstance.flush?.();
-  },
-  // Expose the underlying pino level for tests
-  get level(): string {
-    return pinoInstance.level;
-  },
-};
+function wrap(instance: pino.Logger): AdaptedLogger {
+  return {
+    info(arg1: LogArg, arg2?: LogArg): void {
+      const [meta, msg] = adaptArgs(arg1, arg2);
+      instance.info(meta, msg);
+    },
+    warn(arg1: LogArg, arg2?: LogArg): void {
+      const [meta, msg] = adaptArgs(arg1, arg2);
+      instance.warn(meta, msg);
+    },
+    error(arg1: LogArg, arg2?: LogArg): void {
+      const [meta, msg] = adaptArgs(arg1, arg2);
+      instance.error(meta, msg);
+    },
+    debug(arg1: LogArg, arg2?: LogArg): void {
+      const [meta, msg] = adaptArgs(arg1, arg2);
+      instance.debug(meta, msg);
+    },
+    // pino-http calls logger.child({}, opts) for per-request loggers. Return a
+    // wrapped child so the adapter's argument-order contract stays intact.
+    child(bindings: pino.Bindings, options?: pino.ChildLoggerOptions): AdaptedLogger {
+      return wrap(instance.child(bindings, options));
+    },
+    // Expose flush for graceful-shutdown integration (plan 01-05)
+    flush(): void {
+      instance.flush?.();
+    },
+    // Expose the underlying pino level for tests
+    get level(): string {
+      return instance.level;
+    },
+  };
+}
+
+interface AdaptedLogger {
+  info(arg1: LogArg, arg2?: LogArg): void;
+  warn(arg1: LogArg, arg2?: LogArg): void;
+  error(arg1: LogArg, arg2?: LogArg): void;
+  debug(arg1: LogArg, arg2?: LogArg): void;
+  child(bindings: pino.Bindings, options?: pino.ChildLoggerOptions): AdaptedLogger;
+  flush(): void;
+  readonly level: string;
+}
+
+const adapted: AdaptedLogger = wrap(pinoInstance);
 
 /**
  * No-op in pino — stdout is the default destination.
