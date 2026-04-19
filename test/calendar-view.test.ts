@@ -137,8 +137,9 @@ describe('Calendar View Tools', () => {
 
       for (const call of mockServer.tool.mock.calls) {
         const toolName = call[0] as string;
-        // Skip utility tools that are not Graph API endpoints
+        // Skip utility tools that are not per-endpoint Graph API wrappers
         if (toolName === 'parse-teams-url') continue;
+        if (toolName === 'graph-batch') continue; // Plan 02-05: $batch coalescer, not a single endpoint
         const paramSchema = call[2] as Record<string, z.ZodTypeAny>;
         expect(paramSchema).toHaveProperty('fetchAllPages');
       }
