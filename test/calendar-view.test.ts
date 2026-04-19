@@ -140,6 +140,7 @@ describe('Calendar View Tools', () => {
         // Skip utility tools that are not per-endpoint Graph API wrappers
         if (toolName === 'parse-teams-url') continue;
         if (toolName === 'graph-batch') continue; // Plan 02-05: $batch coalescer, not a single endpoint
+        if (toolName === 'graph-upload-large-file') continue; // Plan 02-06: upload helper, not a GET wrapper
         const paramSchema = call[2] as Record<string, z.ZodTypeAny>;
         expect(paramSchema).toHaveProperty('fetchAllPages');
       }
