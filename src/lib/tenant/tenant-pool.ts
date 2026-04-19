@@ -158,6 +158,24 @@ export class TenantPool {
   }
 
   /**
+   * Return the per-tenant DEK for callers that need to build their own
+   * per-subsystem encryptor (plan 03-07 SessionStore is the first consumer:
+   * the /token handler wraps refresh tokens with this DEK after MSAL acquire;
+   * the Graph 401 handler uses the same DEK to unwrap the stored session).
+   *
+   * @throws Error when the tenant is not currently in the pool. Callers MUST
+   *   call `acquire(tenant)` first so the wrapped_dek is unwrapped into the
+   *   cached PoolEntry.
+   */
+  getDekForTenant(tenantId: string): Buffer {
+    const entry = this.pool.get(tenantId);
+    if (!entry) {
+      throw new Error(`TenantPool: no entry for tenant ${tenantId}; call acquire first`);
+    }
+    return entry.dek;
+  }
+
+  /**
    * Graceful-shutdown hook. Clears the sweep timer and empties the pool.
    * Registered in src/index.ts phase3ShutdownOrchestrator BEFORE
    * redis.shutdown so the final Redis writes can drain.

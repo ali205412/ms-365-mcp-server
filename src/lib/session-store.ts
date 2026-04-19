@@ -1,0 +1,130 @@
+/**
+ * Server-side refresh-token session store (plan 03-07, SECUR-02).
+ *
+ * Replaces v1's custom-header refresh-token read path (see
+ * docs/migration-v1-to-v2.md for the deleted header name + migration notes).
+ * Refresh tokens live in Redis under
+ * `mcp:session:{tenantId}:{sha256(accessToken)}`, envelope-encrypted with
+ * the per-tenant DEK (same DEK the MSAL cache plugin uses — supplied by
+ * TenantPool.getDekForTenant or plugin caller).
+ *
+ * Why sha256(accessToken) as the key? The access token is opaque to our
+ * server (issued by Microsoft). Hashing it prevents the session key itself
+ * from exposing the access token in Redis key-listing. Graph-client 401
+ * handler hashes the expired accessToken and retrieves the matching session
+ * to get the refresh token.
+ *
+ * TTL: defaults to 14 days (Entra refresh-token validity window), configurable
+ * via `MS365_MCP_SESSION_TTL_SECONDS`. This is the UPPER bound — MSAL will
+ * rotate the refresh token inside its cache (03-05), and the session blob is
+ * re-written on every /token success.
+ *
+ * SECUR-02 invariant (test/integration/redis-ciphertext-only.test.ts): the
+ * raw Redis value MUST NOT contain the substrings "refresh_token":,
+ * "access_token":, or "secret":. Envelope encryption guarantees this —
+ * ciphertext is base64-encoded inside a JSON envelope.
+ *
+ * Threat refs:
+ *   - T-03-07-01 (I): header-path removal (see src/lib/microsoft-auth.ts)
+ *   - T-03-07-02 (T): envelope AES-GCM auth tag detects tamper
+ *   - T-03-07-03 (I): sha256 one-way hash conceals the access token
+ *   - T-03-07-04 (E): TTL bounded by Entra refresh-token validity
+ */
+import { createHash } from 'node:crypto';
+import type { RedisClient } from './redis.js';
+import { wrapWithDek, unwrapWithDek, type Envelope } from './crypto/envelope.js';
+import logger from '../logger.js';
+
+export interface SessionRecord {
+  tenantId: string;
+  refreshToken: string;
+  accountHomeId?: string;
+  clientId: string;
+  scopes: string[];
+  createdAt: number;
+}
+
+const DEFAULT_TTL_SECONDS = 14 * 24 * 60 * 60; // 14 days — Entra refresh-token validity
+
+/**
+ * Stable, deterministic sha256 hex digest of the access token. Used both as
+ * the Redis key suffix (so the access token itself never appears in a key
+ * listing) and by graph-client.ts's 401 handler to look up the session.
+ */
+export function hashAccessToken(accessToken: string): string {
+  return createHash('sha256').update(accessToken).digest('hex');
+}
+
+function resolveTtl(explicit: number | undefined): number {
+  if (typeof explicit === 'number' && Number.isFinite(explicit) && explicit > 0) {
+    return Math.floor(explicit);
+  }
+  const envRaw = process.env.MS365_MCP_SESSION_TTL_SECONDS;
+  if (envRaw) {
+    const parsed = Number.parseInt(envRaw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return DEFAULT_TTL_SECONDS;
+}
+
+export class SessionStore {
+  constructor(
+    private readonly redis: RedisClient,
+    private readonly dek: Buffer
+  ) {}
+
+  private key(tenantId: string, accessToken: string): string {
+    return `mcp:session:${tenantId}:${hashAccessToken(accessToken)}`;
+  }
+
+  /**
+   * Persist a session record keyed by (tenantId, sha256(accessToken)) in
+   * Redis as an envelope-encrypted blob. Overwrites any existing entry.
+   *
+   * @param ttlSeconds optional override; otherwise falls back to
+   *   MS365_MCP_SESSION_TTL_SECONDS env var, then DEFAULT_TTL_SECONDS (14d).
+   */
+  async put(
+    tenantId: string,
+    accessToken: string,
+    record: SessionRecord,
+    ttlSeconds?: number
+  ): Promise<void> {
+    const k = this.key(tenantId, accessToken);
+    const plaintext = Buffer.from(JSON.stringify(record), 'utf8');
+    const envelope = wrapWithDek(plaintext, this.dek);
+    await this.redis.set(k, JSON.stringify(envelope), 'EX', resolveTtl(ttlSeconds));
+  }
+
+  /**
+   * Look up a session record by (tenantId, accessToken). Returns null when
+   * the key is absent or when the envelope fails to decrypt (wrong DEK, KEK
+   * rotation mismatch, corrupt ciphertext — all drop the key and warn).
+   */
+  async get(tenantId: string, accessToken: string): Promise<SessionRecord | null> {
+    const k = this.key(tenantId, accessToken);
+    const raw = await this.redis.get(k);
+    if (!raw) return null;
+    try {
+      const envelope = JSON.parse(raw) as Envelope;
+      const plaintext = unwrapWithDek(envelope, this.dek);
+      return JSON.parse(plaintext.toString('utf8')) as SessionRecord;
+    } catch (err) {
+      logger.warn(
+        { tenantId, err: (err as Error).message },
+        'session decrypt failed; dropping entry'
+      );
+      await this.redis.del(k);
+      return null;
+    }
+  }
+
+  /**
+   * Remove a session entry. Used by graph-client.ts's 401 handler after a
+   * successful refresh (the old accessToken is no longer valid; the session
+   * has been re-keyed under the new accessToken's hash).
+   */
+  async delete(tenantId: string, accessToken: string): Promise<void> {
+    await this.redis.del(this.key(tenantId, accessToken));
+  }
+}

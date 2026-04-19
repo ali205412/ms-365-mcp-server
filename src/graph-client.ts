@@ -11,6 +11,10 @@ import { RetryHandler } from './lib/middleware/retry.js';
 import { ETagMiddleware } from './lib/middleware/etag.js';
 import { GraphError } from './lib/graph-errors.js';
 import type { GraphRequest } from './lib/middleware/types.js';
+import type { RedisClient } from './lib/redis.js';
+import type { TenantRow } from './lib/tenant/tenant-row.js';
+import type { TenantPool } from './lib/tenant/tenant-pool.js';
+import { SessionStore } from './lib/session-store.js';
 
 /**
  * Maximum recursion depth for `removeODataProps`. A well-formed Graph response
@@ -406,3 +410,117 @@ class GraphClient {
 }
 
 export default GraphClient;
+
+/**
+ * Narrow MSAL interface for acquireTokenByRefreshToken — we only need the
+ * subset the 401 refresh path consumes. Keeps the helper testable with
+ * lightweight mocks (same pattern as isDelegatedMsalClient in server.ts).
+ */
+interface MsalWithRefresh {
+  acquireTokenByRefreshToken: (req: { refreshToken: string; scopes: string[] }) => Promise<{
+    accessToken?: string;
+    refreshToken?: string;
+    expiresOn?: Date | null;
+    account?: { homeAccountId?: string } | null;
+  } | null>;
+}
+
+function hasAcquireTokenByRefreshToken(c: unknown): c is MsalWithRefresh {
+  return (
+    typeof c === 'object' &&
+    c !== null &&
+    'acquireTokenByRefreshToken' in c &&
+    typeof (c as { acquireTokenByRefreshToken: unknown }).acquireTokenByRefreshToken === 'function'
+  );
+}
+
+/**
+ * Plan 03-07 SECUR-02: Graph 401 server-side refresh path.
+ *
+ * Replaces v1's custom-header-driven refresh. Flow:
+ *   1. Look up the SessionRecord in Redis keyed by
+ *      `mcp:session:{tenantId}:sha256(oldAccessToken)` — if miss, the
+ *      caller must re-authenticate via the OAuth round-trip (no header
+ *      fallback in v2).
+ *   2. Call `tenantPool.acquire(tenant)` + `acquireTokenByRefreshToken`
+ *      with the stored refresh token + scopes (no header ride).
+ *   3. On success, write a NEW session entry keyed by the fresh access
+ *      token and delete the old session — refresh-token rotation is
+ *      honored if MSAL returned a new RT.
+ *
+ * Returned object carries the fresh access token for the Graph retry. The
+ * caller (Graph middleware pipeline or tests) is responsible for replaying
+ * the original Graph request with `Authorization: Bearer {accessToken}`.
+ *
+ * This function does NOT read any HTTP header. This is the SECUR-02
+ * contract — the T-03-07-01 threat register disposition requires that
+ * no custom header read path survives.
+ *
+ * @throws Error when the session is missing, tenantPool.acquire fails, the
+ *   tenant's MSAL client doesn't expose acquireTokenByRefreshToken (bearer
+ *   mode — bearer clients never hit the refresh path), or the refresh
+ *   acquire returns no accessToken.
+ */
+export async function refreshSessionAndRetry(args: {
+  tenant: TenantRow;
+  oldAccessToken: string;
+  tenantPool: Pick<TenantPool, 'acquire' | 'getDekForTenant'>;
+  redis: RedisClient;
+}): Promise<{ accessToken: string; refreshToken?: string; expiresOn?: Date | null }> {
+  const { tenant, oldAccessToken, tenantPool, redis } = args;
+
+  // 1. Unwrap DEK + build SessionStore. Throws if the tenant isn't in the
+  //    pool — the caller must acquire first.
+  const dek = tenantPool.getDekForTenant(tenant.id);
+  const sessionStore = new SessionStore(redis, dek);
+
+  const record = await sessionStore.get(tenant.id, oldAccessToken);
+  if (!record?.refreshToken) {
+    // No server-side session → cannot refresh. Caller must redirect to a
+    // fresh OAuth round-trip. 401 propagates to the client.
+    throw new Error('no_session_for_access_token');
+  }
+
+  // 2. Acquire an MSAL client + call acquireTokenByRefreshToken. Bearer
+  //    mode returns null from tenantPool.acquire; we can't refresh bearer
+  //    tokens (they're pass-through JWTs — client must re-issue).
+  const msal = await tenantPool.acquire(tenant);
+  if (!hasAcquireTokenByRefreshToken(msal)) {
+    throw new Error('tenant_does_not_support_refresh');
+  }
+
+  const fresh = await msal.acquireTokenByRefreshToken({
+    refreshToken: record.refreshToken,
+    scopes: record.scopes,
+  });
+  if (!fresh?.accessToken) {
+    // Old session is stale — drop it to prevent repeated refresh attempts
+    // against a dead refresh token (T-03-07-04 disposition).
+    await sessionStore.delete(tenant.id, oldAccessToken);
+    throw new Error('refresh_token_exchange_failed');
+  }
+
+  // 3. Rotate the session entry: new access-token key holds the (possibly
+  //    rotated) refresh token; old key is deleted. When MSAL did NOT rotate
+  //    the refresh token, we carry the existing one forward — the session
+  //    contents stay valid, only the key changes.
+  const newRefreshToken = fresh.refreshToken ?? record.refreshToken;
+  await sessionStore.put(tenant.id, fresh.accessToken, {
+    ...record,
+    refreshToken: newRefreshToken,
+    accountHomeId: fresh.account?.homeAccountId ?? record.accountHomeId,
+    createdAt: Date.now(),
+  });
+  await sessionStore.delete(tenant.id, oldAccessToken);
+
+  logger.info(
+    { tenantId: tenant.id, rotated: Boolean(fresh.refreshToken) },
+    'session refresh: rotated access token via SessionStore'
+  );
+
+  return {
+    accessToken: fresh.accessToken,
+    refreshToken: fresh.refreshToken ?? undefined,
+    expiresOn: fresh.expiresOn ?? undefined,
+  };
+}

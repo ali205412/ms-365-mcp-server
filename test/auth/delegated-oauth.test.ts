@@ -81,6 +81,10 @@ async function startApp(tenantOverrides: Partial<TenantRow> = {}): Promise<AppHa
     })),
     buildCachePlugin: vi.fn(),
     evict: vi.fn(),
+    // Plan 03-07: /token handler surfaces the per-tenant DEK to build its
+    // SessionStore. The test DEK is deterministic so downstream assertions
+    // (e.g., SC#5 plaintext scan in the integration test) can decrypt.
+    getDekForTenant: vi.fn(() => Buffer.alloc(32, 7)),
   };
 
   const { createAuthorizeHandler, createTenantTokenHandler } = await import('../../src/server.js');
@@ -106,7 +110,9 @@ async function startApp(tenantOverrides: Partial<TenantRow> = {}): Promise<AppHa
       pkceStore,
       tenantPool: mockTenantPool as unknown as {
         acquire: (t: TenantRow) => Promise<unknown>;
+        getDekForTenant: (tid: string) => Buffer;
       },
+      redis,
     })
   );
 
