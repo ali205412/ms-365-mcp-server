@@ -379,6 +379,25 @@ class AuthManager {
     return accounts[0];
   }
 
+  /**
+   * Phase 3 note: Device-code flow (AUTH-04) is preserved for stdio mode.
+   * HTTP mode uses TenantPool (src/lib/tenant/tenant-pool.ts) with
+   * ConfidentialClientApplication (app-only) or PublicClientApplication
+   * (delegated-without-secret). Bearer mode bypasses MSAL entirely
+   * (src/lib/microsoft-auth.ts createBearerMiddleware — plan 03-06).
+   *
+   * This AuthManager.acquireTokenByDeviceCode remains for:
+   *   - Stdio mode with `--tenant-id=<id>` (single-tenant)
+   *   - File-backed MSAL cache (no Redis dependency)
+   *   - `ms-365-mcp-server --login` one-shot CLI
+   *
+   * Wire chart (03-06):
+   *
+   *   stdio transport → AuthManager.create() → acquireTokenByDeviceCode (THIS)
+   *   HTTP delegated  → TenantPool.acquire(tenant) → MSAL.acquireTokenByCode
+   *   HTTP app-only   → TenantPool.acquire(tenant) → MSAL.acquireTokenByClientCredential
+   *   HTTP bearer     → createBearerMiddleware → requestContext (no MSAL)
+   */
   async acquireTokenByDeviceCode(hack?: (message: string) => void): Promise<string | null> {
     const deviceCodeRequest = {
       scopes: this.scopes,

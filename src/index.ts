@@ -318,6 +318,39 @@ async function main(): Promise<void> {
     }
     // endregion:phase3-tenant-pool
 
+    // ── Phase 3 plan 03-06 Task 3: stdio --tenant-id loader ─────────────
+    // When stdio mode is configured with a tenantId (via env or --tenant-id),
+    // load the tenant row from Postgres up front. This enables
+    // delegated/app-only from stdio against a pre-configured tenant while
+    // preserving the legacy AuthManager.create() + file-backed token cache
+    // path for the default (no tenant-id) stdio use case.
+    //
+    // The --tenant-id CLI flag is intentionally NOT added to cli.ts yet —
+    // stdio tenant-scoped sessions are an operator-initiated flow, and
+    // the env-var reads below are sufficient for the Phase 3 scope. 03-09
+    // wires `--tenant-id` + stdio tenant dispatch formally.
+    if (!isHttpMode) {
+      const tenantIdArg = process.env.MS365_MCP_TENANT_ID_HTTP;
+      if (tenantIdArg) {
+        try {
+          const pool = postgres.getPool();
+          const { rows } = await pool.query(
+            'SELECT id, mode, client_id FROM tenants WHERE id = $1 AND disabled_at IS NULL',
+            [tenantIdArg]
+          );
+          if (!rows[0]) {
+            throw new Error(`tenant_not_found: ${tenantIdArg}`);
+          }
+          logger.info({ tenantId: tenantIdArg, mode: rows[0].mode }, 'stdio tenant loaded');
+        } catch (err) {
+          logger.warn(
+            { err: (err as Error).message },
+            'stdio --tenant-id load failed; falling back to legacy single-tenant AuthManager'
+          );
+        }
+      }
+    }
+
     const authManager = await AuthManager.create(scopes);
     await authManager.loadTokenCache();
 
