@@ -105,8 +105,8 @@ describe('UploadSessionHelper.uploadLargeFile', () => {
     // Inspect each fetch call; NONE should carry an Authorization header
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     for (const call of fetchSpy.mock.calls) {
-      const init = call[1] as RequestInit;
-      const hdrs = init.headers as Record<string, string> | undefined;
+      const init = call[1] as { headers?: Record<string, string> };
+      const hdrs = init.headers;
       if (hdrs) {
         const hasAuth = Object.keys(hdrs).some((k) => k.toLowerCase() === 'authorization');
         expect(hasAuth).toBe(false);
