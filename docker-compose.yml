@@ -1,0 +1,42 @@
+# Reference Docker Compose stack (plan 03-01).
+#
+# Single-VM deployment target per PROJECT.md constraint. Postgres is the
+# durable tenant registry / audit log; the mcp service auto-runs migrations
+# on startup unless MS365_MCP_MIGRATE_ON_STARTUP=0 is passed (see
+# docker-entrypoint.sh). Port 5432 is bound to 127.0.0.1 so the database
+# is not publicly exposed; operators intentionally running multi-VM deploys
+# should swap the bind address and use a reverse proxy.
+#
+# Sibling plans 03-02 + 03-04 will layer Redis + KEK secret mounting onto
+# this file. `version:` is deliberately omitted — Compose v2 (docker CLI
+# plugin) ignores it and warns if present.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mcp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: mcp
+    volumes:
+      - mcp_pg_data:/var/lib/postgresql/data
+    ports:
+      - '127.0.0.1:5432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U mcp -d mcp']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mcp:
+    build:
+      context: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MS365_MCP_DATABASE_URL: postgres://mcp:${POSTGRES_PASSWORD:-changeme}@postgres:5432/mcp
+      MS365_MCP_MIGRATE_ON_STARTUP: ${MS365_MCP_MIGRATE_ON_STARTUP:-1}
+
+volumes:
+  mcp_pg_data:
