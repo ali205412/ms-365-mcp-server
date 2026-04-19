@@ -16,6 +16,7 @@ import MicrosoftGraphServer, { parseHttpOption } from './server.js';
 import { registerShutdownHooks } from './lib/shutdown.js';
 import type { ReadinessCheck } from './lib/health.js';
 import * as postgres from './lib/postgres.js';
+import * as redisClient from './lib/redis.js';
 import { version } from './version.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -172,6 +173,11 @@ async function phase3ShutdownOrchestrator(): Promise<void> {
     // endregion:phase3-shutdown-tenant-pool
 
     // region:phase3-shutdown-redis       (filled by 03-02)
+    // Plan 03-02: Redis teardown — runs BEFORE postgres (ordering enforced by
+    // anchor position: shutdown-tenant-pool → shutdown-redis → shutdown-postgres).
+    // redisClient.shutdown() is idempotent — safe to call even when the client
+    // was never constructed (stdio mode or HTTP mode that crashed pre-bootstrap).
+    await redisClient.shutdown();
     // endregion:phase3-shutdown-redis
 
     // region:phase3-shutdown-postgres    (filled by 03-01 Task 2 — THIS plan)
@@ -255,6 +261,16 @@ async function main(): Promise<void> {
     // endregion:phase3-postgres
 
     // region:phase3-redis       (filled by 03-02 Task 2)
+    // Plan 03-02: Redis bootstrap — runs AFTER pg (03-01), BEFORE tenant-pool (03-05).
+    // getRedis() is idempotent + lazyConnect, so this line constructs the client but
+    // does NOT open a TCP connection yet. readinessCheck is pushed into the Phase 1
+    // readinessChecks[] array so /readyz reflects Redis reachability in HTTP mode.
+    // In stdio mode (or when MS365_MCP_REDIS_URL is unset), getRedis() returns the
+    // MemoryRedisFacade and /readyz is not wired (no HTTP server listening).
+    if (isHttpMode) {
+      redisClient.getRedis();
+      readinessChecks.push(redisClient.readinessCheck);
+    }
     // endregion:phase3-redis
 
     // region:phase3-kek         (filled by 03-04 Task 2)
