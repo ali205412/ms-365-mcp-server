@@ -732,6 +732,105 @@ export function registerGraphTools(
     }
   }
 
+  // Register graph-batch tool (Plan 02-05 / MWARE — $batch coalescing).
+  // Combines up to 20 Graph sub-requests into one POST /$batch. Skipped in
+  // read-only mode because a batch can contain arbitrary write methods; the
+  // per-sub-request isolation + typed-error surfacing lives in
+  // src/lib/middleware/batch.ts.
+  const shouldRegisterBatch =
+    !readOnly && (!enabledToolsRegex || enabledToolsRegex.test('graph-batch'));
+  if (shouldRegisterBatch) {
+    try {
+      const subRequestSchema = z.object({
+        id: z.string().describe('Unique identifier within this batch (e.g., "1", "2").'),
+        method: z
+          .string()
+          .describe('HTTP method: GET, POST, PATCH, DELETE, or PUT (uppercased internally).'),
+        url: z
+          .string()
+          .describe(
+            'Relative Graph path beginning with "/" (e.g., "/me", "/me/messages?$top=5"). ' +
+              'Absolute URLs (http://, https://, //, file://) are REJECTED for SSRF safety.'
+          ),
+        headers: z
+          .record(z.string())
+          .optional()
+          .describe('Optional HTTP headers for this sub-request.'),
+        body: z.any().optional().describe('Optional JSON body for this sub-request.'),
+        dependsOn: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Optional list of sub-request ids that must complete before this one runs. ' +
+              'Cycles are rejected client-side.'
+          ),
+      });
+
+      server.tool(
+        'graph-batch',
+        'Combine up to 20 Microsoft Graph sub-requests into a single POST /$batch. ' +
+          'Each sub-request is returned in input order with status, body, and (on non-2xx) a structured error. ' +
+          'One failing sub-request does NOT fail the batch — per-item isolation. ' +
+          'Use for high-fanout reads (e.g., fetching 15 users by id) or chained writes with dependsOn. ' +
+          'Each sub-request goes through the full middleware chain (retry, typed errors, token refresh). ' +
+          'Sub-request URLs MUST be relative paths starting with "/" — absolute URLs are rejected for SSRF safety.',
+        {
+          requests: z
+            .array(subRequestSchema)
+            .min(1)
+            .max(20)
+            .describe('1–20 sub-requests. See subRequestSchema for per-item shape.'),
+        },
+        {
+          title: 'graph-batch',
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: true,
+        },
+        async ({ requests }) => {
+          try {
+            const { batch } = await import('./lib/middleware/batch.js');
+            const results = await batch(requests, graphClient);
+            // Serialize typed GraphError into a JSON-safe shape so the MCP
+            // response text is always valid JSON — `Error` objects otherwise
+            // lose their fields across JSON.stringify.
+            const serializable = results.map((r) => {
+              if (!r.error) return r;
+              return {
+                ...r,
+                error: {
+                  code: r.error.code,
+                  message: r.error.message,
+                  statusCode: r.error.statusCode,
+                  requestId: r.error.requestId,
+                  clientRequestId: r.error.clientRequestId,
+                  date: r.error.date,
+                },
+              };
+            });
+            return {
+              content: [{ type: 'text', text: JSON.stringify({ responses: serializable }) }],
+            };
+          } catch (error) {
+            logger.error(`graph-batch failed: ${(error as Error).message}`);
+            return {
+              content: [
+                { type: 'text', text: JSON.stringify({ error: (error as Error).message }) },
+              ],
+              isError: true,
+            };
+          }
+        }
+      );
+      registeredCount++;
+    } catch (error) {
+      logger.error(`Failed to register tool graph-batch: ${(error as Error).message}`);
+      failedCount++;
+    }
+  } else if (readOnly) {
+    logger.info('Skipping graph-batch tool in read-only mode (can contain write sub-requests)');
+  }
+
   // Layer 3 (list-accounts tool) is registered by registerAuthTools in auth-tools.ts.
   // It is the canonical owner of account discovery — no duplicate registration here.
 
