@@ -25,6 +25,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { canonical412PreconditionFailed, toResponse } from './fixtures/graph-responses.js';
 import type { GraphRequest } from '../src/lib/middleware/types.js';
+import type { GraphConcurrencyError } from '../src/lib/graph-errors.js';
 import { requestContext } from '../src/request-context.js';
 
 vi.mock('../src/logger.js', () => ({
@@ -145,9 +146,7 @@ describe('ETagMiddleware', () => {
     await requestContext.run({}, () =>
       mw.execute(
         mkReq({ url: 'https://graph.microsoft.com/v1.0/me/events/abc', method: 'GET' }),
-        vi
-          .fn()
-          .mockResolvedValue(new Response(null, { status: 200, headers: { ETag: 'W/"222"' } }))
+        vi.fn().mockResolvedValue(new Response(null, { status: 200, headers: { ETag: 'W/"222"' } }))
       )
     );
 
@@ -171,11 +170,19 @@ describe('ETagMiddleware', () => {
 
 describe('ETagMiddleware integration with ODataErrorHandler', () => {
   it('412 from PATCH surfaces as GraphConcurrencyError with re-fetch hint', async () => {
-    vi.resetModules();
+    // Dynamic import for GraphConcurrencyError (VALUE, not just type) so the
+    // class identity matches the one ODataErrorHandler's parseODataError uses
+    // internally. Earlier tests in this file call vi.resetModules(); that
+    // invalidates the module cache, so a statically-imported
+    // GraphConcurrencyError from the top of the file would be a DIFFERENT
+    // class identity than the one the middleware resolves at runtime — the
+    // instanceof check would fail even when the thrown error IS the right
+    // type. Resolving the value alongside the pipeline keeps them aligned.
     const { composePipeline } = await import('../src/lib/middleware/pipeline.js');
     const { ETagMiddleware } = await import('../src/lib/middleware/etag.js');
     const { ODataErrorHandler } = await import('../src/lib/middleware/odata-error.js');
-    const { GraphConcurrencyError } = await import('../src/lib/graph-errors.js');
+    const { GraphConcurrencyError: GraphConcurrencyErrorClass } =
+      await import('../src/lib/graph-errors.js');
 
     const terminal = vi.fn().mockResolvedValue(toResponse(canonical412PreconditionFailed));
     const pipeline = composePipeline([new ETagMiddleware(), new ODataErrorHandler()], terminal);
@@ -194,7 +201,7 @@ describe('ETagMiddleware integration with ODataErrorHandler', () => {
       caught = err;
     }
 
-    expect(caught).toBeInstanceOf(GraphConcurrencyError);
+    expect(caught).toBeInstanceOf(GraphConcurrencyErrorClass);
     expect((caught as GraphConcurrencyError).message).toContain('resource changed');
   });
 });
@@ -215,9 +222,9 @@ describe('resourceKeyFromUrl', () => {
     expect(resourceKeyFromUrl('https://graph.microsoft.com/v1.0/users/u1/contacts/c2')).toMatch(
       /\/users\/u1\/contacts\/c2/
     );
-    expect(
-      resourceKeyFromUrl('https://graph.microsoft.com/v1.0/drives/b!abc/items/xyz')
-    ).toMatch(/\/drives\/b!abc\/items\/xyz/);
+    expect(resourceKeyFromUrl('https://graph.microsoft.com/v1.0/drives/b!abc/items/xyz')).toMatch(
+      /\/drives\/b!abc\/items\/xyz/
+    );
   });
 
   it('returns null for unsupported paths', async () => {
