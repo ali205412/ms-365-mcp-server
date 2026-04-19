@@ -123,16 +123,16 @@ describe('batch() helper — validation', () => {
   it('rejects protocol-relative URL (//host/path) SSRF guard', async () => {
     const { batch } = await import('../src/lib/middleware/batch.js');
     const { stub } = mockBatchClient([]);
-    const requests: BatchRequestItem[] = [{ id: '1', method: 'GET', url: '//attacker.example.com' }];
+    const requests: BatchRequestItem[] = [
+      { id: '1', method: 'GET', url: '//attacker.example.com' },
+    ];
     await expect(batch(requests, stub)).rejects.toThrow(/relative|absolute/i);
   });
 
   it('rejects file:// scheme URL (SSRF guard)', async () => {
     const { batch } = await import('../src/lib/middleware/batch.js');
     const { stub } = mockBatchClient([]);
-    const requests: BatchRequestItem[] = [
-      { id: '1', method: 'GET', url: 'file:///etc/passwd' },
-    ];
+    const requests: BatchRequestItem[] = [{ id: '1', method: 'GET', url: 'file:///etc/passwd' }];
     await expect(batch(requests, stub)).rejects.toThrow(/relative|absolute/i);
   });
 
@@ -166,9 +166,7 @@ describe('batch() helper — validation', () => {
   it('rejects self-reference in dependsOn (trivial cycle)', async () => {
     const { batch } = await import('../src/lib/middleware/batch.js');
     const { stub } = mockBatchClient([]);
-    const requests: BatchRequestItem[] = [
-      { id: '1', method: 'GET', url: '/me', dependsOn: ['1'] },
-    ];
+    const requests: BatchRequestItem[] = [{ id: '1', method: 'GET', url: '/me', dependsOn: ['1'] }];
     await expect(batch(requests, stub)).rejects.toThrow(/cycle/i);
   });
 
@@ -335,9 +333,8 @@ describe('batch() helper — per-sub-request isolation', () => {
 
   it('surfaces a typed GraphError (by statusCode) on each failing sub-request', async () => {
     const { batch } = await import('../src/lib/middleware/batch.js');
-    const { GraphThrottleError, GraphServerError, GraphValidationError } = await import(
-      '../src/lib/graph-errors.js'
-    );
+    const { GraphThrottleError, GraphServerError, GraphValidationError } =
+      await import('../src/lib/graph-errors.js');
     const { stub } = mockBatchClient([
       {
         id: 'throttled',
