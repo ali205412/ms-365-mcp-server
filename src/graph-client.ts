@@ -296,6 +296,14 @@ class GraphClient {
       // fields into _meta.graph so AI callers can paste requestId into a
       // Microsoft support ticket (Phase 2 Success Criteria #5).
       if (error instanceof GraphError) {
+        // Plan 03-10 (TENANT-06): emit a graph.error audit row with the
+        // Microsoft requestId so operators can correlate to a Microsoft
+        // support ticket. Fire-and-forget; writeAuditStandalone falls back
+        // to pino shadow log on DB error. Only emitted when a tenantId is
+        // present on the request context (HTTP mode per-tenant path);
+        // stdio / legacy single-tenant paths skip to avoid orphaning rows.
+        void this.emitGraphErrorAudit(endpoint, error);
+
         let finalMessage = error.message;
         if (error.requiresOrgMode) {
           finalMessage +=
@@ -331,6 +339,48 @@ class GraphClient {
         content: [{ type: 'text', text: JSON.stringify({ error: (error as Error).message }) }],
         isError: true,
       };
+    }
+  }
+
+  /**
+   * Plan 03-10 (TENANT-06): fire-and-forget Graph error audit writer.
+   *
+   * Lazy-loads postgres + audit modules so the legacy single-tenant stdio
+   * path (no pg available) never pays the import cost. Only emits when a
+   * tenantId is present on the request context — Phase 3 HTTP mode sets
+   * this via the loadTenant middleware; stdio requests leave it undefined
+   * and skip audit.
+   */
+  private async emitGraphErrorAudit(endpoint: string, error: GraphError): Promise<void> {
+    try {
+      const ctx = getRequestTokens();
+      const tenantId = ctx?.tenantId;
+      if (!tenantId) return;
+
+      const postgres = await import('./lib/postgres.js');
+      const pgPool = postgres.getPool();
+      const { writeAuditStandalone } = await import('./lib/audit.js');
+
+      await writeAuditStandalone(pgPool, {
+        tenantId,
+        actor: 'system',
+        action: 'graph.error',
+        target: endpoint,
+        ip: null,
+        requestId: ctx?.requestId ?? 'no-req-id',
+        result: 'failure',
+        meta: {
+          code: error.code,
+          message: error.message,
+          graphRequestId: error.requestId,
+          httpStatus: error.statusCode,
+        },
+      });
+    } catch {
+      // Audit write itself failed (postgres pool not constructed in stdio
+      // mode, or pg is unreachable). writeAuditStandalone has its own
+      // shadow-log fallback for DB errors; we swallow module-not-available
+      // errors here so the Graph error path never fails on missing deps.
     }
   }
 

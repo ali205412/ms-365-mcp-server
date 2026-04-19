@@ -106,6 +106,12 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       'SELECT id, wrapped_dek FROM tenants WHERE wrapped_dek IS NOT NULL'
     );
 
+    // Plan 03-10: load audit writer once outside the loop; one audit row
+    // emitted per successfully-rewrapped tenant so operators can correlate
+    // KEK-rotation incidents to per-tenant impact.
+    const writeAuditStandalone = await loadAuditWriter();
+    const batchId = `kek-rotate-${Date.now()}`;
+
     for (const row of rows) {
       const envelope =
         typeof row.wrapped_dek === 'string' ? JSON.parse(row.wrapped_dek) : row.wrapped_dek;
@@ -125,11 +131,46 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
         [JSON.stringify(newEnvelope), row.id]
       );
       rewrapped++;
+
+      // Plan 03-10 (TENANT-06): per-tenant audit row so the rotation event
+      // appears in each tenant's audit stream. audit_log.tenant_id is FK
+      // NOT NULL — a per-tenant row is the correct shape (not a system-
+      // level "0 tenant" row) for this operation.
+      if (writeAuditStandalone) {
+        await writeAuditStandalone(pool, {
+          tenantId: row.id,
+          actor: 'cli',
+          action: 'kek.rotate',
+          target: null,
+          ip: null,
+          requestId: `cli-${batchId}-${row.id}`,
+          result: 'success',
+          meta: { batchId, partOfBatch: true },
+        });
+      }
     }
 
     return { rewrapped, skipped };
   } finally {
     if (ownsPool) await pool.end();
+  }
+}
+
+/**
+ * Plan 03-10: lazy-load audit writer. Falls back to src/*.ts for tests
+ * (tsx transpiles on import) and dist/*.js for production node invocation.
+ */
+async function loadAuditWriter() {
+  try {
+    const mod = await import('../dist/lib/audit.js');
+    return mod.writeAuditStandalone;
+  } catch {
+    try {
+      const mod = await import('../src/lib/audit.ts');
+      return mod.writeAuditStandalone;
+    } catch {
+      return null;
+    }
   }
 }
 

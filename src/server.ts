@@ -374,9 +374,15 @@ export function createTokenHandler(config: TokenHandlerConfig) {
  * Config for the Phase 3 /authorize handler. Reads the PKCE store interface
  * from 03-03 and pins tenant state via `req.tenant` (loaded by the real
  * `loadTenant` middleware shipped in 03-08).
+ *
+ * Plan 03-10 (TENANT-06) addition:
+ *   - `pgPool` optional — when present, every /authorize completion (success
+ *     OR failure) emits an audit_log row via writeAuditStandalone.
+ *     Fire-and-forget so the OAuth response is never delayed.
  */
 export interface AuthorizeHandlerConfig {
   pkceStore: PkceStore;
+  pgPool?: import('pg').Pool;
 }
 
 /**
@@ -391,11 +397,16 @@ export interface AuthorizeHandlerConfig {
  *     re-running the envelope unwrap.
  *   - `redis` injected separately to decouple SessionStore construction from
  *     the TenantPool's internal Redis reference (tests supply their own).
+ *
+ * Plan 03-10 (TENANT-06) addition:
+ *   - `pgPool` optional — /token completion emits audit_log rows for success
+ *     and every distinct failure mode (invalid_request, invalid_grant, etc).
  */
 export interface TenantTokenHandlerConfig {
   pkceStore: PkceStore;
   tenantPool: Pick<TenantPool, 'acquire' | 'getDekForTenant'>;
   redis: import('./lib/redis.js').RedisClient;
+  pgPool?: import('pg').Pool;
 }
 
 /**
@@ -417,7 +428,35 @@ export interface TenantTokenHandlerConfig {
  *    (selected by `tenant.cloud_type`).
  */
 export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
-  const { pkceStore } = config;
+  const { pkceStore, pgPool } = config;
+
+  // Plan 03-10 helper: fire-and-forget audit write. Never delays OAuth
+  // response. writeAuditStandalone internally catches DB errors and emits
+  // a pino shadow log (audit_shadow:true) so the trail is never dropped.
+  const emitAudit = (
+    tenantId: string,
+    result: 'success' | 'failure',
+    redirectUri: string,
+    meta: Record<string, unknown>,
+    req: Request
+  ): void => {
+    if (!pgPool) return;
+    void (async () => {
+      const { writeAuditStandalone } = await import('./lib/audit.js');
+      const reqId =
+        (req as Request & { id?: string }).id ?? getRequestTokens()?.requestId ?? 'no-req-id';
+      await writeAuditStandalone(pgPool, {
+        tenantId,
+        actor: 'unauthenticated',
+        action: 'oauth.authorize',
+        target: redirectUri || null,
+        ip: req.ip ?? null,
+        requestId: reqId,
+        result,
+        meta,
+      });
+    })();
+  };
 
   return async (req: Request, res: Response): Promise<void> => {
     const tenant = (req as Request & { tenant?: TenantRow }).tenant;
@@ -431,17 +470,26 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
     //   a) Phase 1 scheme validator — rejects javascript:, data:, file:, ...
     const schemeCheck = validateRedirectUri(redirectUri, { mode: 'prod', publicUrlHost: null });
     if (!schemeCheck.ok) {
+      emitAudit(
+        tenant.id,
+        'failure',
+        redirectUri,
+        { error: 'invalid_redirect_uri', reason: schemeCheck.reason },
+        req
+      );
       res.status(400).json({ error: 'invalid_redirect_uri', reason: schemeCheck.reason });
       return;
     }
     //   b) Tenant-scoped allowlist membership — exact match only
     if (!tenant.redirect_uri_allowlist.includes(redirectUri)) {
+      emitAudit(tenant.id, 'failure', redirectUri, { error: 'invalid_redirect_uri' }, req);
       res.status(400).json({ error: 'invalid_redirect_uri' });
       return;
     }
 
     const clientCodeChallenge = String(req.query.code_challenge ?? '');
     if (!/^[A-Za-z0-9_-]{43,128}$/.test(clientCodeChallenge)) {
+      emitAudit(tenant.id, 'failure', redirectUri, { error: 'invalid_code_challenge' }, req);
       res.status(400).json({ error: 'invalid_code_challenge' });
       return;
     }
@@ -472,6 +520,7 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
       createdAt: Date.now(),
     });
     if (!ok) {
+      emitAudit(tenant.id, 'failure', redirectUri, { error: 'pkce_challenge_collision' }, req);
       res.status(400).json({
         error: 'pkce_challenge_collision',
         error_description:
@@ -503,6 +552,15 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
         challengePrefix: clientCodeChallenge.substring(0, 8) + '...',
       },
       'Two-leg PKCE: stored client challenge, forwarding to Microsoft with server challenge'
+    );
+
+    // Plan 03-10: success audit row — meta carries clientId + scopes (no PII).
+    emitAudit(
+      tenant.id,
+      'success',
+      redirectUri,
+      { clientId: tenant.client_id, scopes: tenant.allowed_scopes },
+      req
     );
 
     res.redirect(authorizeUrl.toString());
@@ -557,7 +615,32 @@ function isDelegatedMsalClient(client: unknown): client is DelegatedMsalClient {
  *    cross the client trust boundary in v2).
  */
 export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
-  const { pkceStore, tenantPool, redis } = config;
+  const { pkceStore, tenantPool, redis, pgPool } = config;
+
+  // Plan 03-10 helper: fire-and-forget audit write for oauth.token.exchange.
+  const emitTokenAudit = (
+    tenantId: string,
+    result: 'success' | 'failure',
+    meta: Record<string, unknown>,
+    req: Request
+  ): void => {
+    if (!pgPool) return;
+    void (async () => {
+      const { writeAuditStandalone } = await import('./lib/audit.js');
+      const reqId =
+        (req as Request & { id?: string }).id ?? getRequestTokens()?.requestId ?? 'no-req-id';
+      await writeAuditStandalone(pgPool, {
+        tenantId,
+        actor: 'unauthenticated',
+        action: 'oauth.token.exchange',
+        target: null,
+        ip: req.ip ?? null,
+        requestId: reqId,
+        result,
+        meta,
+      });
+    })();
+  };
 
   return async (req: Request, res: Response): Promise<void> => {
     const tenant = (req as Request & { tenant?: TenantRow }).tenant;
@@ -569,6 +652,12 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
     const body = req.body as Record<string, unknown> | undefined;
     const clientVerifier = String(body?.code_verifier ?? '');
     if (!clientVerifier) {
+      emitTokenAudit(
+        tenant.id,
+        'failure',
+        { error: 'invalid_request', reason: 'code_verifier required' },
+        req
+      );
       res
         .status(400)
         .json({ error: 'invalid_request', error_description: 'code_verifier required' });
@@ -586,6 +675,12 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
 
     const entry = await pkceStore.takeByChallenge(tenantKey, clientCodeChallenge);
     if (!entry) {
+      emitTokenAudit(
+        tenant.id,
+        'failure',
+        { error: 'invalid_grant', reason: 'PKCE mismatch' },
+        req
+      );
       res.status(400).json({ error: 'invalid_grant', error_description: 'PKCE mismatch' });
       return;
     }
@@ -593,6 +688,7 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
     try {
       const msal = await tenantPool.acquire(tenant);
       if (!isDelegatedMsalClient(msal)) {
+        emitTokenAudit(tenant.id, 'failure', { error: 'delegated_requires_client_with_code' }, req);
         res.status(500).json({ error: 'delegated_requires_client_with_code' });
         return;
       }
@@ -606,6 +702,7 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
       });
 
       if (!result?.accessToken) {
+        emitTokenAudit(tenant.id, 'failure', { error: 'token_exchange_failed' }, req);
         res.status(502).json({ error: 'token_exchange_failed' });
         return;
       }
@@ -641,6 +738,9 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
       const expiresMs = result.expiresOn ? Math.max(0, result.expiresOn.getTime() - Date.now()) : 0;
       const expiresIn = Math.max(60, Math.floor(expiresMs / 1000));
 
+      // Plan 03-10: success audit row — meta carries clientId + scopes (no PII).
+      emitTokenAudit(tenant.id, 'success', { clientId: tenant.client_id, scopes }, req);
+
       res.json({
         access_token: result.accessToken,
         token_type: 'Bearer',
@@ -648,6 +748,7 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
       });
     } catch (err) {
       logger.error({ err: (err as Error).message, tenantId: tenant.id }, '/token exchange failed');
+      emitTokenAudit(tenant.id, 'failure', { error: 'token_exchange_failed' }, req);
       res.status(400).json({ error: 'token_exchange_failed' });
     }
   };
@@ -948,13 +1049,19 @@ class MicrosoftGraphServer {
     });
 
     // /t/:tenantId/authorize + /t/:tenantId/token — tenant-scoped OAuth from 03-06.
-    app.get('/t/:tenantId/authorize', createAuthorizeHandler({ pkceStore: this.pkceStore }));
+    // Plan 03-10: pgPool wired so both handlers emit oauth.authorize +
+    // oauth.token.exchange audit rows via writeAuditStandalone.
+    app.get(
+      '/t/:tenantId/authorize',
+      createAuthorizeHandler({ pkceStore: this.pkceStore, pgPool: pg })
+    );
     app.post(
       '/t/:tenantId/token',
       createTenantTokenHandler({
         pkceStore: this.pkceStore,
         tenantPool,
         redis,
+        pgPool: pg,
       })
     );
 

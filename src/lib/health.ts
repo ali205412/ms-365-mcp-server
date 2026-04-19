@@ -38,6 +38,7 @@
  *     checks MUST preserve this contract.
  */
 import type { Application, Request, Response, Router } from 'express';
+import type { Pool } from 'pg';
 
 let draining = false;
 
@@ -108,4 +109,32 @@ export function mountHealth(
 
     res.status(200).json({ status: 'ready' });
   });
+}
+
+/**
+ * Readiness check factory: at least one active (non-disabled) tenant exists.
+ *
+ * Plan 03-10 /readyz composition pushes this alongside
+ * `postgres.readinessCheck` + `redisClient.readinessCheck` so the endpoint
+ * flips to 503 on a freshly-deployed empty Postgres (Phase 4 admin API
+ * onboards the first tenant; before that, /readyz correctly reports
+ * not_ready). Returns false on any SQL error so callers never see a thrown
+ * exception bubble out of the probe.
+ *
+ * Query: `SELECT COUNT(*)::int AS n FROM tenants WHERE disabled_at IS NULL
+ * LIMIT 1` — cheap; relies on the `(disabled_at) WHERE IS NULL` partial
+ * index seeded by 03-01's tenants migration.
+ */
+export function tenantsLoadedCheck(pool: Pool): ReadinessCheck {
+  return async (): Promise<boolean> => {
+    try {
+      const { rows } = await pool.query(
+        'SELECT COUNT(*)::int AS n FROM tenants WHERE disabled_at IS NULL LIMIT 1'
+      );
+      const n = rows[0]?.n;
+      return typeof n === 'number' ? n > 0 : false;
+    } catch {
+      return false;
+    }
+  };
 }
