@@ -19,7 +19,7 @@ import type { CommandOptions } from './cli.ts';
 import { getSecrets, type AppSecrets } from './secrets.js';
 import { getCloudEndpoints } from './cloud-config.js';
 import { requestContext, getRequestTokens } from './request-context.js';
-import { mountHealth } from './lib/health.js';
+import { mountHealth, type ReadinessCheck } from './lib/health.js';
 import { registerShutdownHooks } from './lib/shutdown.js';
 import { validateRedirectUri, type RedirectUriPolicy } from './lib/redirect-uri.js';
 import { createCorsMiddleware, type CorsMode } from './lib/cors.js';
@@ -394,12 +394,23 @@ class MicrosoftGraphServer {
     }
   > = new Map();
 
-  constructor(authManager: AuthManager, options: CommandOptions = {}) {
+  // Phase 3 (plan 03-01): pushed by src/index.ts before server.start() so
+  // /readyz composition reflects every subsystem (Postgres in 03-01; Redis
+  // in 03-02; tenantPool in 03-05; etc). Default empty array preserves the
+  // Phase 1 baseline contract.
+  private readinessChecks: ReadinessCheck[];
+
+  constructor(
+    authManager: AuthManager,
+    options: CommandOptions = {},
+    readinessChecks: ReadinessCheck[] = []
+  ) {
     this.authManager = authManager;
     this.options = options;
     this.graphClient = null; // Initialized in start() after secrets are loaded
     this.server = null;
     this.secrets = null;
+    this.readinessChecks = readinessChecks;
   }
 
   private createMcpServer(): McpServer {
@@ -512,10 +523,11 @@ class MicrosoftGraphServer {
       //      2880 health-probe log lines/day (T-01-04a).
       //   3. OPTIONS preflight on /healthz does not hit CORS origin validation
       //      that might 403 in prod.
-      // Phase 3 will push a Postgres/Redis readinessChecks entry here;
-      // Phase 6 will push "at least one tenant loaded". Phase 1 baseline has
-      // no checks — default empty array is correct.
-      mountHealth(app);
+      // Phase 3 (plan 03-01) pushes Postgres readiness via src/index.ts before
+      // server.start(); sibling Phase 3 plans (03-02 Redis, 03-05 tenant
+      // pool) push their own. Phase 6 will push "at least one tenant loaded".
+      // Phase 1 baseline has no checks — default empty array is correct.
+      mountHealth(app, this.readinessChecks);
 
       // pino-http request logging — MUST be registered BEFORE express.json() so
       // that req.id is stamped on the raw request before body parsing starts.
