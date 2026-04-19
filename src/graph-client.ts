@@ -8,6 +8,7 @@ import { composePipeline } from './lib/middleware/pipeline.js';
 import { TokenRefreshMiddleware } from './lib/middleware/token-refresh.js';
 import { ODataErrorHandler } from './lib/middleware/odata-error.js';
 import { RetryHandler } from './lib/middleware/retry.js';
+import { ETagMiddleware } from './lib/middleware/etag.js';
 import { GraphError } from './lib/graph-errors.js';
 import type { GraphRequest } from './lib/middleware/types.js';
 
@@ -141,15 +142,16 @@ class GraphClient {
 
     // Phase 2 middleware pipeline. Middlewares compose outer-to-inner:
     //   - ETagMiddleware (02-07)                  — outermost
-    //   - RetryHandler (02-02)                    — this plan
+    //   - RetryHandler (02-02)
     //   - ODataErrorHandler (02-03)
     //   - TokenRefreshMiddleware (02-01)          — innermost
-    // Each subsequent Phase 2 plan adds its middleware to this array in the
-    // specified order. Order is load-bearing; see 02-CONTEXT.md and
-    // 02-RESEARCH.md "Example 1: Wiring the pipeline in GraphClient".
+    // Order is load-bearing; see 02-CONTEXT.md Pattern E and
+    // 02-RESEARCH.md "Example 1: Wiring the pipeline in GraphClient". A
+    // structural test in test/etag-middleware.test.ts asserts this order and
+    // will fail if a refactor reshuffles the array.
     this.pipeline = composePipeline(
       [
-        // ETagMiddleware — 02-07
+        new ETagMiddleware(),
         new RetryHandler(),
         new ODataErrorHandler(),
         new TokenRefreshMiddleware(this.authManager, this.secrets),

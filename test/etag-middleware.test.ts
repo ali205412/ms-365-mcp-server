@@ -238,3 +238,35 @@ describe('resourceKeyFromUrl', () => {
     expect(resourceKeyFromUrl('https://graph.microsoft.com/v1.0/me/drive')).toBeNull();
   });
 });
+
+describe('ETagMiddleware in GraphClient pipeline', () => {
+  it('full GraphClient pipeline includes ETagMiddleware as outermost', async () => {
+    // Structural regression guard: read the GraphClient source directly and
+    // assert the middleware-chain composition matches the locked
+    // outermost-to-innermost order [ETag, Retry, ODataError, TokenRefresh]
+    // per 02-CONTEXT.md Pattern E. A future refactor that reshuffles the
+    // array will fail here rather than silently breaking
+    // retry-after-Retry-After semantics or auto-attach header plumbing at
+    // runtime.
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const src = fs.readFileSync(path.resolve('src/graph-client.ts'), 'utf8');
+
+    const pipelineBlockMatch = src.match(/composePipeline\(\s*\[(?<array>[\s\S]*?)\]/);
+    expect(pipelineBlockMatch?.groups?.array).toBeDefined();
+    const arrayText = pipelineBlockMatch!.groups!.array;
+
+    const etagIdx = arrayText.indexOf('new ETagMiddleware');
+    const retryIdx = arrayText.indexOf('new RetryHandler');
+    const odataIdx = arrayText.indexOf('new ODataErrorHandler');
+    const tokenRefreshIdx = arrayText.indexOf('new TokenRefreshMiddleware');
+
+    expect(etagIdx).toBeGreaterThanOrEqual(0);
+    expect(retryIdx).toBeGreaterThanOrEqual(0);
+    expect(odataIdx).toBeGreaterThanOrEqual(0);
+    expect(tokenRefreshIdx).toBeGreaterThanOrEqual(0);
+    expect(etagIdx).toBeLessThan(retryIdx);
+    expect(retryIdx).toBeLessThan(odataIdx);
+    expect(odataIdx).toBeLessThan(tokenRefreshIdx);
+  });
+});
