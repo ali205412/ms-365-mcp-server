@@ -42,9 +42,7 @@ function makeTenant(overrides: Partial<TenantRow> = {}): TenantRow {
     client_secret_resolved: overrides.client_secret_resolved ?? 'super-secret',
     tenant_id: overrides.tenant_id ?? 'tenant-guid',
     cloud_type: overrides.cloud_type ?? 'global',
-    redirect_uri_allowlist: overrides.redirect_uri_allowlist ?? [
-      'http://localhost:3000/callback',
-    ],
+    redirect_uri_allowlist: overrides.redirect_uri_allowlist ?? ['http://localhost:3000/callback'],
     cors_origins: overrides.cors_origins ?? [],
     allowed_scopes: overrides.allowed_scopes ?? ['User.Read', 'Mail.Read'],
     enabled_tools: overrides.enabled_tools ?? null,
@@ -85,9 +83,7 @@ async function startApp(tenantOverrides: Partial<TenantRow> = {}): Promise<AppHa
     evict: vi.fn(),
   };
 
-  const { createAuthorizeHandler, createTokenHandler } = await import(
-    '../../src/server.js'
-  );
+  const { createAuthorizeHandler, createTenantTokenHandler } = await import('../../src/server.js');
 
   const app = express();
   app.use(express.json());
@@ -102,15 +98,11 @@ async function startApp(tenantOverrides: Partial<TenantRow> = {}): Promise<AppHa
     next();
   };
 
-  app.get(
-    '/authorize',
-    loadTenantStub,
-    createAuthorizeHandler({ pkceStore })
-  );
+  app.get('/authorize', loadTenantStub, createAuthorizeHandler({ pkceStore }));
   app.post(
     '/token',
     loadTenantStub,
-    createTokenHandler({
+    createTenantTokenHandler({
       pkceStore,
       tenantPool: mockTenantPool as unknown as {
         acquire: (t: TenantRow) => Promise<unknown>;
@@ -155,10 +147,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
 
     // Pre-compute a valid client challenge (base64url, 43-128 chars)
     const clientVerifier = crypto.randomBytes(32).toString('base64url');
-    const clientChallenge = crypto
-      .createHash('sha256')
-      .update(clientVerifier)
-      .digest('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
     const state = crypto.randomBytes(16).toString('base64url');
 
     const params = new URLSearchParams({
@@ -199,10 +188,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     });
 
     const clientVerifier = crypto.randomBytes(32).toString('base64url');
-    const clientChallenge = crypto
-      .createHash('sha256')
-      .update(clientVerifier)
-      .digest('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
 
     const params = new URLSearchParams({
       redirect_uri: 'https://attacker.example.com/steal',
@@ -228,10 +214,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     });
 
     const clientVerifier = crypto.randomBytes(32).toString('base64url');
-    const clientChallenge = crypto
-      .createHash('sha256')
-      .update(clientVerifier)
-      .digest('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
 
     const params = new URLSearchParams({
       redirect_uri: 'javascript:alert(1)',
@@ -271,10 +254,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     harness = await startApp();
 
     const clientVerifier = crypto.randomBytes(32).toString('base64url');
-    const clientChallenge = crypto
-      .createHash('sha256')
-      .update(clientVerifier)
-      .digest('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
     const state = crypto.randomBytes(16).toString('base64url');
 
     // Seed a PKCE entry (simulating the /authorize step)

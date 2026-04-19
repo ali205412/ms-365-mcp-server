@@ -26,6 +26,8 @@ import { createCorsMiddleware, type CorsMode } from './lib/cors.js';
 import type { CloudType } from './cloud-config.js';
 import type { PkceStore } from './lib/pkce-store/pkce-store.js';
 import { MemoryPkceStore } from './lib/pkce-store/memory-store.js';
+import type { TenantRow } from './lib/tenant/tenant-row.js';
+import type { TenantPool } from './lib/tenant/tenant-pool.js';
 import crypto from 'node:crypto';
 import pinoHttp from 'pino-http';
 import { nanoid } from 'nanoid';
@@ -353,6 +355,290 @@ export function createTokenHandler(config: TokenHandlerConfig) {
         error: 'server_error',
         error_description: 'Internal server error during token exchange',
       });
+    }
+  };
+}
+
+// ── Phase 3 plan 03-06: per-tenant /authorize + /token handlers ────────────
+//
+// These handlers replace the legacy global /authorize + /token wiring once
+// 03-08 mounts them under /t/:tenantId/*. Until then, 03-06 wires them under
+// the existing /authorize + /token paths with a `loadTenantPlaceholder` that
+// pins a single tenant (read from MS365_MCP_DEFAULT_TENANT_ID). The grep
+// anchor `TODO plan 03-08` below marks the exactly-one line 03-08 swaps.
+
+/**
+ * Phase 3 temporary scaffold — loadTenantPlaceholder.
+ *
+ * TODO plan 03-08: replaced by loadTenant middleware (temporary scaffold).
+ *
+ * Reads `MS365_MCP_DEFAULT_TENANT_ID` from env and looks up a single tenant
+ * row from Postgres (or a caller-supplied lookup function during testing).
+ * Until 03-08 ships URL-path routing (`/t/:tenantId/*`), all requests share
+ * one implicit tenant — `loadTenantPlaceholder` pins that tenant on the
+ * request so `createAuthorizeHandler` + `createTenantTokenHandler` can run
+ * without waiting for 03-08.
+ *
+ * Chain position (now):   /authorize → loadTenantPlaceholder → authorizeHandler
+ * Chain position (03-08): /t/:tenantId/authorize → loadTenant → authorizeHandler
+ *
+ * The `PHASE3_TENANT_PLACEHOLDER = '_'` sentinel is used as the tenantId
+ * segment of the PKCE Redis key; 03-08 swaps it for `req.params.tenantId`.
+ */
+export function createLoadTenantPlaceholder(deps: {
+  lookup: (id: string) => Promise<TenantRow | null>;
+}): (req: Request, res: Response, next: import('express').NextFunction) => Promise<void> {
+  return async (req, _res, next) => {
+    const id = process.env.MS365_MCP_DEFAULT_TENANT_ID;
+    if (!id) {
+      next();
+      return;
+    }
+    try {
+      const tenant = await deps.lookup(id);
+      if (tenant && !tenant.disabled_at) {
+        (req as Request & { tenant?: TenantRow }).tenant = tenant;
+      }
+    } catch (err) {
+      logger.warn(
+        { err: (err as Error).message },
+        'loadTenantPlaceholder: lookup failed (non-fatal, continuing)'
+      );
+    }
+    next();
+  };
+}
+
+/**
+ * Config for the Phase 3 /authorize handler. Reads the PKCE store interface
+ * from 03-03 and pins tenant state via `req.tenant` (loaded by loadTenant
+ * middleware — 03-08 provides the real implementation; 03-06 uses
+ * `loadTenantPlaceholder`).
+ */
+export interface AuthorizeHandlerConfig {
+  pkceStore: PkceStore;
+}
+
+/**
+ * Config for the Phase 3 /token handler. `tenantPool.acquire(tenant)` returns
+ * an MSAL client (ConfidentialClientApplication for delegated+secret or
+ * app-only, PublicClientApplication otherwise) — the delegated path uses
+ * `acquireTokenByCode` with the server-side PKCE verifier.
+ */
+export interface TenantTokenHandlerConfig {
+  pkceStore: PkceStore;
+  tenantPool: Pick<TenantPool, 'acquire'>;
+}
+
+/**
+ * /authorize handler (tenant-aware per plan 03-06).
+ *
+ * 1. Validates `redirect_uri` against `tenant.redirect_uri_allowlist`. If the
+ *    URI is not present, 400 `invalid_redirect_uri`. The allowlist is also
+ *    filtered through Phase 1's `validateRedirectUri` (scheme gate — rejects
+ *    `javascript:`, `data:`, etc.).
+ * 2. Validates the client-supplied `code_challenge` format (base64url,
+ *    43-128 chars — matches RFC 7636 + mitigates T-03-03-05 Redis glob
+ *    injection).
+ * 3. Generates a server-side PKCE verifier and persists
+ *    `{state, clientCodeChallenge, serverCodeVerifier, ...}` via
+ *    `pkceStore.put(tenantId, entry)`. The server computes its own
+ *    `code_challenge` (sha256 of the server verifier) and forwards that to
+ *    Microsoft — two-leg PKCE.
+ * 4. Redirects to the tenant's authority `/oauth2/v2.0/authorize` endpoint
+ *    (selected by `tenant.cloud_type`).
+ */
+export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
+  const { pkceStore } = config;
+
+  return async (req: Request, res: Response): Promise<void> => {
+    const tenant = (req as Request & { tenant?: TenantRow }).tenant;
+    if (!tenant) {
+      res.status(500).json({ error: 'loadTenant_missing' });
+      return;
+    }
+
+    const redirectUri = String(req.query.redirect_uri ?? '');
+    // Two-layer allowlist check (AUTH-06 layered defence):
+    //   a) Phase 1 scheme validator — rejects javascript:, data:, file:, ...
+    const schemeCheck = validateRedirectUri(redirectUri, { mode: 'prod', publicUrlHost: null });
+    if (!schemeCheck.ok) {
+      res.status(400).json({ error: 'invalid_redirect_uri', reason: schemeCheck.reason });
+      return;
+    }
+    //   b) Tenant-scoped allowlist membership — exact match only
+    if (!tenant.redirect_uri_allowlist.includes(redirectUri)) {
+      res.status(400).json({ error: 'invalid_redirect_uri' });
+      return;
+    }
+
+    const clientCodeChallenge = String(req.query.code_challenge ?? '');
+    if (!/^[A-Za-z0-9_-]{43,128}$/.test(clientCodeChallenge)) {
+      res.status(400).json({ error: 'invalid_code_challenge' });
+      return;
+    }
+    const clientCodeChallengeMethod = String(req.query.code_challenge_method ?? 'S256');
+    const state = String(req.query.state ?? crypto.randomBytes(16).toString('base64url'));
+    const clientId = String(req.query.client_id ?? tenant.client_id);
+
+    // 03-08 swaps `PHASE3_TENANT_PLACEHOLDER` for `req.params.tenantId` here
+    // and in the /token handler below — the grep anchor `TODO plan 03-08`
+    // in `loadTenantPlaceholder` marks the last scaffold to remove.
+    const placeholder = String(req.params.tenantId ?? PHASE3_TENANT_PLACEHOLDER);
+
+    const serverCodeVerifier = crypto.randomBytes(32).toString('base64url');
+    const serverChallenge = crypto
+      .createHash('sha256')
+      .update(serverCodeVerifier)
+      .digest('base64url');
+
+    const ok = await pkceStore.put(placeholder, {
+      state,
+      clientCodeChallenge,
+      clientCodeChallengeMethod,
+      serverCodeVerifier,
+      clientId,
+      redirectUri,
+      tenantId: placeholder,
+      createdAt: Date.now(),
+    });
+    if (!ok) {
+      res.status(400).json({
+        error: 'pkce_challenge_collision',
+        error_description:
+          'An outstanding authorization request already uses this code_challenge; regenerate and retry.',
+      });
+      return;
+    }
+
+    const cloudEndpoints = getCloudEndpoints(tenant.cloud_type);
+    const azureTenant = tenant.tenant_id || 'common';
+    const authorizeUrl = new URL(
+      `${cloudEndpoints.authority}/${azureTenant}/oauth2/v2.0/authorize`
+    );
+    authorizeUrl.searchParams.set('client_id', tenant.client_id);
+    authorizeUrl.searchParams.set('response_type', 'code');
+    authorizeUrl.searchParams.set('redirect_uri', redirectUri);
+    authorizeUrl.searchParams.set(
+      'scope',
+      tenant.allowed_scopes.length ? tenant.allowed_scopes.join(' ') : 'User.Read'
+    );
+    authorizeUrl.searchParams.set('state', state);
+    authorizeUrl.searchParams.set('code_challenge', serverChallenge);
+    authorizeUrl.searchParams.set('code_challenge_method', 'S256');
+
+    logger.info(
+      {
+        tenantId: tenant.id,
+        state: state.substring(0, 8) + '...',
+        challengePrefix: clientCodeChallenge.substring(0, 8) + '...',
+      },
+      'Two-leg PKCE: stored client challenge, forwarding to Microsoft with server challenge'
+    );
+
+    res.redirect(authorizeUrl.toString());
+  };
+}
+
+/**
+ * Interface narrowing for MSAL's `acquireTokenByCode`. We check for it
+ * rather than importing the full MSAL types so the handler stays testable
+ * with a mock pool.
+ */
+interface DelegatedMsalClient {
+  acquireTokenByCode: (config: {
+    code: string;
+    scopes: string[];
+    redirectUri: string;
+    codeVerifier: string;
+  }) => Promise<{
+    accessToken?: string;
+    expiresOn?: Date | null;
+  } | null>;
+}
+
+function isDelegatedMsalClient(client: unknown): client is DelegatedMsalClient {
+  return (
+    typeof client === 'object' &&
+    client !== null &&
+    'acquireTokenByCode' in client &&
+    typeof (client as { acquireTokenByCode: unknown }).acquireTokenByCode === 'function'
+  );
+}
+
+/**
+ * /token handler (tenant-aware per plan 03-06).
+ *
+ * 1. Receives `grant_type=authorization_code` with `code` + `code_verifier`.
+ * 2. Hashes `code_verifier` via SHA-256 to obtain the `clientCodeChallenge`.
+ * 3. Calls `pkceStore.takeByChallenge(tenantId, clientChallenge)` — O(1),
+ *    atomic read-and-delete. Miss → 400 `invalid_grant`.
+ * 4. Calls `tenantPool.acquire(tenant)` to get the tenant's MSAL client.
+ * 5. Calls `client.acquireTokenByCode({code, codeVerifier, redirectUri, scopes})`
+ *    with the server-side verifier (two-leg PKCE).
+ * 6. Responds with `{access_token, token_type, expires_in}`.
+ */
+export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
+  const { pkceStore, tenantPool } = config;
+
+  return async (req: Request, res: Response): Promise<void> => {
+    const tenant = (req as Request & { tenant?: TenantRow }).tenant;
+    if (!tenant) {
+      res.status(500).json({ error: 'loadTenant_missing' });
+      return;
+    }
+
+    const body = req.body as Record<string, unknown> | undefined;
+    const clientVerifier = String(body?.code_verifier ?? '');
+    if (!clientVerifier) {
+      res
+        .status(400)
+        .json({ error: 'invalid_request', error_description: 'code_verifier required' });
+      return;
+    }
+    const clientCodeChallenge = crypto
+      .createHash('sha256')
+      .update(clientVerifier)
+      .digest('base64url');
+    const placeholder = String(req.params.tenantId ?? PHASE3_TENANT_PLACEHOLDER);
+
+    const entry = await pkceStore.takeByChallenge(placeholder, clientCodeChallenge);
+    if (!entry) {
+      res.status(400).json({ error: 'invalid_grant', error_description: 'PKCE mismatch' });
+      return;
+    }
+
+    try {
+      const msal = await tenantPool.acquire(tenant);
+      if (!isDelegatedMsalClient(msal)) {
+        res.status(500).json({ error: 'delegated_requires_client_with_code' });
+        return;
+      }
+
+      const scopes = tenant.allowed_scopes.length ? tenant.allowed_scopes : ['User.Read'];
+      const result = await msal.acquireTokenByCode({
+        code: String(body?.code ?? ''),
+        scopes,
+        redirectUri: entry.redirectUri,
+        codeVerifier: entry.serverCodeVerifier,
+      });
+
+      if (!result?.accessToken) {
+        res.status(502).json({ error: 'token_exchange_failed' });
+        return;
+      }
+
+      const expiresMs = result.expiresOn ? Math.max(0, result.expiresOn.getTime() - Date.now()) : 0;
+      const expiresIn = Math.max(60, Math.floor(expiresMs / 1000));
+
+      res.json({
+        access_token: result.accessToken,
+        token_type: 'Bearer',
+        expires_in: expiresIn,
+      });
+    } catch (err) {
+      logger.error({ err: (err as Error).message, tenantId: tenant.id }, '/token exchange failed');
+      res.status(400).json({ error: 'token_exchange_failed' });
     }
   };
 }
