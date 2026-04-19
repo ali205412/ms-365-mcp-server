@@ -24,6 +24,12 @@ import type { PkceStore } from './lib/pkce-store/pkce-store.js';
 import { MemoryPkceStore } from './lib/pkce-store/memory-store.js';
 import type { TenantRow } from './lib/tenant/tenant-row.js';
 import type { TenantPool } from './lib/tenant/tenant-pool.js';
+import { createStreamableHttpHandler } from './lib/transports/streamable-http.js';
+import {
+  createLegacySseGetHandler,
+  createLegacySsePostHandler,
+} from './lib/transports/legacy-sse.js';
+import { createAuthSelectorMiddleware } from './lib/auth-selector.js';
 import crypto from 'node:crypto';
 import pinoHttp from 'pino-http';
 import { nanoid } from 'nanoid';
@@ -729,7 +735,25 @@ class MicrosoftGraphServer {
     this.pkceStore = deps.pkceStore ?? new MemoryPkceStore();
   }
 
-  private createMcpServer(): McpServer {
+  /**
+   * Build a fresh MCP server instance. Plan 03-09 (TRANS-05): this is the
+   * single factory that produces an `McpServer` for every transport — stdio,
+   * Streamable HTTP, AND the legacy SSE shim all call this method so the
+   * tool surface is identical across transports.
+   *
+   * The optional `tenant` parameter is forwarded for per-tenant tool-surface
+   * scoping introduced in Phase 5 (`tenant.enabled_tools` filter). Phase 3
+   * registers all tools regardless of tenant; the parameter is threaded
+   * through so callers can pass it today without changing the signature
+   * later. Passing `undefined` preserves the legacy single-tenant behaviour
+   * (stdio mode + HTTP mode's legacy /mcp path which 03-09 retires).
+   */
+  createMcpServer(tenant?: TenantRow): McpServer {
+    // tenant is currently only used to scope future (Phase 5) enabled_tools
+    // filtering — underscore-prefix silences the unused-arg lint check
+    // without renaming the parameter (plan 03-09 forward compatibility).
+    void tenant;
+
     const server = new McpServer(
       {
         name: 'Microsoft365MCP',
@@ -933,6 +957,29 @@ class MicrosoftGraphServer {
         redis,
       })
     );
+
+    // ── Plan 03-09: three-transport mounting on /t/:tenantId/* ───────────
+    //
+    // Mount order (most-specific first per RESEARCH.md Pattern 4 +
+    // Pitfall 3):
+    //   /t/:tenantId/sse          — legacy SSE GET stream (2024-11-05 spec)
+    //   /t/:tenantId/messages     — legacy SSE POST channel (shim: initialize only)
+    //   /t/:tenantId/mcp          — Streamable HTTP (current MCP spec; GET+POST)
+    //
+    // All three share the SAME createMcpServer(tenant) factory (TRANS-05)
+    // so tool registration is identical across transports. The closure
+    // captures `this` + tenantPool + redis from the bootstrap scope.
+    const authSelector = createAuthSelectorMiddleware({ tenantPool });
+    const buildMcpServer = (tenant: TenantRow): McpServer => this.createMcpServer(tenant);
+
+    const streamableHttp = createStreamableHttpHandler({ buildMcpServer });
+    const legacySseGet = createLegacySseGetHandler({ buildMcpServer });
+    const legacySsePost = createLegacySsePostHandler({ buildMcpServer });
+
+    app.get('/t/:tenantId/sse', authSelector, legacySseGet);
+    app.post('/t/:tenantId/messages', authSelector, legacySsePost);
+    app.post('/t/:tenantId/mcp', authSelector, streamableHttp);
+    app.get('/t/:tenantId/mcp', authSelector, streamableHttp);
 
     logger.info('Phase 3 tenant routes mounted under /t/:tenantId/*');
   }
