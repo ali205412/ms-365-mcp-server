@@ -15,8 +15,10 @@
  * Keying contract: `mcp:pkce:{tenantId}:{clientCodeChallenge}`. The
  * tenantId segment is load-bearing — T-03-03-02 requires cross-tenant
  * isolation so a challenge registered under tenant A cannot be taken by a
- * lookup under tenant B. In Phase 3 the /authorize + /token handlers pass
- * PHASE3_TENANT_PLACEHOLDER ('_') until plan 03-08 swaps to req.params.tenantId.
+ * lookup under tenant B. Plan 03-08 wires the real `req.params.tenantId`
+ * from the /t/:tenantId/* router via loadTenant; the legacy single-tenant
+ * /authorize + /token mounts (scheduled for 03-09 removal) use the
+ * LEGACY_SINGLE_TENANT_KEY sentinel from src/server.ts.
  */
 import type { PkceEntry, PkceStore } from './pkce-store.js';
 import type { RedisClient } from '../redis.js';
@@ -50,10 +52,7 @@ export class RedisPkceStore implements PkceStore {
     return result === 'OK';
   }
 
-  async takeByChallenge(
-    tenantId: string,
-    clientCodeChallenge: string
-  ): Promise<PkceEntry | null> {
+  async takeByChallenge(tenantId: string, clientCodeChallenge: string): Promise<PkceEntry | null> {
     const k = this.key(tenantId, clientCodeChallenge);
     const raw = await this.redis.getdel(k);
     if (!raw) return null;

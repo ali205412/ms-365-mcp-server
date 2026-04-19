@@ -29,20 +29,20 @@ import pinoHttp from 'pino-http';
 import { nanoid } from 'nanoid';
 
 /**
- * Phase 3 tenancy scaffold (plan 03-03).
+ * Sentinel tenantId for the LEGACY single-tenant /authorize + /token mounts
+ * that exist alongside the per-tenant /t/:tenantId/* routes (03-08).
  *
- * The /authorize and /token handlers MUST key PKCE state by tenantId so
- * cross-tenant replay is impossible (T-03-03-02). Until plan 03-08 adds
- * URL-path tenant routing (`/t/:tenantId/*`) and the `loadTenant`
- * middleware, we hardcode `'_'` as the single-tenant sentinel so the
- * PkceStore interface is already in place and only one line flips when
- * multi-tenant routing lands.
+ * The legacy mounts predate URL-path routing and read tenant config from
+ * `secrets.tenantId` (i.e., MS365_MCP_TENANT_ID env var). Their PKCE keys
+ * still need a tenant segment to match the PkceStore contract — using a
+ * single well-known sentinel gives them a stable, non-colliding key.
  *
- * When 03-08 ships, replace `PHASE3_TENANT_PLACEHOLDER` with
- * `req.params.tenantId` in both call sites below. Grep for this constant
- * to find them.
+ * This is NOT the per-tenant path — that lives in createAuthorizeHandler +
+ * createTenantTokenHandler, which read `req.params.tenantId` from the
+ * /t/:tenantId/* router. 03-09 consolidates the two by removing the
+ * legacy mount entirely; at that point this sentinel disappears.
  */
-const PHASE3_TENANT_PLACEHOLDER = '_';
+const LEGACY_SINGLE_TENANT_KEY = '_';
 
 /**
  * Parse HTTP option into host and port components.
@@ -288,7 +288,7 @@ export function createTokenHandler(config: TokenHandlerConfig) {
             .digest('base64url');
 
           const pkceEntry = await pkceStore.takeByChallenge(
-            PHASE3_TENANT_PLACEHOLDER, // plan 03-08 replaces with req.params.tenantId
+            LEGACY_SINGLE_TENANT_KEY, // legacy /token mount — 03-09 retires this path
             clientChallengeComputed
           );
           if (pkceEntry) {
@@ -355,61 +355,19 @@ export function createTokenHandler(config: TokenHandlerConfig) {
   };
 }
 
-// ── Phase 3 plan 03-06: per-tenant /authorize + /token handlers ────────────
+// ── Phase 3 plan 03-06 + 03-08: per-tenant /authorize + /token handlers ────
 //
-// These handlers replace the legacy global /authorize + /token wiring once
-// 03-08 mounts them under /t/:tenantId/*. Until then, 03-06 wires them under
-// the existing /authorize + /token paths with a `loadTenantPlaceholder` that
-// pins a single tenant (read from MS365_MCP_DEFAULT_TENANT_ID). The grep
-// anchor `TODO plan 03-08` below marks the exactly-one line 03-08 swaps.
-
-/**
- * Phase 3 temporary scaffold — loadTenantPlaceholder.
- *
- * TODO plan 03-08: replaced by loadTenant middleware (temporary scaffold).
- *
- * Reads `MS365_MCP_DEFAULT_TENANT_ID` from env and looks up a single tenant
- * row from Postgres (or a caller-supplied lookup function during testing).
- * Until 03-08 ships URL-path routing (`/t/:tenantId/*`), all requests share
- * one implicit tenant — `loadTenantPlaceholder` pins that tenant on the
- * request so `createAuthorizeHandler` + `createTenantTokenHandler` can run
- * without waiting for 03-08.
- *
- * Chain position (now):   /authorize → loadTenantPlaceholder → authorizeHandler
- * Chain position (03-08): /t/:tenantId/authorize → loadTenant → authorizeHandler
- *
- * The `PHASE3_TENANT_PLACEHOLDER = '_'` sentinel is used as the tenantId
- * segment of the PKCE Redis key; 03-08 swaps it for `req.params.tenantId`.
- */
-export function createLoadTenantPlaceholder(deps: {
-  lookup: (id: string) => Promise<TenantRow | null>;
-}): (req: Request, res: Response, next: import('express').NextFunction) => Promise<void> {
-  return async (req, _res, next) => {
-    const id = process.env.MS365_MCP_DEFAULT_TENANT_ID;
-    if (!id) {
-      next();
-      return;
-    }
-    try {
-      const tenant = await deps.lookup(id);
-      if (tenant && !tenant.disabled_at) {
-        (req as Request & { tenant?: TenantRow }).tenant = tenant;
-      }
-    } catch (err) {
-      logger.warn(
-        { err: (err as Error).message },
-        'loadTenantPlaceholder: lookup failed (non-fatal, continuing)'
-      );
-    }
-    next();
-  };
-}
+// These handlers run under the /t/:tenantId/* router (plan 03-08). The
+// `loadTenant` middleware (src/lib/tenant/load-tenant.ts) populates
+// `req.tenant` from the Postgres `tenants` table via a bounded LRU cache.
+// `req.params.tenantId` carries the GUID from the URL path and becomes the
+// PKCE Redis key segment — cross-tenant replay is impossible because every
+// PkceStore lookup is keyed on this tenant id.
 
 /**
  * Config for the Phase 3 /authorize handler. Reads the PKCE store interface
- * from 03-03 and pins tenant state via `req.tenant` (loaded by loadTenant
- * middleware — 03-08 provides the real implementation; 03-06 uses
- * `loadTenantPlaceholder`).
+ * from 03-03 and pins tenant state via `req.tenant` (loaded by the real
+ * `loadTenant` middleware shipped in 03-08).
  */
 export interface AuthorizeHandlerConfig {
   pkceStore: PkceStore;
@@ -485,10 +443,11 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
     const state = String(req.query.state ?? crypto.randomBytes(16).toString('base64url'));
     const clientId = String(req.query.client_id ?? tenant.client_id);
 
-    // 03-08 swaps `PHASE3_TENANT_PLACEHOLDER` for `req.params.tenantId` here
-    // and in the /token handler below — the grep anchor `TODO plan 03-08`
-    // in `loadTenantPlaceholder` marks the last scaffold to remove.
-    const placeholder = String(req.params.tenantId ?? PHASE3_TENANT_PLACEHOLDER);
+    // Plan 03-08: PKCE Redis key is keyed on the real tenant id from the URL
+    // path (/t/:tenantId/*). `req.tenant.id` mirrors `req.params.tenantId`
+    // after loadTenant; preferring the tenant row's id keeps the key stable
+    // across re-canonicalizations of the URL segment.
+    const tenantKey = tenant.id;
 
     const serverCodeVerifier = crypto.randomBytes(32).toString('base64url');
     const serverChallenge = crypto
@@ -496,14 +455,14 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
       .update(serverCodeVerifier)
       .digest('base64url');
 
-    const ok = await pkceStore.put(placeholder, {
+    const ok = await pkceStore.put(tenantKey, {
       state,
       clientCodeChallenge,
       clientCodeChallengeMethod,
       serverCodeVerifier,
       clientId,
       redirectUri,
-      tenantId: placeholder,
+      tenantId: tenantKey,
       createdAt: Date.now(),
     });
     if (!ok) {
@@ -613,9 +572,13 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
       .createHash('sha256')
       .update(clientVerifier)
       .digest('base64url');
-    const placeholder = String(req.params.tenantId ?? PHASE3_TENANT_PLACEHOLDER);
+    // Plan 03-08: key the PKCE lookup on the real tenant id (from the
+    // /t/:tenantId/* path via loadTenant). `req.tenant.id` is populated by
+    // the loadTenant middleware and matches the id under which the
+    // /authorize handler persisted the PKCE entry.
+    const tenantKey = tenant.id;
 
-    const entry = await pkceStore.takeByChallenge(placeholder, clientCodeChallenge);
+    const entry = await pkceStore.takeByChallenge(tenantKey, clientCodeChallenge);
     if (!entry) {
       res.status(400).json({ error: 'invalid_grant', error_description: 'PKCE mismatch' });
       return;
@@ -812,6 +775,168 @@ class MicrosoftGraphServer {
     return server;
   }
 
+  /**
+   * Plan 03-08: mount the /t/:tenantId/* router on the Express app.
+   *
+   * Wires:
+   *   1. `loadTenant` middleware — resolves the tenant row from Postgres
+   *      (via LRU cache) and populates `req.tenant`.
+   *   2. Tenant-scoped `/t/:tenantId/.well-known/oauth-authorization-server`
+   *      and `oauth-protected-resource` — issuer URLs include the tenant
+   *      segment so downstream clients use tenant-scoped endpoints.
+   *   3. `/t/:tenantId/authorize` + `/t/:tenantId/token` — per-tenant OAuth
+   *      handlers from 03-06.
+   *   4. Redis pub/sub subscriber on `mcp:tenant-invalidate` — admin
+   *      mutations in Phase 4 publish here; we evict the cached entry.
+   *
+   * The mount is best-effort: if Postgres, Redis, or the TenantPool are
+   * unavailable we log at warn level and skip the mount so the legacy
+   * single-tenant /authorize + /token path remains functional for v1
+   * compatibility. This keeps Phase 3 deployments on the happy path while
+   * leaving v1 HTTP deployments unaffected.
+   */
+  private async mountTenantRoutes(
+    app: import('express').Express,
+    publicBase: string | null
+  ): Promise<void> {
+    let pg: import('pg').Pool;
+    try {
+      const postgres = await import('./lib/postgres.js');
+      pg = postgres.getPool();
+    } catch (err) {
+      logger.warn(
+        { err: (err as Error).message },
+        'Phase 3 tenant routes: postgres unavailable, skipping /t/:tenantId/* mount'
+      );
+      return;
+    }
+
+    let redis: import('./lib/redis.js').RedisClient;
+    let tenantPool: TenantPool;
+    try {
+      const redisLib = await import('./lib/redis.js');
+      redis = redisLib.getRedis();
+      const poolLib = await import('./lib/tenant/tenant-pool.js');
+      const existingPool = poolLib.getTenantPool();
+      if (!existingPool) {
+        logger.warn(
+          'Phase 3 tenant routes: TenantPool not initialized, skipping /t/:tenantId/* mount'
+        );
+        return;
+      }
+      tenantPool = existingPool;
+    } catch (err) {
+      logger.warn(
+        { err: (err as Error).message },
+        'Phase 3 tenant routes: Redis/TenantPool unavailable, skipping /t/:tenantId/* mount'
+      );
+      return;
+    }
+
+    const { createLoadTenantMiddleware } = await import('./lib/tenant/load-tenant.js');
+    const { subscribeToTenantInvalidation } = await import('./lib/tenant/tenant-invalidation.js');
+    const { createPerTenantCorsMiddleware } = await import('./lib/cors.js');
+
+    const loadTenant = createLoadTenantMiddleware({ pool: pg });
+
+    // Subscribe to the pub/sub channel so admin mutations in Phase 4 propagate
+    // to our LRU. Failure to subscribe (Redis partition) logs + continues —
+    // the 60s TTL still bounds staleness.
+    try {
+      await subscribeToTenantInvalidation(redis, {
+        evict: (tenantId: string) => {
+          loadTenant.evict(tenantId);
+          tenantPool.evict(tenantId);
+        },
+      });
+      logger.info('Phase 3 tenant routes: subscribed to mcp:tenant-invalidate');
+    } catch (err) {
+      logger.warn(
+        { err: (err as Error).message },
+        'Phase 3 tenant routes: tenant-invalidate subscription failed (falling back to 60s TTL)'
+      );
+    }
+
+    // Per-tenant CORS — falls back to the global allowlist when the tenant
+    // did not customize CORS. loadTenant runs first so req.tenant is set.
+    const isProdMode = process.env.NODE_ENV === 'production';
+    const fallbackAllowlist = computeCorsAllowlist();
+    app.use('/t/:tenantId', loadTenant);
+    app.use(
+      '/t/:tenantId',
+      createPerTenantCorsMiddleware({
+        mode: isProdMode ? 'prod' : 'dev',
+        fallbackAllowlist,
+      })
+    );
+
+    // Per-tenant OAuth discovery — /.well-known/* URLs scoped to a tenant
+    // segment so downstream clients bind the right issuer. publicBase
+    // (MS365_MCP_PUBLIC_URL) is the browser-facing origin for the authorize
+    // endpoint; token endpoint stays on the request origin for s2s clients.
+    app.get('/t/:tenantId/.well-known/oauth-authorization-server', async (req, res) => {
+      const tenant = (req as Request & { tenant?: TenantRow }).tenant;
+      if (!tenant) {
+        res.status(404).json({ error: 'tenant_not_found' });
+        return;
+      }
+      const protocol = req.secure ? 'https' : 'http';
+      const requestOrigin = `${protocol}://${req.get('host')}`;
+      const browserBase = publicBase ?? requestOrigin;
+      const tenantBase = `${browserBase}/t/${tenant.id}`;
+      const tokenBase = `${requestOrigin}/t/${tenant.id}`;
+      const scopes = tenant.allowed_scopes.length
+        ? tenant.allowed_scopes
+        : buildScopesFromEndpoints(this.options.orgMode, this.options.enabledTools);
+      res.json({
+        issuer: tenantBase,
+        authorization_endpoint: `${tenantBase}/authorize`,
+        token_endpoint: `${tokenBase}/token`,
+        response_types_supported: ['code'],
+        response_modes_supported: ['query'],
+        grant_types_supported: ['authorization_code', 'refresh_token'],
+        token_endpoint_auth_methods_supported: ['none'],
+        code_challenge_methods_supported: ['S256'],
+        scopes_supported: scopes,
+      });
+    });
+
+    app.get('/t/:tenantId/.well-known/oauth-protected-resource', async (req, res) => {
+      const tenant = (req as Request & { tenant?: TenantRow }).tenant;
+      if (!tenant) {
+        res.status(404).json({ error: 'tenant_not_found' });
+        return;
+      }
+      const protocol = req.secure ? 'https' : 'http';
+      const requestOrigin = `${protocol}://${req.get('host')}`;
+      const browserBase = publicBase ?? requestOrigin;
+      const tenantBase = `${browserBase}/t/${tenant.id}`;
+      const scopes = tenant.allowed_scopes.length
+        ? tenant.allowed_scopes
+        : buildScopesFromEndpoints(this.options.orgMode, this.options.enabledTools);
+      res.json({
+        resource: `${requestOrigin}/t/${tenant.id}/mcp`,
+        authorization_servers: [tenantBase],
+        scopes_supported: scopes,
+        bearer_methods_supported: ['header'],
+        resource_documentation: tenantBase,
+      });
+    });
+
+    // /t/:tenantId/authorize + /t/:tenantId/token — tenant-scoped OAuth from 03-06.
+    app.get('/t/:tenantId/authorize', createAuthorizeHandler({ pkceStore: this.pkceStore }));
+    app.post(
+      '/t/:tenantId/token',
+      createTenantTokenHandler({
+        pkceStore: this.pkceStore,
+        tenantPool,
+        redis,
+      })
+    );
+
+    logger.info('Phase 3 tenant routes mounted under /t/:tenantId/*');
+  }
+
   async initialize(version: string): Promise<void> {
     this.secrets = await getSecrets();
     this.version = version;
@@ -966,6 +1091,20 @@ class MicrosoftGraphServer {
       const corsAllowlist = computeCorsAllowlist();
       app.use(createCorsMiddleware({ mode: corsMode, allowlist: corsAllowlist }));
 
+      // ── Phase 3 plan 03-08: per-tenant /t/:tenantId/* router ─────────────
+      //
+      // Mounting order is strict — these routes MUST be declared BEFORE the
+      // /.well-known/* discovery endpoints so "most specific path" wins:
+      // /t/:tenantId/.well-known/oauth-authorization-server returns the
+      // tenant-scoped metadata; /.well-known/oauth-authorization-server
+      // keeps the legacy singleton behaviour for v1 compatibility.
+      //
+      // Wiring requires the Phase 3 substrate (Postgres, Redis, TenantPool)
+      // — stdio / dev deployments without those can skip the mount entirely.
+      // isHttpMode is already guaranteed here (we are inside `if
+      // (this.options.http)`), so dependency resolution below is safe.
+      await this.mountTenantRoutes(app, publicBase);
+
       const oauthProvider = new MicrosoftOAuthProvider(this.authManager, this.secrets!);
 
       // OAuth Authorization Server Discovery
@@ -1076,14 +1215,14 @@ class MicrosoftGraphServer {
             .digest('base64url');
 
           const redirectUri = url.searchParams.get('redirect_uri') ?? '';
-          const ok = await this.pkceStore.put(PHASE3_TENANT_PLACEHOLDER, {
+          const ok = await this.pkceStore.put(LEGACY_SINGLE_TENANT_KEY, {
             state,
             clientCodeChallenge,
             clientCodeChallengeMethod: clientCodeChallengeMethod || 'S256',
             serverCodeVerifier,
             clientId,
             redirectUri,
-            tenantId: PHASE3_TENANT_PLACEHOLDER,
+            tenantId: LEGACY_SINGLE_TENANT_KEY,
             createdAt: Date.now(),
           });
 
