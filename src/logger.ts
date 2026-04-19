@@ -67,6 +67,17 @@ const REDACT_PATHS: string[] = [
   '*.codeVerifier',
   '*.serverCodeVerifier',
   '*.clientCodeChallenge',
+  // ── WR-07 fix: snake_case form for OAuth form bodies (RFC 7636) and
+  //     additional admin/auth-key paths so per-form-encoding leaks are also
+  //     covered. Pino's redact.paths is a glob matcher — snake_case and
+  //     camelCase are distinct paths and must be enumerated separately.
+  '*.code_verifier',
+  '*.code',
+  '*.authorization_code',
+  '*.api_key',
+  '*.apiKey',
+  '*.admin_api_key',
+  '*.x_admin_api_key',
 ];
 
 // ── Destination selection ─────────────────────────────────────────────────────
