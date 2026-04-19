@@ -1,12 +1,18 @@
 /**
- * Tests for the onion-model middleware pipeline driver (Plan 02-01).
+ * Tests for the onion-model middleware pipeline driver (Plan 02-01 +
+ * refinements in 02-02 to support retry semantics).
  *
  * Covers:
  *   - Dispatch ordering: outer middleware runs BEFORE inner, after-hooks run in
  *     reverse order (classic Koa/onion semantics).
- *   - Double-call guard: a buggy middleware that awaits next() twice triggers
- *     a deterministic throw — without this, side-effectful requests (POST /
- *     PATCH / DELETE) could be issued twice (T-02-01a, T-02-01b).
+ *   - Double-call guard: concurrent / overlapping next() calls from the SAME
+ *     middleware throw — the real-world T-02-01a / T-02-01b bug where a
+ *     middleware forgets to `await` and kicks off two parallel terminal
+ *     invocations.
+ *   - Sequential retries are SUPPORTED: RetryHandler (02-02) and
+ *     TokenRefreshMiddleware (02-01) both call next() multiple times in
+ *     sequence (await-then-call-again). Refined guard in 02-02 allows this
+ *     while still catching the parallel-invocation bug.
  *   - Terminal handler is invoked exactly once on the happy path (no
  *     accidental double-fetch when the pipeline is empty).
  */
@@ -45,12 +51,16 @@ describe('composePipeline', () => {
     ]);
   });
 
-  it('throws when a middleware calls next() twice', async () => {
+  it('throws when a middleware calls next() concurrently (forgets await)', async () => {
     const buggy: GraphMiddleware = {
-      name: 'buggy',
+      name: 'buggy-parallel',
       async execute(_req, next) {
-        await next();
-        await next(); // BUG — double-call must be detected by the driver.
+        // BUG — two next() invocations kicked off in parallel (no await on
+        // the first). This causes overlapping terminal calls in the original
+        // algorithm; the guard must reject it deterministically.
+        const p1 = next();
+        const p2 = next();
+        await Promise.all([p1, p2]);
         return new Response(null);
       },
     };
@@ -60,6 +70,34 @@ describe('composePipeline', () => {
     await expect(pipeline({ url: 'https://graph/x', method: 'GET', headers: {} })).rejects.toThrow(
       /next\(\)\s+called\s+multiple\s+times/i
     );
+  });
+
+  it('supports sequential next() calls (retry pattern used by RetryHandler / TokenRefresh)', async () => {
+    // RetryHandler (02-02) and TokenRefreshMiddleware (02-01) both rely on
+    // being able to await next(), inspect the result, and call next() again
+    // sequentially. The refined guard in 02-02 permits this while still
+    // catching concurrent misuse (see prior test).
+    let terminalCalls = 0;
+    const retrying: GraphMiddleware = {
+      name: 'retrying',
+      async execute(_req, next) {
+        const first = await next();
+        if (first.status === 503) {
+          return await next();
+        }
+        return first;
+      },
+    };
+    const terminal = async () => {
+      terminalCalls++;
+      return new Response(null, { status: terminalCalls === 1 ? 503 : 200 });
+    };
+    const pipeline = composePipeline([retrying], terminal);
+
+    const result = await pipeline({ url: 'https://graph/x', method: 'GET', headers: {} });
+
+    expect(result.status).toBe(200);
+    expect(terminalCalls).toBe(2);
   });
 
   it('invokes terminal handler exactly once on happy path', async () => {
