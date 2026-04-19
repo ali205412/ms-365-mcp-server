@@ -57,9 +57,9 @@ describe('composePipeline', () => {
     const terminal = async () => new Response(null, { status: 204 });
     const pipeline = composePipeline([buggy], terminal);
 
-    await expect(
-      pipeline({ url: 'https://graph/x', method: 'GET', headers: {} })
-    ).rejects.toThrow(/next\(\)\s+called\s+multiple\s+times/i);
+    await expect(pipeline({ url: 'https://graph/x', method: 'GET', headers: {} })).rejects.toThrow(
+      /next\(\)\s+called\s+multiple\s+times/i
+    );
   });
 
   it('invokes terminal handler exactly once on happy path', async () => {

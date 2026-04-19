@@ -70,8 +70,7 @@ export const canonical412PreconditionFailed: GraphFixture = {
   body: {
     error: {
       code: 'resourceModified',
-      message:
-        'The ETag value provided does not match the current ETag value for this resource',
+      message: 'The ETag value provided does not match the current ETag value for this resource',
       innerError: {
         'request-id': '22222222-3333-4444-5555-666666666666',
         date: '2026-04-18T12:00:00',
