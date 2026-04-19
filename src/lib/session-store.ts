@@ -81,6 +81,18 @@ export class SessionStore {
    * Persist a session record keyed by (tenantId, sha256(accessToken)) in
    * Redis as an envelope-encrypted blob. Overwrites any existing entry.
    *
+   * **Contract (WR-09):** put() MUST be called with a unique
+   * (tenantId, accessToken) tuple for each OAuth completion. Microsoft
+   * Graph issues unique tokens, so collisions are unreachable in
+   * production; this contract documents the invariant for tests and
+   * future callers. Concurrent writes to the same key silently overwrite
+   * (SET ... EX, no NX flag) — if the second write carries an older
+   * refresh token, the session is silently stale by one rotation.
+   * graph-client.ts:refreshSessionAndRetry handles rotation atomically
+   * via put-then-delete in the single-replica case; cross-replica
+   * concurrency is not an issue because each replica's MSAL cache
+   * serializes tokens and SessionStore writes happen after MSAL acquire.
+   *
    * @param ttlSeconds optional override; otherwise falls back to
    *   MS365_MCP_SESSION_TTL_SECONDS env var, then DEFAULT_TTL_SECONDS (14d).
    */
