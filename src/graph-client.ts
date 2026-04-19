@@ -285,7 +285,25 @@ class GraphClient {
 
   async graphRequest(endpoint: string, options: GraphRequestOptions = {}): Promise<McpResponse> {
     try {
-      logger.info(`Calling ${endpoint} with options: ${JSON.stringify(options)}`);
+      // CR-01 fix: pass options shape as a structured pino merging object so
+      // redact paths (`*.access_token`, `*.refresh_token`,
+      // `req.headers.authorization`) can match. JSON.stringify-ing the full
+      // options object into the message string flattens the values to plain
+      // text BEFORE pino sees them — pino traverses objects, not message
+      // substrings, so the redact list cannot mask Authorization headers,
+      // bodies, or token fields once they are interpolated. Shape booleans
+      // are sufficient for operational triage.
+      logger.info(
+        {
+          endpoint,
+          method: options.method ?? 'GET',
+          hasBody: Boolean(options.body),
+          hasHeaders: Boolean(options.headers),
+          includeHeaders: options.includeHeaders ?? false,
+          rawResponse: options.rawResponse ?? false,
+        },
+        'Graph request'
+      );
 
       // Use new OAuth-aware request method
       const result = await this.makeRequest(endpoint, options);
