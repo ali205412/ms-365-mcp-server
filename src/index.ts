@@ -173,6 +173,12 @@ function validateProdHttpConfig(args: CommandOptions): void {
 async function phase3ShutdownOrchestrator(): Promise<void> {
   try {
     // region:phase3-shutdown-tenant-pool (filled by 03-05)
+    // Plan 03-05: TenantPool teardown — FIRST step per CONTEXT.md order:
+    // tenantPool.drain → redis.shutdown → pg.shutdown. Draining the MSAL pool
+    // first lets any pending Redis cache writes complete before the client is
+    // quit. Idempotent — safe to call even when no pool was constructed.
+    const { shutdown: tenantPoolShutdown } = await import('./lib/tenant/tenant-pool.js');
+    await tenantPoolShutdown();
     // endregion:phase3-shutdown-tenant-pool
 
     // region:phase3-shutdown-redis       (filled by 03-02)
@@ -300,6 +306,16 @@ async function main(): Promise<void> {
     // endregion:phase3-pkce-store
 
     // region:phase3-tenant-pool (filled by 03-05 Task 2/3)
+    // Plan 03-05: TenantPool bootstrap — runs LAST among the phase3 substrates
+    // because it consumes the KEK loader (from the kek anchor above) and
+    // redisClient.getRedis() (from the redis anchor above). LRU 200 + 30min
+    // idle + 60s sweep timer (unref'd). Stdio mode skips — its single-user
+    // file-backed token cache remains the canonical path per D-04.
+    if (isHttpMode) {
+      const { loadKek } = await import('./lib/crypto/kek.js');
+      const { initTenantPool } = await import('./lib/tenant/tenant-pool.js');
+      initTenantPool(redisClient.getRedis(), await loadKek());
+    }
     // endregion:phase3-tenant-pool
 
     const authManager = await AuthManager.create(scopes);
