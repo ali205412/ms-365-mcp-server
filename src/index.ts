@@ -318,35 +318,55 @@ async function main(): Promise<void> {
     }
     // endregion:phase3-tenant-pool
 
-    // ── Phase 3 plan 03-06 Task 3: stdio --tenant-id loader ─────────────
-    // When stdio mode is configured with a tenantId (via env or --tenant-id),
-    // load the tenant row from Postgres up front. This enables
-    // delegated/app-only from stdio against a pre-configured tenant while
-    // preserving the legacy AuthManager.create() + file-backed token cache
-    // path for the default (no tenant-id) stdio use case.
+    // ── Phase 3 plan 03-09 Task 2: stdio --tenant-id loader ─────────────
+    // When stdio mode is configured with a tenantId (via --tenant-id CLI
+    // flag or MS365_MCP_TENANT_ID env var), load the tenant row from
+    // Postgres up front. This enables delegated/app-only from stdio against
+    // a pre-configured tenant while preserving the legacy
+    // AuthManager.create() + file-backed token cache path for the default
+    // (no tenant-id) stdio use case.
     //
-    // The --tenant-id CLI flag is intentionally NOT added to cli.ts yet —
-    // stdio tenant-scoped sessions are an operator-initiated flow, and
-    // the env-var reads below are sufficient for the Phase 3 scope. 03-09
-    // wires `--tenant-id` + stdio tenant dispatch formally.
+    // 03-09 supersedes the 03-06 seam (MS365_MCP_TENANT_ID_HTTP env var):
+    // the `--tenant-id` CLI flag is now the primary entrypoint, with
+    // MS365_MCP_TENANT_ID as the env fallback (standard naming) and
+    // MS365_MCP_TENANT_ID_HTTP retained as a deprecated transition alias.
+    //
+    // On tenant_not_found the process exits 1 — the operator asked for a
+    // specific tenant and we can't honour that; silent fallback to the
+    // legacy path would mask a config error and run under the wrong
+    // identity. Missing Postgres substrate (DATABASE_URL unset) logs a
+    // warn + falls back to legacy, since stdio use from a dev laptop
+    // without pg running is an explicitly-supported path.
     if (!isHttpMode) {
-      const tenantIdArg = process.env.MS365_MCP_TENANT_ID_HTTP;
+      const tenantIdArg =
+        (args as CommandOptions).tenantId ??
+        process.env.MS365_MCP_TENANT_ID ??
+        process.env.MS365_MCP_TENANT_ID_HTTP;
       if (tenantIdArg) {
-        try {
-          const pool = postgres.getPool();
-          const { rows } = await pool.query(
-            'SELECT id, mode, client_id FROM tenants WHERE id = $1 AND disabled_at IS NULL',
-            [tenantIdArg]
-          );
-          if (!rows[0]) {
-            throw new Error(`tenant_not_found: ${tenantIdArg}`);
-          }
-          logger.info({ tenantId: tenantIdArg, mode: rows[0].mode }, 'stdio tenant loaded');
-        } catch (err) {
+        if (!process.env.MS365_MCP_DATABASE_URL) {
           logger.warn(
-            { err: (err as Error).message },
-            'stdio --tenant-id load failed; falling back to legacy single-tenant AuthManager'
+            { tenantId: tenantIdArg },
+            'stdio --tenant-id set but MS365_MCP_DATABASE_URL is unset; falling back to legacy single-tenant AuthManager'
           );
+        } else {
+          try {
+            const pool = postgres.getPool();
+            const { rows } = await pool.query(
+              'SELECT id, mode, client_id FROM tenants WHERE id = $1 AND disabled_at IS NULL',
+              [tenantIdArg]
+            );
+            if (!rows[0]) {
+              console.error(`tenant_not_found: ${tenantIdArg}`);
+              process.exit(1);
+            }
+            logger.info({ tenantId: tenantIdArg, mode: rows[0].mode }, 'stdio tenant loaded');
+          } catch (err) {
+            // pg pool errors (connection refused, bad credentials) are
+            // operator-level problems — loud failure preserves the "you
+            // asked for a tenant, we couldn't honour it" contract.
+            console.error(`stdio --tenant-id load failed: ${(err as Error).message}`);
+            process.exit(1);
+          }
         }
       }
     }

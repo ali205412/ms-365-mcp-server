@@ -71,6 +71,10 @@ program
     '--public-url <url>',
     'Public base URL (e.g. https://mcp.example.com) used in browser-facing OAuth redirects when running behind a reverse proxy. Server-to-server endpoints (token, register) stay on the request host.'
   )
+  .option(
+    '--tenant-id <tenantId>',
+    'Tenant ID (GUID) for multi-tenant stdio mode (plan 03-09, TRANS-03). When set, stdio loads the tenant row from Postgres and scopes the session to that tenant. Also honours MS365_MCP_TENANT_ID env var. Omit for legacy single-tenant behaviour.'
+  )
   .addOption(
     // DEPRECATED: kept only so existing deployments that set --base-url or
     // MS365_MCP_BASE_URL do not crash at startup. Use --public-url /
@@ -137,6 +141,13 @@ export interface CommandOptions {
   publicUrl?: string;
   /** @deprecated use publicUrl */
   baseUrl?: string;
+  /**
+   * Tenant ID (GUID) for multi-tenant stdio mode (plan 03-09, TRANS-03).
+   * When present (via --tenant-id or MS365_MCP_TENANT_ID env), the stdio
+   * bootstrap loads the tenant row from Postgres; otherwise the legacy
+   * single-tenant AuthManager path is used.
+   */
+  tenantId?: string;
 
   [key: string]: unknown;
 }

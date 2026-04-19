@@ -89,9 +89,10 @@ describe('stdio transport (TRANS-03)', () => {
   it('src/index.ts stdio bootstrap reads args.tenantId (or env fallback)', () => {
     const indexSource = readFileSync(path.join(REPO_ROOT, 'src', 'index.ts'), 'utf8');
     // The stdio bootstrap must consult args.tenantId — either directly or
-    // via a local variable assigned from args.tenantId — and must also fall
-    // back to MS365_MCP_TENANT_ID env var.
-    expect(indexSource).toMatch(/args\.tenantId|options\.tenantId/);
+    // via a local variable assigned from args.tenantId (possibly through a
+    // type assertion like `(args as CommandOptions).tenantId`) — and must
+    // also fall back to MS365_MCP_TENANT_ID env var.
+    expect(indexSource).toMatch(/args\b[^;\n]*\.tenantId|options\b[^;\n]*\.tenantId/);
     expect(indexSource).toMatch(/MS365_MCP_TENANT_ID/);
   });
 
