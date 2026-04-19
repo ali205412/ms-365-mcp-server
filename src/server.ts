@@ -457,6 +457,33 @@ export interface TenantTokenHandlerConfig {
  * 4. Redirects to the tenant's authority `/oauth2/v2.0/authorize` endpoint
  *    (selected by `tenant.cloud_type`).
  */
+
+/**
+ * WR-06 fix: canonical comparator for redirect URI allowlist membership.
+ *
+ * Strips trailing slashes, lowercases scheme + host (per RFC 3986 — only
+ * those segments are case-insensitive), and normalises the path via the
+ * URL constructor. Both sides of the includes() check go through this
+ * helper so a tenant row carrying `https://app.example.com/callback`
+ * matches a request bearing `https://app.example.com/callback/`,
+ * `HTTPS://APP.EXAMPLE.COM/callback`, or
+ * `https://APP.example.com:443/callback`.
+ *
+ * Falls back to the literal string when the input cannot be parsed as a
+ * URL — the allowlist still rejects it via the normal includes() miss
+ * (a malformed URI cannot match a well-formed allowlist entry).
+ */
+function normalizeRedirectUri(u: string): string {
+  try {
+    const parsed = new URL(u);
+    // .href already lowercases scheme + host. Strip a single trailing
+    // slash from the path so /callback and /callback/ collapse.
+    return parsed.href.replace(/\/$/, '');
+  } catch {
+    return u;
+  }
+}
+
 export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
   const { pkceStore, pgPool } = config;
 
@@ -510,8 +537,17 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
       res.status(400).json({ error: 'invalid_redirect_uri', reason: schemeCheck.reason });
       return;
     }
-    //   b) Tenant-scoped allowlist membership — exact match only
-    if (!tenant.redirect_uri_allowlist.includes(redirectUri)) {
+    //   b) Tenant-scoped allowlist membership — normalised exact match.
+    //      WR-06 fix: normalise both sides via URL parsing + trailing-slash
+    //      stripping so a tenant row carrying
+    //      `https://app.example.com/callback` matches a request bearing
+    //      `https://app.example.com/callback/` (or
+    //      `HTTPS://APP.EXAMPLE.COM/callback`). A malformed input that
+    //      cannot be parsed falls back to the literal string so the
+    //      allowlist still rejects it via the includes() miss.
+    const normalizedRedirect = normalizeRedirectUri(redirectUri);
+    const allowlistNormalized = tenant.redirect_uri_allowlist.map(normalizeRedirectUri);
+    if (!allowlistNormalized.includes(normalizedRedirect)) {
       emitAudit(tenant.id, 'failure', redirectUri, { error: 'invalid_redirect_uri' }, req);
       res.status(400).json({ error: 'invalid_redirect_uri' });
       return;
