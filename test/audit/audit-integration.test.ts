@@ -17,7 +17,7 @@
  *   - Test 6: SC#2 signal — two tenants concurrently emit distinct audit rows
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import express, { type Request, type Response, type NextFunction } from 'express';
+import express from 'express';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import crypto from 'node:crypto';
@@ -132,9 +132,8 @@ describe('audit integration (plan 03-10, TENANT-06)', () => {
       getDekForTenant: vi.fn(() => Buffer.alloc(32, 7)),
     };
 
-    const { createAuthorizeHandler, createTenantTokenHandler } = await import(
-      '../../src/server.js'
-    );
+    const { createAuthorizeHandler, createTenantTokenHandler } =
+      await import('../../src/server.js');
     const { createLoadTenantMiddleware } = await import('../../src/lib/tenant/load-tenant.js');
 
     const loadTenant = createLoadTenantMiddleware({ pool });
@@ -143,10 +142,7 @@ describe('audit integration (plan 03-10, TENANT-06)', () => {
     app.use(express.json());
     app.use(express.urlencoded({ extended: true }));
     app.use('/t/:tenantId', loadTenant);
-    app.get(
-      '/t/:tenantId/authorize',
-      createAuthorizeHandler({ pkceStore, pgPool: pool })
-    );
+    app.get('/t/:tenantId/authorize', createAuthorizeHandler({ pkceStore, pgPool: pool }));
     app.post(
       '/t/:tenantId/token',
       createTenantTokenHandler({
@@ -186,9 +182,7 @@ describe('audit integration (plan 03-10, TENANT-06)', () => {
   ): Promise<Record<string, unknown>[]> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      const { rows } = await pool.query(
-        'SELECT * FROM audit_log ORDER BY ts ASC'
-      );
+      const { rows } = await pool.query('SELECT * FROM audit_log ORDER BY ts ASC');
       if (rows.length >= minRows) return rows;
       await sleep(20);
     }
@@ -241,10 +235,7 @@ describe('audit integration (plan 03-10, TENANT-06)', () => {
 
   it('emits oauth.token.exchange success audit row on /token', async () => {
     const clientVerifier = crypto.randomBytes(32).toString('base64url');
-    const clientChallenge = crypto
-      .createHash('sha256')
-      .update(clientVerifier)
-      .digest('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
 
     const authorizeRes = await fetch(
       `${baseUrl}/t/${TENANT_A_ID}/authorize?` +
@@ -292,9 +283,7 @@ describe('audit integration (plan 03-10, TENANT-06)', () => {
     expect(tokenRes.status).toBe(400);
 
     const rows = await waitForAuditRows(1);
-    const failRow = rows.find(
-      (r) => r.action === 'oauth.token.exchange' && r.result === 'failure'
-    );
+    const failRow = rows.find((r) => r.action === 'oauth.token.exchange' && r.result === 'failure');
     expect(failRow).toBeDefined();
     const meta =
       typeof failRow!.meta === 'string' ? JSON.parse(failRow!.meta as string) : failRow!.meta;

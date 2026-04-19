@@ -11,7 +11,7 @@
  * path.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import express, { type Request, type Response, type NextFunction } from 'express';
+import express, { type Request, type Response } from 'express';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import crypto from 'node:crypto';
@@ -91,9 +91,7 @@ async function insertTenant(
 
 async function makeJwt(payload: Record<string, unknown>): Promise<string> {
   const key = new Uint8Array(32);
-  return await new SignJWT(payload)
-    .setProtectedHeader({ alg: 'HS256' })
-    .sign(key);
+  return await new SignJWT(payload).setProtectedHeader({ alg: 'HS256' }).sign(key);
 }
 
 describe('Plan 03-10 — four flows + audit rows (SC#3)', () => {
@@ -116,14 +114,7 @@ describe('Plan 03-10 — four flows + audit rows (SC#3)', () => {
       ['http://localhost:3000/callback'],
       ['User.Read']
     );
-    await insertTenant(
-      pool,
-      TENANT_APP_ONLY,
-      'app-only',
-      'client-app-only',
-      [],
-      []
-    );
+    await insertTenant(pool, TENANT_APP_ONLY, 'app-only', 'client-app-only', [], []);
 
     const mockAcquireByCode = vi.fn(async () => ({
       accessToken: 'delegated-access-token',
@@ -145,9 +136,8 @@ describe('Plan 03-10 — four flows + audit rows (SC#3)', () => {
       getDekForTenant: vi.fn(() => Buffer.alloc(32, 7)),
     };
 
-    const { createAuthorizeHandler, createTenantTokenHandler } = await import(
-      '../../src/server.js'
-    );
+    const { createAuthorizeHandler, createTenantTokenHandler } =
+      await import('../../src/server.js');
     const { createAuthSelectorMiddleware } = await import('../../src/lib/auth-selector.js');
     const { createLoadTenantMiddleware } = await import('../../src/lib/tenant/load-tenant.js');
     const { writeAuditStandalone } = await import('../../src/lib/audit.js');
@@ -159,10 +149,7 @@ describe('Plan 03-10 — four flows + audit rows (SC#3)', () => {
     app.use(express.urlencoded({ extended: true }));
     app.use('/t/:tenantId', loadTenant);
 
-    app.get(
-      '/t/:tenantId/authorize',
-      createAuthorizeHandler({ pkceStore, pgPool: pool })
-    );
+    app.get('/t/:tenantId/authorize', createAuthorizeHandler({ pkceStore, pgPool: pool }));
     app.post(
       '/t/:tenantId/token',
       createTenantTokenHandler({
@@ -189,7 +176,12 @@ describe('Plan 03-10 — four flows + audit rows (SC#3)', () => {
         const flow = getFlow() ?? 'unknown';
         // Emit a flow-specific audit row so the four-flows test can observe
         // distinct rows per flow.
-        const action = flow === 'bearer' ? 'oauth.authorize' : flow === 'app-only' ? 'oauth.token.exchange' : 'oauth.refresh';
+        const action =
+          flow === 'bearer'
+            ? 'oauth.authorize'
+            : flow === 'app-only'
+              ? 'oauth.token.exchange'
+              : 'oauth.refresh';
         if (tenant) {
           await writeAuditStandalone(pool, {
             tenantId: tenant.id,
@@ -226,10 +218,7 @@ describe('Plan 03-10 — four flows + audit rows (SC#3)', () => {
   it('all four flows emit distinct audit rows', async () => {
     // (a) delegated OAuth round trip — emits oauth.authorize + oauth.token.exchange
     const clientVerifier = crypto.randomBytes(32).toString('base64url');
-    const clientChallenge = crypto
-      .createHash('sha256')
-      .update(clientVerifier)
-      .digest('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
     const authRes = await fetch(
       `${baseUrl}/t/${TENANT_DELEGATED}/authorize?` +
         new URLSearchParams({

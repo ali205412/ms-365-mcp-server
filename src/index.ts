@@ -311,10 +311,17 @@ async function main(): Promise<void> {
     // redisClient.getRedis() (from the redis anchor above). LRU 200 + 30min
     // idle + 60s sweep timer (unref'd). Stdio mode skips — its single-user
     // file-backed token cache remains the canonical path per D-04.
+    //
+    // Plan 03-10 (TENANT-06): push tenantsLoadedCheck into the readiness
+    // chain so /readyz flips to 503 on a freshly-deployed empty Postgres.
+    // Phase 4 admin API onboards the first tenant; before that, /readyz
+    // correctly reports not_ready.
     if (isHttpMode) {
       const { loadKek } = await import('./lib/crypto/kek.js');
       const { initTenantPool } = await import('./lib/tenant/tenant-pool.js');
       initTenantPool(redisClient.getRedis(), await loadKek());
+      const { tenantsLoadedCheck } = await import('./lib/health.js');
+      readinessChecks.push(tenantsLoadedCheck(postgres.getPool()));
     }
     // endregion:phase3-tenant-pool
 

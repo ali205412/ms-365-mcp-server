@@ -53,6 +53,24 @@ async function loadProdRedis() {
 }
 
 /**
+ * Plan 03-10: lazy-load audit writer. Falls back to src/*.ts for tests
+ * (tsx transpiles on import) and dist/*.js for production node invocation.
+ */
+async function loadAuditWriter() {
+  try {
+    const mod = await import('../dist/lib/audit.js');
+    return mod.writeAuditStandalone;
+  } catch {
+    try {
+      const mod = await import('../src/lib/audit.ts');
+      return mod.writeAuditStandalone;
+    } catch {
+      return null;
+    }
+  }
+}
+
+/**
  * Programmatic entry point. Accepts injected deps for tests.
  *
  * @param {string[]} argv
@@ -131,6 +149,24 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   // next acquire sees wrapped_dek=NULL and throws.
   if (tenantPool && typeof tenantPool.evict === 'function') {
     tenantPool.evict(tenantId);
+  }
+
+  // Plan 03-10 (TENANT-06): emit tenant.disable audit row AFTER the
+  // cascade completes. writeAuditStandalone catches DB errors internally
+  // (pino shadow log) so operators never see a "disable succeeded but
+  // audit failed" stderr message.
+  const writeAuditStandalone = await loadAuditWriter();
+  if (writeAuditStandalone) {
+    await writeAuditStandalone(pool, {
+      tenantId,
+      actor: 'cli',
+      action: 'tenant.disable',
+      target: tenantId,
+      ip: null,
+      requestId: `cli-${Date.now()}`,
+      result: 'success',
+      meta: { cacheKeysDeleted, pkceKeysDeleted },
+    });
   }
 
   return {
