@@ -215,15 +215,24 @@ describe('graph-tools', () => {
       expect(parsed['@odata.nextLink']).toBeUndefined();
     });
 
-    it('should stop at 100 page limit', async () => {
+    it('should stop at the 20-page cap (D-06) and surface _truncated + _nextLink', async () => {
+      // Per Plan 02-04 / D-06: default maxPages is 20 (was 100 in v1) and
+      // the pagination contract now surfaces `_truncated: true` + `_nextLink`
+      // when the cap is hit — no silent truncation. The page-iterator fetches
+      // maxPages + 1 pages internally (one extra for truncation detection)
+      // so the observed call count is 21, not 100. The initial fetch is
+      // seeded into the iterator so only one "initial" request is made.
       const endpoint = makeEndpoint();
       const config = makeConfig();
       mockEndpoints.push(endpoint);
       mockEndpointsJson = [config];
 
-      // Generate 101 responses — each has a nextLink except the last
+      // Generate 25 responses — each has a nextLink so the iterator runs
+      // to the cap. The iterator will pull up to 21 (maxPages + 1 = 20 + 1)
+      // via graphRequest; the first is reused as the seed (so the spy sees
+      // 1 initial + 20 follow-up = 21 calls total).
       const responses = [];
-      for (let i = 0; i < 101; i++) {
+      for (let i = 0; i < 25; i++) {
         responses.push({
           content: [
             {
@@ -243,10 +252,16 @@ describe('graph-tools', () => {
       registerGraphTools(server as any, graphClient as any);
 
       const tool = server.tools.get('test-tool');
-      await tool!.handler({ fetchAllPages: true });
+      const result = await tool!.handler({ fetchAllPages: true });
 
-      // 1 initial + 99 pagination = 100 total requests (stops at pageCount=100)
-      expect(graphClient.graphRequest).toHaveBeenCalledTimes(100);
+      // 1 initial (from executeGraphTool) + 20 nextLink follow-ups from
+      // the iterator (pages 1..20 + 1 extra for truncation detection,
+      // but the initial is the seed so +20 = 21 total).
+      expect(graphClient.graphRequest).toHaveBeenCalledTimes(21);
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.value).toHaveLength(20);
+      expect(parsed._truncated).toBe(true);
+      expect(typeof parsed._nextLink).toBe('string');
     });
   });
 
