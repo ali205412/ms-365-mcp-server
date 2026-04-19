@@ -29,7 +29,7 @@
  * a script (process.argv[1] matches this file's path).
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, statSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, statSync, readFileSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -132,8 +132,14 @@ async function resolveKeytar() {
         'On Linux, libsecret-1-dev is required (apt install libsecret-1-dev).'
     );
   }
+  // Resolve the package main entry via package.json — ESM does not permit
+  // directory imports, so we must point at the actual entry file.
   const tempKeytarPath = path.join(tempDir, 'node_modules', 'keytar');
-  const mod = await import(pathToFileURL(tempKeytarPath).href);
+  const pkgPath = path.join(tempKeytarPath, 'package.json');
+  const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+  const entryRel = pkg.main ?? 'lib/keytar.js';
+  const entryPath = path.join(tempKeytarPath, entryRel);
+  const mod = await import(pathToFileURL(entryPath).href);
   return mod.default ?? mod;
 }
 
