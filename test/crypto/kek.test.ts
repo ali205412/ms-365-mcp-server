@@ -111,10 +111,20 @@ describe('plan 03-04 Task 2 — kek.ts (SECUR-01 / D-12)', () => {
     expect(second[0]).toBe(0x77);
   });
 
-  it('dev mode (non-production, no sources) returns fixed all-zero KEK with a warning', async () => {
+  it('dev mode without MS365_MCP_ALLOW_ZERO_KEK opt-in throws (WR-05)', async () => {
     vi.stubEnv('MS365_MCP_KEK', '');
     vi.stubEnv('MS365_MCP_KEYVAULT_URL', '');
     vi.stubEnv('NODE_ENV', 'development');
+    vi.stubEnv('MS365_MCP_ALLOW_ZERO_KEK', '');
+
+    await expect(loadKek()).rejects.toThrow(/MS365_MCP_ALLOW_ZERO_KEK=1/);
+  });
+
+  it('dev mode WITH MS365_MCP_ALLOW_ZERO_KEK=1 returns fixed zero KEK at error level (WR-05)', async () => {
+    vi.stubEnv('MS365_MCP_KEK', '');
+    vi.stubEnv('MS365_MCP_KEYVAULT_URL', '');
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.stubEnv('MS365_MCP_ALLOW_ZERO_KEK', '1');
 
     const buf = await loadKek();
     expect(buf.length).toBe(32);

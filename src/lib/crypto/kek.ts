@@ -65,10 +65,30 @@ export async function loadKek(): Promise<Buffer> {
     );
   }
 
+  // WR-05 fix: require explicit opt-in for the zero-KEK dev fallback.
+  // Without this, a developer running `docker compose up` on a laptop
+  // without NODE_ENV=production set and without MS365_MCP_KEK exported
+  // would silently encrypt production-adjacent data with a known zero key.
+  // Treat it as an error rather than a recoverable warn so the misconfig
+  // is loud and CI tests can grep for the explicit kekSource fingerprint.
+  if (process.env.MS365_MCP_ALLOW_ZERO_KEK !== '1') {
+    throw new Error(
+      'No KEK configured and MS365_MCP_ALLOW_ZERO_KEK=1 not set. ' +
+        'Generate: `openssl rand -base64 32` and export MS365_MCP_KEK=<value>. ' +
+        'For non-production scratch use only, opt in with MS365_MCP_ALLOW_ZERO_KEK=1.'
+    );
+  }
+
   // Dev-only fixed KEK (deliberately deterministic — a restart must NOT
   // re-key previously-wrapped DEKs to garbage). NEVER use this in production.
   const ephemeral = Buffer.alloc(KEY_LENGTH, 0);
-  logger.warn('No KEK configured; using fixed zero KEK (NEVER use in production)');
+  // WR-05 fix: escalate to error level with a structured fingerprint
+  // (kekSource: 'dev-zero-fallback') so CI tests, log scrapers, and
+  // alerting pipelines can detect this misconfig deterministically.
+  logger.error(
+    { kekSource: 'dev-zero-fallback' },
+    'SECURITY: Using fixed zero KEK (dev-only opt-in via MS365_MCP_ALLOW_ZERO_KEK=1; NEVER in production)'
+  );
   cachedKek = ephemeral;
   return ephemeral;
 }
