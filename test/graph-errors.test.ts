@@ -57,10 +57,13 @@ describe('parseODataError → typed GraphError', () => {
   });
 
   it('429 HTTP-date form populates retryAfterMs within tolerance', () => {
+    // HTTP-date has 1-second resolution (RFC 7231), so toUTCString() truncates
+    // fractional seconds. A 5-second future-date can parse to anywhere from
+    // ~4s to ~5s depending on where in the current second we encode.
     const future = new Date(Date.now() + 5000).toUTCString();
     const err = parseODataError(canonical429Throttle.body, 429, { 'retry-after': future });
     expect(err).toBeInstanceOf(GraphThrottleError);
-    expect(err.retryAfterMs ?? 0).toBeGreaterThanOrEqual(4_900);
+    expect(err.retryAfterMs ?? 0).toBeGreaterThanOrEqual(3_900);
     expect(err.retryAfterMs ?? 0).toBeLessThanOrEqual(5_100);
   });
 
@@ -112,10 +115,7 @@ describe('parseODataError → typed GraphError', () => {
   });
 
   it('unknown status returns base GraphError (not a subclass)', () => {
-    const err = parseODataError(
-      { error: { code: 'teapot', message: 'I am a teapot' } },
-      418
-    );
+    const err = parseODataError({ error: { code: 'teapot', message: 'I am a teapot' } }, 418);
     expect(err.constructor).toBe(GraphError);
     expect(err.code).toBe('teapot');
     expect(err.statusCode).toBe(418);
