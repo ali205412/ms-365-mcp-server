@@ -181,8 +181,8 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     expect(loc.searchParams.get('code_challenge_method')).toBe('S256');
     expect(loc.searchParams.get('client_id')).toBe(harness.tenant.client_id);
 
-    // PKCE entry should be in the store
-    const entry = await harness.pkceStore.takeByChallenge('_', clientChallenge);
+    // PKCE entry should be in the store, keyed by the real tenant id (plan 03-08).
+    const entry = await harness.pkceStore.takeByChallenge(harness.tenant.id, clientChallenge);
     expect(entry).not.toBeNull();
     expect(entry?.clientCodeChallenge).toBe(clientChallenge);
     expect(entry?.redirectUri).toBe('http://localhost:3000/callback');
@@ -263,15 +263,17 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
     const state = crypto.randomBytes(16).toString('base64url');
 
-    // Seed a PKCE entry (simulating the /authorize step)
-    await harness.pkceStore.put('_', {
+    // Seed a PKCE entry (simulating the /authorize step). Plan 03-08 keys the
+    // PKCE Redis entry on the real tenant id — so both put + takeByChallenge
+    // now use `harness.tenant.id`.
+    await harness.pkceStore.put(harness.tenant.id, {
       state,
       clientCodeChallenge: clientChallenge,
       clientCodeChallengeMethod: 'S256',
       serverCodeVerifier: 'server-verifier-xyz',
       clientId: harness.tenant.client_id,
       redirectUri: 'http://localhost:3000/callback',
-      tenantId: '_',
+      tenantId: harness.tenant.id,
       createdAt: Date.now(),
     });
 

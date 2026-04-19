@@ -17,11 +17,7 @@
  *           (e.g., first-leg acquire on a silent-refresh-only path).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import express, {
-  type Request,
-  type Response,
-  type NextFunction,
-} from 'express';
+import express, { type Request, type Response, type NextFunction } from 'express';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import crypto from 'node:crypto';
@@ -47,8 +43,7 @@ function makeTenant(overrides: Partial<TenantRow> = {}): TenantRow {
     client_secret_resolved: overrides.client_secret_resolved ?? 'super-secret',
     tenant_id: overrides.tenant_id ?? 'tenant-guid',
     cloud_type: overrides.cloud_type ?? 'global',
-    redirect_uri_allowlist:
-      overrides.redirect_uri_allowlist ?? ['http://localhost:3000/callback'],
+    redirect_uri_allowlist: overrides.redirect_uri_allowlist ?? ['http://localhost:3000/callback'],
     cors_origins: overrides.cors_origins ?? [],
     allowed_scopes: overrides.allowed_scopes ?? ['User.Read', 'Mail.Read'],
     enabled_tools: overrides.enabled_tools ?? null,
@@ -143,19 +138,19 @@ async function startApp(tenantOverrides: Partial<TenantRow> = {}): Promise<Harne
 }
 
 async function doTokenExchange(h: Harness): Promise<Response> {
-  // Seed PKCE entry
+  // Seed PKCE entry — plan 03-08 keys PKCE Redis entries on the real tenant id.
   const clientVerifier = crypto.randomBytes(32).toString('base64url');
   const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
   const serverVerifier = crypto.randomBytes(32).toString('base64url');
 
-  await h.pkceStore.put('_', {
+  await h.pkceStore.put(h.tenant.id, {
     state: 'abc',
     clientCodeChallenge: clientChallenge,
     clientCodeChallengeMethod: 'S256',
     serverCodeVerifier: serverVerifier,
     clientId: h.tenant.client_id,
     redirectUri: 'http://localhost:3000/callback',
-    tenantId: '_',
+    tenantId: h.tenant.id,
     createdAt: Date.now(),
   });
 

@@ -21,11 +21,7 @@
  * misses the other envelope path. The plan explicitly requires both.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import express, {
-  type Request,
-  type Response,
-  type NextFunction,
-} from 'express';
+import express, { type Request, type Response, type NextFunction } from 'express';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import crypto from 'node:crypto';
@@ -203,83 +199,79 @@ describe('plan 03-07 Task 2 — SC#5: no plaintext MSAL secrets in Redis', () =>
     }
   });
 
-  it(
-    'SC#5: after /token + MSAL-cache write, both mcp:cache:* and mcp:session:* values are envelope-encrypted (no plaintext refresh_token / access_token / secret / rt-)',
-    async () => {
-      harness = await startApp();
+  it('SC#5: after /token + MSAL-cache write, both mcp:cache:* and mcp:session:* values are envelope-encrypted (no plaintext refresh_token / access_token / secret / rt-)', async () => {
+    harness = await startApp();
 
-      // ── Step 1: drive /token so mcp:session:* populates ───────────────────
-      const clientVerifier = crypto.randomBytes(32).toString('base64url');
-      const clientChallenge = crypto
-        .createHash('sha256')
-        .update(clientVerifier)
-        .digest('base64url');
-      const serverVerifier = crypto.randomBytes(32).toString('base64url');
+    // ── Step 1: drive /token so mcp:session:* populates ───────────────────
+    const clientVerifier = crypto.randomBytes(32).toString('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
+    const serverVerifier = crypto.randomBytes(32).toString('base64url');
 
-      await harness.pkceStore.put('_', {
-        state: 'abc',
-        clientCodeChallenge: clientChallenge,
-        clientCodeChallengeMethod: 'S256',
-        serverCodeVerifier: serverVerifier,
-        clientId: harness.tenant.client_id,
-        redirectUri: 'http://localhost:3000/callback',
-        tenantId: '_',
-        createdAt: Date.now(),
-      });
+    // Plan 03-08: PKCE Redis key is keyed on the real tenant id (from the
+    // /t/:tenantId/* router via loadTenant). Mirror that here.
+    await harness.pkceStore.put(harness.tenant.id, {
+      state: 'abc',
+      clientCodeChallenge: clientChallenge,
+      clientCodeChallengeMethod: 'S256',
+      serverCodeVerifier: serverVerifier,
+      clientId: harness.tenant.client_id,
+      redirectUri: 'http://localhost:3000/callback',
+      tenantId: harness.tenant.id,
+      createdAt: Date.now(),
+    });
 
-      const body = new URLSearchParams({
-        grant_type: 'authorization_code',
-        code: 'auth-code-xyz',
-        code_verifier: clientVerifier,
-        redirect_uri: 'http://localhost:3000/callback',
-      });
+    const body = new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: 'auth-code-xyz',
+      code_verifier: clientVerifier,
+      redirect_uri: 'http://localhost:3000/callback',
+    });
 
-      const tokenRes = await fetch(`${harness.url}/token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body,
-      });
-      expect(tokenRes.status).toBe(200);
-      const tokenBody = (await tokenRes.json()) as Record<string, unknown>;
-      // Critical: response body never contains the refresh token
-      expect(JSON.stringify(tokenBody)).not.toContain('rt-SC5-plaintext-never-leak');
-      expect(tokenBody.refresh_token).toBeUndefined();
+    const tokenRes = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+    expect(tokenRes.status).toBe(200);
+    const tokenBody = (await tokenRes.json()) as Record<string, unknown>;
+    // Critical: response body never contains the refresh token
+    expect(JSON.stringify(tokenBody)).not.toContain('rt-SC5-plaintext-never-leak');
+    expect(tokenBody.refresh_token).toBeUndefined();
 
-      // ── Step 2: drive msal-cache-plugin so mcp:cache:* populates ──────────
-      await primeMsalCachePlugin(harness.redis, harness.tenant.id, harness.dek);
+    // ── Step 2: drive msal-cache-plugin so mcp:cache:* populates ──────────
+    await primeMsalCachePlugin(harness.redis, harness.tenant.id, harness.dek);
 
-      // ── Step 3: verify BOTH prefixes populated ────────────────────────────
-      const sessionKeys = await harness.redis.keys('mcp:session:*');
-      const cacheKeys = await harness.redis.keys('mcp:cache:*');
-      expect(sessionKeys.length).toBeGreaterThan(0);
-      expect(cacheKeys.length).toBeGreaterThan(0);
+    // ── Step 3: verify BOTH prefixes populated ────────────────────────────
+    const sessionKeys = await harness.redis.keys('mcp:session:*');
+    const cacheKeys = await harness.redis.keys('mcp:cache:*');
+    expect(sessionKeys.length).toBeGreaterThan(0);
+    expect(cacheKeys.length).toBeGreaterThan(0);
 
-      // ── Step 4: scan ALL values across BOTH prefixes for plaintext ────────
-      const FORBIDDEN = [
-        '"refresh_token":',
-        '"access_token":',
-        '"secret":',
-        'rt-SC5-plaintext-never-leak',
-        'access-SC5-plaintext-should-never-leak',
-      ];
+    // ── Step 4: scan ALL values across BOTH prefixes for plaintext ────────
+    const FORBIDDEN = [
+      '"refresh_token":',
+      '"access_token":',
+      '"secret":',
+      'rt-SC5-plaintext-never-leak',
+      'access-SC5-plaintext-should-never-leak',
+    ];
 
-      const allKeys = [...sessionKeys, ...cacheKeys];
-      for (const key of allKeys) {
-        const raw = await harness.redis.get(key);
-        expect(raw, `key ${key} should not be null`).toBeTruthy();
-        for (const needle of FORBIDDEN) {
-          expect(
-            raw!.includes(needle),
-            `key ${key} contains forbidden plaintext ${JSON.stringify(needle)}`
-          ).toBe(false);
-        }
-        // Positive assertion: every value is a JSON-parseable envelope
-        const envelope = JSON.parse(raw!);
-        expect(envelope.v).toBe(1);
-        expect(typeof envelope.iv).toBe('string');
-        expect(typeof envelope.tag).toBe('string');
-        expect(typeof envelope.ct).toBe('string');
+    const allKeys = [...sessionKeys, ...cacheKeys];
+    for (const key of allKeys) {
+      const raw = await harness.redis.get(key);
+      expect(raw, `key ${key} should not be null`).toBeTruthy();
+      for (const needle of FORBIDDEN) {
+        expect(
+          raw!.includes(needle),
+          `key ${key} contains forbidden plaintext ${JSON.stringify(needle)}`
+        ).toBe(false);
       }
+      // Positive assertion: every value is a JSON-parseable envelope
+      const envelope = JSON.parse(raw!);
+      expect(envelope.v).toBe(1);
+      expect(typeof envelope.iv).toBe('string');
+      expect(typeof envelope.tag).toBe('string');
+      expect(typeof envelope.ct).toBe('string');
     }
-  );
+  });
 });

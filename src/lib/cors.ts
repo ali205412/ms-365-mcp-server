@@ -31,6 +31,7 @@
  * every call site.
  */
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
+import type { TenantRow } from './tenant/tenant-row.js';
 
 export type CorsMode = 'dev' | 'prod';
 
@@ -38,6 +39,25 @@ export interface CorsConfig {
   mode: CorsMode;
   /** Prod-only allowlist of exact origin strings (e.g., 'https://app.example.com'). */
   allowlist: string[];
+}
+
+/**
+ * Per-tenant CORS config (plan 03-08, TENANT-01).
+ *
+ * The middleware resolves the effective allowlist per request:
+ *   1. When `req.tenant` is populated (by loadTenant) and
+ *      `tenant.cors_origins` is non-empty → use that list.
+ *   2. Otherwise (no tenant OR empty cors_origins) → fall back to
+ *      `fallbackAllowlist` (the global prod allowlist from
+ *      MS365_MCP_CORS_ORIGINS).
+ *
+ * This keeps operators in a single-tenant deployment on the existing prod
+ * CORS path while letting multi-tenant deployments override per tenant.
+ */
+export interface PerTenantCorsConfig {
+  mode: CorsMode;
+  /** Global allowlist applied when the tenant did not customize CORS. */
+  fallbackAllowlist: string[];
 }
 
 // Dev-mode permissive pattern: loopback on any port, http OR https. Loopback
@@ -97,6 +117,68 @@ export function createCorsMiddleware(config: CorsConfig): RequestHandler {
       // allowlist needs updating — silent 200-without-ACAO was the v1
       // failure mode and it produced inscrutable browser errors with
       // no server-side breadcrumb.
+      res.sendStatus(isAllowed ? 204 : 403);
+      return;
+    }
+
+    next();
+  };
+}
+
+/**
+ * Per-tenant CORS middleware factory (plan 03-08, TENANT-01).
+ *
+ * Resolves the effective origin allowlist PER REQUEST:
+ *   - If `req.tenant` is populated (loadTenant middleware ran first) AND
+ *     `req.tenant.cors_origins` is non-empty, use it as the allowlist.
+ *   - Otherwise, fall back to `config.fallbackAllowlist`.
+ *
+ * The fallback is the global MS365_MCP_CORS_ORIGINS array — operators who
+ * don't customize per-tenant CORS get the same behaviour as Phase 1's
+ * `createCorsMiddleware` without changing any env vars.
+ *
+ * MUST be mounted AFTER the loadTenant middleware on the same route prefix
+ * (/t/:tenantId) so `req.tenant` is available. In dev mode the loopback
+ * regex still wins (same trade-off as createCorsMiddleware).
+ *
+ * Per-request Set construction is intentional: per-tenant allowlists are
+ * small (typically 1-3 origins) and per-request cost is dominated by the
+ * DB/LRU round-trip in loadTenant, not the Set build.
+ */
+export function createPerTenantCorsMiddleware(config: PerTenantCorsConfig): RequestHandler {
+  const fallbackSet = new Set(config.fallbackAllowlist);
+  const mode = config.mode;
+
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const origin = req.headers.origin;
+
+    if (!origin || typeof origin !== 'string') {
+      if (req.method === 'OPTIONS') {
+        res.sendStatus(204);
+        return;
+      }
+      next();
+      return;
+    }
+
+    const tenant = (req as Request & { tenant?: TenantRow }).tenant;
+    // Tenant custom list wins when non-empty; fallback to global otherwise.
+    const effectiveSet =
+      tenant && tenant.cors_origins.length > 0 ? new Set(tenant.cors_origins) : fallbackSet;
+
+    const isAllowed = mode === 'dev' ? DEV_ORIGIN_REGEX.test(origin) : effectiveSet.has(origin);
+
+    if (isAllowed) {
+      res.header('Access-Control-Allow-Origin', origin);
+      res.header('Vary', 'Origin');
+      res.header('Access-Control-Allow-Methods', ALLOWED_METHODS);
+      res.header('Access-Control-Allow-Headers', ALLOWED_HEADERS);
+      res.header('Access-Control-Allow-Credentials', 'true');
+    } else {
+      res.header('Vary', 'Origin');
+    }
+
+    if (req.method === 'OPTIONS') {
       res.sendStatus(isAllowed ? 204 : 403);
       return;
     }
