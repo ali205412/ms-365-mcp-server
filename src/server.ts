@@ -318,24 +318,53 @@ export function createTokenHandler(config: TokenHandlerConfig) {
         );
         res.json(result);
       } else if (body.grant_type === 'refresh_token') {
-        const tenantId = secrets.tenantId || 'common';
-        const clientId = secrets.clientId;
-        const clientSecret = secrets.clientSecret;
+        // WR-01 fix: the legacy /token refresh_token branch accepted a
+        // refresh token from the request body, which violated the SECUR-02
+        // invariant that "refresh tokens NEVER cross the client boundary
+        // in v2" (the Phase 3 SessionStore wraps refresh tokens server-side
+        // keyed by sha256(accessToken); the Graph 401 path consults the
+        // store rather than reading any client-supplied token).
+        //
+        // Plan 03-09 retires the entire legacy mount; in the meantime
+        // operators on a v1-style HTTP deployment that still posts to
+        // /token (not /t/:tenantId/token) need a clear migration error
+        // rather than a working stale-trust path. Opt-in flag preserved
+        // for narrow migration windows.
+        if (process.env.MS365_MCP_LEGACY_OAUTH_REFRESH === '1') {
+          const tenantId = secrets.tenantId || 'common';
+          const clientId = secrets.clientId;
+          const clientSecret = secrets.clientSecret;
 
-        if (clientSecret) {
-          logger.info({}, 'Refresh endpoint: Using confidential client with client_secret');
+          if (clientSecret) {
+            logger.warn(
+              {},
+              'Legacy /token refresh: confidential client with client_secret (MS365_MCP_LEGACY_OAUTH_REFRESH=1 opt-in; refresh-token-from-body crosses trust boundary)'
+            );
+          } else {
+            logger.warn(
+              {},
+              'Legacy /token refresh: public client without client_secret (MS365_MCP_LEGACY_OAUTH_REFRESH=1 opt-in; refresh-token-from-body crosses trust boundary)'
+            );
+          }
+
+          const result = await refreshAccessToken(
+            body.refresh_token as string,
+            clientId,
+            clientSecret,
+            tenantId,
+            secrets.cloudType
+          );
+          res.json(result);
         } else {
-          logger.info({}, 'Refresh endpoint: Using public client without client_secret');
+          res.status(400).json({
+            error: 'unsupported_grant_type',
+            error_description:
+              'refresh_token grant retired on the legacy /token mount in v2. ' +
+              'Use /t/:tenantId/token and rely on the server-side SessionStore ' +
+              '(refresh tokens never cross the client trust boundary in v2). ' +
+              'For narrow migration windows, opt back in with MS365_MCP_LEGACY_OAUTH_REFRESH=1.',
+          });
         }
-
-        const result = await refreshAccessToken(
-          body.refresh_token as string,
-          clientId,
-          clientSecret,
-          tenantId,
-          secrets.cloudType
-        );
-        res.json(result);
       } else {
         res.status(400).json({
           error: 'unsupported_grant_type',
