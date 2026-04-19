@@ -1404,10 +1404,39 @@ class MicrosoftGraphServer {
             state: state.substring(0, 8) + '...',
           });
         } else if (clientCodeChallenge) {
-          // No state to key on — fall back to forwarding directly (Claude Code path)
-          microsoftAuthUrl.searchParams.set('code_challenge', clientCodeChallenge);
-          if (clientCodeChallengeMethod) {
-            microsoftAuthUrl.searchParams.set('code_challenge_method', clientCodeChallengeMethod);
+          // CR-02 fix: refuse the legacy single-tenant /authorize when state
+          // is missing. The old behaviour silently forwarded the client's
+          // code_challenge directly to Microsoft, disabling server-side
+          // two-leg PKCE persistence (no PkceStore entry was written, so
+          // /token had nothing to look up via takeByChallenge — it fell
+          // through to using the client verifier).
+          //
+          // Two-leg PKCE is a defence-in-depth invariant: even when
+          // Microsoft validates PKCE end-to-end, the server-rotated verifier
+          // ensures a leaked client verifier alone cannot complete the
+          // exchange. Requiring `state` makes the contract explicit.
+          //
+          // Plan 03-09 retires this entire mount; until then, opt back in
+          // via MS365_MCP_LEGACY_OAUTH_NO_STATE=1 only for narrow v1
+          // migration windows where the upstream client cannot supply state.
+          if (process.env.MS365_MCP_LEGACY_OAUTH_NO_STATE === '1') {
+            logger.warn(
+              { challengePrefix: clientCodeChallenge.substring(0, 8) + '...' },
+              'Legacy /authorize: state missing, forwarding client code_challenge directly (MS365_MCP_LEGACY_OAUTH_NO_STATE=1 opt-in; two-leg PKCE disabled)'
+            );
+            microsoftAuthUrl.searchParams.set('code_challenge', clientCodeChallenge);
+            if (clientCodeChallengeMethod) {
+              microsoftAuthUrl.searchParams.set('code_challenge_method', clientCodeChallengeMethod);
+            }
+          } else {
+            res.status(400).json({
+              error: 'invalid_request',
+              error_description:
+                'state is required for two-leg PKCE on the legacy /authorize mount. ' +
+                'Use /t/:tenantId/authorize (Phase 3) or set MS365_MCP_LEGACY_OAUTH_NO_STATE=1 ' +
+                'to opt back into v1 stateless forwarding during migration.',
+            });
+            return;
           }
         }
 
