@@ -1,22 +1,29 @@
 /**
- * Plan 03-01 Task 3 — bin/create-tenant.mjs programmatic test.
+ * Plan 03-01 Task 3 + 03-04 Task 2 — bin/create-tenant.mjs programmatic test.
  *
  * Uses pg-mem as the injected pool so the test never touches a real
  * Postgres. Mirrors the keytar-removal.test.ts pattern (test/keytar-removal
  * Test 12): import main() directly and invoke with argv + a `deps.pool`
  * override.
+ *
+ * Plan 03-04 extended bin/create-tenant to mint a per-tenant DEK and wrap
+ * it with the KEK. Tests inject a fixed `kek` Buffer so they stay
+ * deterministic and do not depend on MS365_MCP_KEK being set.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { newDb } from 'pg-mem';
 import type { Pool } from 'pg';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 // @ts-expect-error — .mjs import has no types; tests rely on runtime export shape.
 import { main as createTenantMain } from '../../bin/create-tenant.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, '..', '..', 'migrations');
+
+const FIXED_KEK = Buffer.alloc(32, 0x5a);
 
 function stripPgcryptoExtensionStmts(sql: string): string {
   return sql
@@ -44,23 +51,29 @@ async function makePool(): Promise<Pool> {
   return pool;
 }
 
-describe('plan 03-01 — bin/create-tenant.mjs', () => {
+describe('plan 03-01 + 03-04 — bin/create-tenant.mjs', () => {
   let pool: Pool;
-  let warnings: string[];
-  let deps: { pool: Pool; logger: { warn: (m: string) => void } };
+  let messages: string[];
+  let deps: {
+    pool: Pool;
+    kek: Buffer;
+    logger: { warn: (m: string) => void; info: (m: string) => void };
+  };
 
   beforeEach(async () => {
     pool = await makePool();
-    warnings = [];
+    messages = [];
     deps = {
       pool,
+      kek: FIXED_KEK,
       logger: {
-        warn: (m: string) => warnings.push(m),
+        warn: (m: string) => messages.push(m),
+        info: (m: string) => messages.push(m),
       },
     };
   });
 
-  it('inserts a tenant row with wrapped_dek=NULL and returns its id', async () => {
+  it('inserts a tenant row with wrapped_dek set (envelope JSONB) and returns its id', async () => {
     const id = '11111111-1111-4111-8111-111111111111';
     const result = await createTenantMain(
       [
@@ -71,7 +84,7 @@ describe('plan 03-01 — bin/create-tenant.mjs', () => {
       ],
       deps
     );
-    expect(result).toEqual({ id });
+    expect(result).toEqual({ id, wrappedDek: 'set' });
 
     const r = await pool.query<{ id: string; mode: string; wrapped_dek: unknown }>(
       `SELECT id, mode, wrapped_dek FROM tenants WHERE id = $1`,
@@ -79,10 +92,22 @@ describe('plan 03-01 — bin/create-tenant.mjs', () => {
     );
     expect(r.rows).toHaveLength(1);
     expect(r.rows[0]!.mode).toBe('delegated');
-    expect(r.rows[0]!.wrapped_dek).toBeNull();
+    expect(r.rows[0]!.wrapped_dek).not.toBeNull();
+
+    const envelope =
+      typeof r.rows[0]!.wrapped_dek === 'string'
+        ? JSON.parse(r.rows[0]!.wrapped_dek as string)
+        : (r.rows[0]!.wrapped_dek as { v: number; iv: string; tag: string; ct: string });
+    expect(envelope.v).toBe(1);
+    expect(typeof envelope.iv).toBe('string');
+    expect(typeof envelope.tag).toBe('string');
+    expect(typeof envelope.ct).toBe('string');
+    // 12-byte IV (base64 16 chars incl padding) + 16-byte tag (base64 24 chars).
+    expect(Buffer.from(envelope.iv, 'base64').length).toBe(12);
+    expect(Buffer.from(envelope.tag, 'base64').length).toBe(16);
   });
 
-  it('logs a warning that wrapped_dek=NULL must be completed by 03-04', async () => {
+  it('logs an info message that wrapped_dek was set (plan 03-04)', async () => {
     await createTenantMain(
       [
         '--client-id=c',
@@ -92,9 +117,9 @@ describe('plan 03-01 — bin/create-tenant.mjs', () => {
       ],
       deps
     );
-    expect(warnings.length).toBeGreaterThan(0);
-    expect(warnings[0]).toMatch(/03-04/);
-    expect(warnings[0]).toMatch(/wrapped_dek=NULL/i);
+    expect(messages.length).toBeGreaterThan(0);
+    expect(messages[0]).toMatch(/wrapped_dek set/i);
+    expect(messages[0]).toMatch(/03-04/);
   });
 
   it('rejects duplicate --id with tenant_already_exists', async () => {
@@ -154,5 +179,58 @@ describe('plan 03-01 — bin/create-tenant.mjs', () => {
     );
     expect(r.rows[0]!.slug).toBe('example-corp');
     expect(r.rows[0]!.cloud_type).toBe('china');
+  });
+
+  it('wrapped_dek contains no plaintext DEK bytes (SC#5 baseline)', async () => {
+    // Use an injected generateTenantDek that captures the DEK so the test can
+    // assert the persisted envelope does not leak its bytes.
+    let capturedDek: Buffer | null = null;
+    const captureDeps = {
+      ...deps,
+      generateTenantDek: (kek: Buffer) => {
+        const dek = crypto.randomBytes(32);
+        // Inline wrap using Node crypto (avoids importing envelope.ts into
+        // the test — this path mirrors envelope.ts's encrypt exactly).
+        const iv = crypto.randomBytes(12);
+        const cipher = crypto.createCipheriv('aes-256-gcm', kek, iv);
+        const ct = Buffer.concat([cipher.update(dek), cipher.final()]);
+        const tag = cipher.getAuthTag();
+        capturedDek = dek;
+        return {
+          dek,
+          wrappedDek: {
+            v: 1,
+            iv: iv.toString('base64'),
+            tag: tag.toString('base64'),
+            ct: ct.toString('base64'),
+          },
+        };
+      },
+    };
+
+    const id = '66666666-6666-4666-8666-666666666666';
+    await createTenantMain(
+      [`--id=${id}`, '--client-id=c', '--tenant-id=t', '--mode=delegated'],
+      captureDeps
+    );
+
+    const r = await pool.query<{ wrapped_dek: unknown }>(
+      `SELECT wrapped_dek FROM tenants WHERE id = $1`,
+      [id]
+    );
+    const stored =
+      typeof r.rows[0]!.wrapped_dek === 'string'
+        ? (r.rows[0]!.wrapped_dek as string)
+        : JSON.stringify(r.rows[0]!.wrapped_dek);
+
+    expect(capturedDek).not.toBeNull();
+    const dek = capturedDek as unknown as Buffer;
+    // Scan 4-byte windows: no slice of the plaintext DEK should appear in
+    // either the base64 or the hex representation of the stored envelope.
+    for (let i = 0; i <= dek.length - 4; i++) {
+      const slice = dek.subarray(i, i + 4);
+      expect(stored).not.toContain(slice.toString('base64').replace(/=/g, ''));
+      expect(stored).not.toContain(slice.toString('hex'));
+    }
   });
 });

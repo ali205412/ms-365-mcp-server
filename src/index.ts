@@ -257,7 +257,15 @@ async function main(): Promise<void> {
     // region:phase3-redis       (filled by 03-02 Task 2)
     // endregion:phase3-redis
 
-    // region:phase3-kek         (filled by 03-04 Task 2)
+    // region:phase3-kek         (filled by 03-04 Task 2 — THIS plan)
+    // Plan 03-04: KEK bootstrap — load once at startup so production config
+    // errors (missing MS365_MCP_KEK + MS365_MCP_KEYVAULT_URL) surface before
+    // any tenant work. The unwrapped KEK is consumed by TenantPool (03-05) to
+    // unwrap each tenant's wrapped_dek envelope on demand.
+    if (isHttpMode) {
+      const { loadKek } = await import('./lib/crypto/kek.js');
+      await loadKek();
+    }
     // endregion:phase3-kek
 
     // region:phase3-pkce-store  (filled by 03-03 Task 2)

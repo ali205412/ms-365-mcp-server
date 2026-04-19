@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Operator CLI: insert a tenant row (plan 03-01).
+ * Operator CLI: insert a tenant row with a fresh per-tenant DEK (plan 03-04).
  *
  * Usage:
  *   node bin/create-tenant.mjs \
@@ -11,17 +11,19 @@
  *     [--slug=<text>] \
  *     [--cloud-type=global|china]
  *
- * Plan 03-01 stores `wrapped_dek=NULL` — DEK generation lives in 03-04 and
- * must be applied before this tenant can serve requests. A warning is
- * logged on every insert so operators see the gap.
+ * The KEK is loaded via src/lib/crypto/kek.ts (MS365_MCP_KEK env or Key Vault
+ * secret `mcp-kek`). A fresh 32-byte DEK is generated and wrapped with the
+ * KEK; the resulting envelope is stored in `tenants.wrapped_dek` JSONB.
+ *
+ * Plan 03-04 replaced the 03-01 `wrapped_dek=NULL` placeholder — inserted
+ * tenants can now serve requests immediately (once 03-05 lands).
  *
  * Idempotency: duplicate `--id=<guid>` rejects with `tenant_already_exists`
- * rather than silently swallowing the error. Operators can re-run with a
- * different id or use the 03-04 mint flow.
+ * rather than silently swallowing the error.
  *
- * Module design: exported `main(argv)` for programmatic test invocation;
- * entry-point check runs main() only when invoked as a script (mirrors
- * bin/migrate-tokens.mjs:243-263).
+ * Module design: exported `main(argv, deps?)` for programmatic test
+ * invocation; entry-point check runs main() only when invoked as a script
+ * (mirrors bin/migrate-tokens.mjs:243-263).
  */
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -40,13 +42,43 @@ function getFlag(argv, name) {
 }
 
 /**
+ * Lazy-load the crypto modules. Tests (vitest + tsx) resolve the TS source;
+ * production invocation (`node bin/...`) resolves compiled dist.
+ */
+async function loadCrypto() {
+  try {
+    const kek = await import('../dist/lib/crypto/kek.js');
+    const dek = await import('../dist/lib/crypto/dek.js');
+    return { loadKek: kek.loadKek, generateTenantDek: dek.generateTenantDek };
+  } catch {
+    try {
+      const kek = await import('../src/lib/crypto/kek.ts');
+      const dek = await import('../src/lib/crypto/dek.ts');
+      return { loadKek: kek.loadKek, generateTenantDek: dek.generateTenantDek };
+    } catch {
+      throw new Error(
+        'crypto modules not found — run `npm run build` before invoking bin/create-tenant.mjs'
+      );
+    }
+  }
+}
+
+/**
  * Programmatic entry point. Accepts an optional pg.Pool (tests inject
  * pg-mem). Production uses the singleton from src/lib/postgres.ts (via the
  * compiled dist/ output).
  *
+ * Tests may also inject a fixed `kek` Buffer or a `generateTenantDek`
+ * factory to avoid touching env vars or the live KEK loader.
+ *
  * @param {string[]} argv
- * @param {{ pool?: import('pg').Pool, logger?: { warn: (msg: string) => void } }} [deps]
- * @returns {Promise<{ id: string }>}
+ * @param {{
+ *   pool?: import('pg').Pool,
+ *   logger?: { warn?: (msg: string) => void, info?: (msg: string) => void },
+ *   kek?: Buffer,
+ *   generateTenantDek?: (kek: Buffer) => { dek: Buffer, wrappedDek: unknown },
+ * }} [deps]
+ * @returns {Promise<{ id: string, wrappedDek: 'set' }>}
  */
 export async function main(argv = process.argv.slice(2), deps = {}) {
   const id = getFlag(argv, 'id') ?? randomUUID();
@@ -63,31 +95,40 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     throw new Error(`invalid --mode=${mode}; must be one of ${[...VALID_MODES].join(',')}`);
   }
   if (!VALID_CLOUDS.has(cloudType)) {
-    throw new Error(`invalid --cloud-type=${cloudType}; must be one of ${[...VALID_CLOUDS].join(',')}`);
+    throw new Error(
+      `invalid --cloud-type=${cloudType}; must be one of ${[...VALID_CLOUDS].join(',')}`
+    );
   }
 
   const pool = deps.pool ?? (await getProdPool());
-  const warn = deps.logger?.warn ?? ((m) => process.stderr.write(`${m}\n`));
+  const info = deps.logger?.info ?? ((m) => process.stderr.write(`${m}\n`));
+
+  // Resolve the DEK factory + KEK. Tests can inject `kek` directly to avoid
+  // reading env vars; production calls loadKek() once per invocation.
+  const cryptoMod = deps.generateTenantDek && deps.kek ? null : await loadCrypto();
+  const generateFn = deps.generateTenantDek ?? cryptoMod.generateTenantDek;
+  const kek = deps.kek ?? (await cryptoMod.loadKek());
 
   // Duplicate id check is deliberate (not a plain INSERT ... ON CONFLICT):
   // operators creating tenants should see a clear failure rather than a
-  // silent overwrite. 03-04's mint flow uses UPDATE for the DEK wrap.
+  // silent overwrite. The rotate flow uses UPDATE, not INSERT.
   const existing = await pool.query('SELECT id FROM tenants WHERE id = $1', [id]);
   if (existing.rows.length > 0) {
     throw new Error(`tenant_already_exists: ${id}`);
   }
 
+  // Mint the per-tenant DEK and wrap it with the KEK.
+  const { wrappedDek } = generateFn(kek);
+
   await pool.query(
     `INSERT INTO tenants (id, mode, client_id, tenant_id, cloud_type, slug, wrapped_dek)
-       VALUES ($1, $2, $3, $4, $5, $6, NULL)`,
-    [id, mode, clientId, tenantId, cloudType, slug]
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
+    [id, mode, clientId, tenantId, cloudType, slug, JSON.stringify(wrappedDek)]
   );
 
-  warn(
-    `Tenant ${id} created with wrapped_dek=NULL — plan 03-04 must be applied before this tenant can serve requests`
-  );
+  info(`Tenant ${id} created with wrapped_dek set (plan 03-04)`);
 
-  return { id };
+  return { id, wrappedDek: 'set' };
 }
 
 /**
