@@ -1,3 +1,25 @@
+/**
+ * Microsoft auth middleware + helpers (plan 03-06 + 03-07, AUTH-03, SECUR-02).
+ *
+ * Plan 03-07 DELETED the v1 refresh-token custom header read path entirely.
+ * Refresh tokens now live in src/lib/session-store.ts (opaque server-side,
+ * envelope-encrypted in Redis per-tenant). The deprecated legacy bearer
+ * middleware that read the refresh-token from a custom HTTP header is gone.
+ *
+ * Graph 401 refresh path (src/graph-client.ts) consults SessionStore using
+ * sha256(accessToken) to look up the refresh token — no custom header ever
+ * reaches a middleware or handler.
+ *
+ * Breaking change for v1 HTTP-mode users: see docs/migration-v1-to-v2.md.
+ *
+ * Remaining surface:
+ *   - createBearerMiddleware (03-06): decode-only JWT tid-routing middleware
+ *   - exchangeCodeForToken: POST to Microsoft's /token endpoint (used by the
+ *     stdio-mode OAuth callback and legacy /auth/callback handler)
+ *   - refreshAccessToken: POST grant_type=refresh_token (kept for stdio-mode
+ *     AuthManager fallback; HTTP-mode uses MSAL.acquireTokenByRefreshToken
+ *     via the pool + session store)
+ */
 import { Request, Response, NextFunction } from 'express';
 import { decodeJwt } from 'jose';
 import logger from '../logger.js';
@@ -82,46 +104,12 @@ export function createBearerMiddleware(): (
 }
 
 /**
- * @deprecated — replaced by `createBearerMiddleware` (AUTH-03, plan 03-06).
- * This export is retained temporarily so 03-07 can delete it in one commit
- * along with the refresh-token-header migration (SECUR-02). Use
- * `createBearerMiddleware()` in new code.
+ * Exchange authorization code for access token.
  *
- * Microsoft Bearer Token Auth Middleware validates that the request has a
- * valid Microsoft access token. The token is passed in the Authorization
- * header as a Bearer token.
- */
-export const microsoftBearerTokenAuthMiddleware = (
-  req: Request & { microsoftAuth?: { accessToken: string; refreshToken: string } },
-  res: Response,
-  next: NextFunction
-): void => {
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Missing or invalid access token' });
-    return;
-  }
-
-  const accessToken = authHeader.substring(7);
-
-  // For Microsoft Graph, we don't validate the token here - we'll let the API calls fail if it's invalid
-  // and handle token refresh in the GraphClient
-
-  // Extract refresh token from a custom header (if provided)
-  const refreshToken = (req.headers['x-microsoft-refresh-token'] as string) || '';
-
-  // Store tokens in request for later use
-  req.microsoftAuth = {
-    accessToken,
-    refreshToken,
-  };
-
-  next();
-};
-
-/**
- * Exchange authorization code for access token
+ * Kept for the stdio-mode OAuth callback + legacy /auth/callback handler
+ * (v1 compatibility). HTTP-mode /token now goes through
+ * createTenantTokenHandler → tenantPool.acquire → MSAL.acquireTokenByCode
+ * (two-leg PKCE), not this helper.
  */
 export async function exchangeCodeForToken(
   code: string,
@@ -174,7 +162,10 @@ export async function exchangeCodeForToken(
 }
 
 /**
- * Refresh an access token
+ * Refresh an access token via the Microsoft /token endpoint. Retained for
+ * stdio-mode compatibility only. HTTP-mode refreshes flow through
+ * MSAL.acquireTokenByRefreshToken via the TenantPool + SessionStore (see
+ * src/graph-client.ts refreshSessionAndRetry).
  */
 export async function refreshAccessToken(
   refreshToken: string,

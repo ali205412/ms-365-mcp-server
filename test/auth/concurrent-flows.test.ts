@@ -47,9 +47,7 @@ function makeTenant(overrides: Partial<TenantRow> = {}): TenantRow {
     client_secret_resolved: overrides.client_secret_resolved ?? 'resolved-secret',
     tenant_id: overrides.tenant_id ?? 'tenant-A',
     cloud_type: overrides.cloud_type ?? 'global',
-    redirect_uri_allowlist: overrides.redirect_uri_allowlist ?? [
-      'http://localhost:3000/callback',
-    ],
+    redirect_uri_allowlist: overrides.redirect_uri_allowlist ?? ['http://localhost:3000/callback'],
     cors_origins: overrides.cors_origins ?? [],
     allowed_scopes: overrides.allowed_scopes ?? ['User.Read'],
     enabled_tools: overrides.enabled_tools ?? null,
@@ -110,6 +108,9 @@ describe('Concurrent flows integration (AUTH-05 / SC#3)', () => {
     }),
     buildCachePlugin: vi.fn(),
     evict: vi.fn(),
+    // Plan 03-07: /token handler uses the per-tenant DEK to build its
+    // SessionStore. Deterministic all-zero DEK for tests.
+    getDekForTenant: vi.fn(() => Buffer.alloc(32, 7)),
   };
 
   beforeEach(async () => {
@@ -117,12 +118,9 @@ describe('Concurrent flows integration (AUTH-05 / SC#3)', () => {
     capturedFlows.length = 0;
     capturedTenants.length = 0;
 
-    const { createAuthorizeHandler, createTenantTokenHandler } = await import(
-      '../../src/server.js'
-    );
-    const { createAuthSelectorMiddleware } = await import(
-      '../../src/lib/auth-selector.js'
-    );
+    const { createAuthorizeHandler, createTenantTokenHandler } =
+      await import('../../src/server.js');
+    const { createAuthSelectorMiddleware } = await import('../../src/lib/auth-selector.js');
 
     const app = express();
     app.use(express.json());
@@ -148,11 +146,7 @@ describe('Concurrent flows integration (AUTH-05 / SC#3)', () => {
     };
 
     // Mount delegated OAuth routes at /t/:tenantId/authorize + /t/:tenantId/token
-    app.get(
-      '/t/:tenantId/authorize',
-      loadTenantByParam,
-      createAuthorizeHandler({ pkceStore })
-    );
+    app.get('/t/:tenantId/authorize', loadTenantByParam, createAuthorizeHandler({ pkceStore }));
     app.post(
       '/t/:tenantId/token',
       loadTenantByParam,
@@ -161,6 +155,7 @@ describe('Concurrent flows integration (AUTH-05 / SC#3)', () => {
         tenantPool: mockTenantPool as unknown as Parameters<
           typeof createTenantTokenHandler
         >[0]['tenantPool'],
+        redis,
       })
     );
 
@@ -205,10 +200,7 @@ describe('Concurrent flows integration (AUTH-05 / SC#3)', () => {
   it('runs delegated + app-only + bearer concurrently on one server instance (SC#3)', async () => {
     // ── (a) delegated OAuth round-trip ─────────────────────────────────
     const clientVerifier = crypto.randomBytes(32).toString('base64url');
-    const clientChallenge = crypto
-      .createHash('sha256')
-      .update(clientVerifier)
-      .digest('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
 
     const authorizeParams = new URLSearchParams({
       redirect_uri: 'http://localhost:3000/callback',
@@ -219,10 +211,9 @@ describe('Concurrent flows integration (AUTH-05 / SC#3)', () => {
     });
 
     const delegatedPromise = (async () => {
-      const authorizeRes = await fetch(
-        `${baseUrl}/t/${tenantA.id}/authorize?${authorizeParams}`,
-        { redirect: 'manual' }
-      );
+      const authorizeRes = await fetch(`${baseUrl}/t/${tenantA.id}/authorize?${authorizeParams}`, {
+        redirect: 'manual',
+      });
       expect(authorizeRes.status).toBe(302);
 
       const tokenRes = await fetch(`${baseUrl}/t/${tenantA.id}/token`, {
@@ -307,14 +298,11 @@ describe('Concurrent flows integration (AUTH-05 / SC#3)', () => {
   });
 
   it('unknown tenant → 404', async () => {
-    const res = await fetch(
-      `${baseUrl}/t/UNKNOWN-UNKNOWN-UNKNOWN-UNKNOWN-UNKNOWN/mcp`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', method: 'test', id: 1 }),
-      }
-    );
+    const res = await fetch(`${baseUrl}/t/UNKNOWN-UNKNOWN-UNKNOWN-UNKNOWN-UNKNOWN/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'test', id: 1 }),
+    });
     expect(res.status).toBe(404);
   });
 });

@@ -1,10 +1,12 @@
 /**
  * Server-side refresh-token session store (plan 03-07, SECUR-02).
  *
- * Replaces v1's `x-microsoft-refresh-token` custom header read path. Refresh
- * tokens live in Redis under `mcp:session:{tenantId}:{sha256(accessToken)}`,
- * envelope-encrypted with the per-tenant DEK (same DEK the MSAL cache plugin
- * uses — supplied by TenantPool.getDekForTenant or plugin caller).
+ * Replaces v1's custom-header refresh-token read path (see
+ * docs/migration-v1-to-v2.md for the deleted header name + migration notes).
+ * Refresh tokens live in Redis under
+ * `mcp:session:{tenantId}:{sha256(accessToken)}`, envelope-encrypted with
+ * the per-tenant DEK (same DEK the MSAL cache plugin uses — supplied by
+ * TenantPool.getDekForTenant or plugin caller).
  *
  * Why sha256(accessToken) as the key? The access token is opaque to our
  * server (issued by Microsoft). Hashing it prevents the session key itself
