@@ -718,6 +718,32 @@ class AuthManager {
   }
 }
 
+// ── Phase 3 plan 03-05: per-tenant factory seam ─────────────────────────────
+// v1 AuthManager is single-tenant and binds MSAL state to process-global
+// secrets. Phase 3 rewires HTTP-mode to a TenantPool — this thin factory
+// exposes a shape per-request callers (03-06 flows, 03-08 routing) use to
+// acquire MSAL clients through the pool rather than through the stdio
+// AuthManager.create() path. Stdio mode keeps AuthManager.create() for
+// device-code + file-backed cache (D-04).
+//
+// This function is deliberately minimal — 03-06 is where per-flow
+// acquireToken orchestration lives. Type imports are intentionally typeof
+// references so importing this file does not pull tenant-pool/tenant-row
+// (and their Azure/ioredis chain) into stdio mode bootstrap.
+
+/**
+ * Factory returning a thin handle that couples a TenantRow with a
+ * TenantPool. Callers invoke `handle.pool.acquire(handle.tenant)` to obtain
+ * the MSAL client for this tenant. Returned handle is trivially copyable —
+ * it holds references only, no lifecycle state.
+ */
+export function forTenant<TPool extends { acquire: (t: TTenant) => unknown }, TTenant>(
+  tenant: TTenant,
+  pool: TPool
+): { pool: TPool; tenant: TTenant } {
+  return { pool, tenant };
+}
+
 export default AuthManager;
 export {
   buildScopesFromEndpoints,

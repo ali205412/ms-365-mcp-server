@@ -38,7 +38,6 @@ function makeTenant(kek: Buffer, overrides: Partial<TenantRow> = {}): TenantRow 
     cors_origins: [],
     allowed_scopes: [],
     enabled_tools: null,
-    wrapped_dek: wrappedDek,
     slug: null,
     disabled_at: null,
     created_at: new Date(),
