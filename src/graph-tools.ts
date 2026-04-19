@@ -831,6 +831,114 @@ export function registerGraphTools(
     logger.info('Skipping graph-batch tool in read-only mode (can contain write sub-requests)');
   }
 
+  // Register graph-upload-large-file tool (Plan 02-06 / MWARE-05 — resumable
+  // upload). Skipped in read-only mode because upload is always a write
+  // operation. The helper (src/lib/upload-session.ts) owns the 320 KiB chunk
+  // alignment, nextExpectedRanges resume protocol, and T-02-06d no-auth
+  // chunk PUT contract. This tool only shapes the MCP surface.
+  //
+  // MAX_CHUNK_SIZE is hardcoded (60 MiB) rather than imported at schema-
+  // build time to avoid pulling the upload helper module into the graph-
+  // tools module graph for deployments that never invoke the upload tool.
+  const MAX_CHUNK_SIZE_BYTES = 60 * 1024 * 1024;
+  const shouldRegisterUpload =
+    !readOnly && (!enabledToolsRegex || enabledToolsRegex.test('graph-upload-large-file'));
+  if (shouldRegisterUpload) {
+    try {
+      server.tool(
+        'graph-upload-large-file',
+        'Upload a large file (base64-encoded content) to OneDrive / SharePoint via a resumable upload session. ' +
+          'Chunks are 320 KiB-aligned (default 3.125 MB / 3,276,800 bytes); mid-stream 5xx and 416 errors auto-resume ' +
+          'from the authoritative nextExpectedRanges offset rather than restarting from byte 0. ' +
+          'Max chunk size is 60 MiB per Microsoft Graph. Returns the created DriveItem envelope.',
+        {
+          driveItemPath: z
+            .string()
+            .describe(
+              'Path template for the drive item, e.g., "/me/drive/root:/path/to/file.bin" — ' +
+                'helper appends ":/createUploadSession". Must start with "/".'
+            ),
+          contentBase64: z
+            .string()
+            .describe(
+              'File content base64-encoded. Maximum size bounded by MS365_MCP_BODY_PARSER_LIMIT ' +
+                '(default 60 MiB).'
+            ),
+          chunkSize: z
+            .number()
+            .int()
+            .positive()
+            .max(MAX_CHUNK_SIZE_BYTES)
+            .optional()
+            .describe(
+              'Chunk size in bytes (default 3,276,800 = 3.125 MB). Aligned DOWN to 320 KiB multiple; ' +
+                'clamped to 60 MiB.'
+            ),
+          conflictBehavior: z
+            .enum(['rename', 'replace', 'fail'])
+            .optional()
+            .describe(
+              'Graph @microsoft.graph.conflictBehavior (default "rename"). "replace" overwrites; ' +
+                '"fail" errors if the name already exists.'
+            ),
+          fileName: z.string().optional().describe('Override the uploaded file name.'),
+        },
+        {
+          title: 'graph-upload-large-file',
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: true,
+        },
+        async ({ driveItemPath, contentBase64, chunkSize, conflictBehavior, fileName }) => {
+          try {
+            const { UploadSessionHelper } = await import('./lib/upload-session.js');
+            const buffer = Buffer.from(contentBase64, 'base64');
+            const helper = new UploadSessionHelper(graphClient);
+            const driveItem = await helper.uploadLargeFile(driveItemPath, buffer, {
+              chunkSize,
+              conflictBehavior,
+              fileName,
+            });
+            return {
+              content: [{ type: 'text', text: JSON.stringify(driveItem) }],
+            };
+          } catch (error) {
+            logger.error(`graph-upload-large-file failed: ${(error as Error).message}`);
+            // Project typed GraphError fields to a JSON-safe shape so AI
+            // clients see structured context (code / statusCode / requestId)
+            // rather than an empty Error envelope from JSON.stringify.
+            const err = error as Error & {
+              code?: string;
+              statusCode?: number;
+              requestId?: string;
+              clientRequestId?: string;
+              date?: string;
+            };
+            const payload: Record<string, unknown> = {
+              error: `graph-upload-large-file failed: ${err.message}`,
+            };
+            if (typeof err.code === 'string') payload.code = err.code;
+            if (typeof err.statusCode === 'number') payload.statusCode = err.statusCode;
+            if (typeof err.requestId === 'string') payload.requestId = err.requestId;
+            if (typeof err.clientRequestId === 'string')
+              payload.clientRequestId = err.clientRequestId;
+            if (typeof err.date === 'string') payload.date = err.date;
+            return {
+              content: [{ type: 'text', text: JSON.stringify(payload) }],
+              isError: true,
+            };
+          }
+        }
+      );
+      registeredCount++;
+    } catch (error) {
+      logger.error(`Failed to register tool graph-upload-large-file: ${(error as Error).message}`);
+      failedCount++;
+    }
+  } else if (readOnly) {
+    logger.info('Skipping graph-upload-large-file tool in read-only mode (upload is a write)');
+  }
+
   // Layer 3 (list-accounts tool) is registered by registerAuthTools in auth-tools.ts.
   // It is the canonical owner of account discovery — no duplicate registration here.
 

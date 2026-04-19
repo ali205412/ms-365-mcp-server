@@ -542,8 +542,18 @@ class MicrosoftGraphServer {
         requestContext.run({ requestId: req.id as string, tenantId: null }, next);
       });
 
-      app.use(express.json());
-      app.use(express.urlencoded({ extended: true }));
+      // Body-parser limit raised for MWARE-05 large uploads (plan 02-06). MCP
+      // tool payloads (e.g., base64-encoded file content routed through the
+      // graph-upload-large-file tool) can approach the chunk ceiling (60 MiB
+      // per D-08). Default '60mb' is safe for single-tenant; Phase 3 may add
+      // per-tenant overrides.
+      //
+      // express default is 100 KB for JSON and 100 KB for urlencoded — far
+      // below the 60 MiB upload ceiling, so without this raise large-file
+      // uploads over HTTP transport would 413 before reaching the tool.
+      const bodyParserLimit = process.env.MS365_MCP_BODY_PARSER_LIMIT || '60mb';
+      app.use(express.json({ limit: bodyParserLimit }));
+      app.use(express.urlencoded({ extended: true, limit: bodyParserLimit }));
 
       // Public URL resolution for browser-facing OAuth endpoints.
       //
