@@ -20,12 +20,14 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const loggerMock = {
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  debug: vi.fn(),
-};
+const { loggerMock } = vi.hoisted(() => ({
+  loggerMock: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
 
 vi.mock('../../src/logger.js', () => ({
   default: loggerMock,
