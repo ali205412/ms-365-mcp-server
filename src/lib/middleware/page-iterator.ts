@@ -55,6 +55,15 @@ export interface GraphRequestOptionsLike {
 export interface PageIteratorOptions {
   /** Override the default maxPages (20) or the env-configured value. */
   maxPages?: number;
+  /**
+   * Optional pre-fetched first page JSON. When supplied, the iterator does
+   * NOT issue its own initial `client.graphRequest(initialPath)` call —
+   * instead it yields this value as page 0 and then follows `@odata.nextLink`
+   * from there. Used by `src/graph-tools.ts` executeGraphTool so the initial
+   * fetch already made by the tool handler is reused, avoiding a duplicate
+   * network round-trip when `params.fetchAllPages === true`.
+   */
+  seedFirstPage?: Record<string, unknown>;
 }
 
 export interface PageResult {
@@ -128,9 +137,27 @@ export async function* pageIterator(
   opts: PageIteratorOptions = {}
 ): AsyncGenerator<PageResult, void, void> {
   const maxPages = resolveMaxPages(opts);
-  let currentPath = initialPath;
+  const seed = opts.seedFirstPage;
+  let currentPath: string | undefined = initialPath;
   let currentOptions: GraphRequestOptionsLike = options;
   let pageIndex = 0;
+
+  // If a seed was provided, yield it as page 0 and jump to its nextLink
+  // without issuing a duplicate request.
+  if (seed !== undefined) {
+    yield { json: seed, pageIndex: 0 };
+    pageIndex = 1;
+    const seedNextLink = seed['@odata.nextLink'];
+    if (typeof seedNextLink !== 'string' || seedNextLink.length === 0) return;
+    const url = new URL(seedNextLink);
+    const nextPath = url.pathname.replace('/v1.0', '');
+    const nextQueryParams: Record<string, string> = {};
+    for (const [k, v] of url.searchParams.entries()) {
+      nextQueryParams[k] = v;
+    }
+    currentPath = nextPath;
+    currentOptions = { ...options, queryParams: nextQueryParams };
+  }
 
   while (currentPath) {
     // Stop at maxPages + 1 iterations — one extra so fetchAllPages can detect
@@ -190,6 +217,7 @@ export async function fetchAllPages(
 
   for await (const { json, pageIndex } of pageIterator(initialPath, options, client, {
     maxPages,
+    seedFirstPage: opts.seedFirstPage,
   })) {
     if (pageIndex === 0) {
       // Capture non-value fields from the first page (e.g., @odata.count,

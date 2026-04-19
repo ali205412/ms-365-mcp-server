@@ -399,65 +399,40 @@ async function executeGraphTool(
 
     let response = await graphClient.graphRequest(path, options);
 
-    const fetchAllPages = params.fetchAllPages === true;
-    if (fetchAllPages && response?.content?.[0]?.text) {
-      try {
-        let combinedResponse = JSON.parse(response.content[0].text);
-        let allItems = combinedResponse.value || [];
-        let nextLink = combinedResponse['@odata.nextLink'];
-        let pageCount = 1;
-        const maxPages = 100;
-        const maxItems = 10_000;
-
-        while (nextLink && pageCount < maxPages && allItems.length < maxItems) {
-          logger.info(`Fetching page ${pageCount + 1} from: ${nextLink}`);
-
-          const url = new URL(nextLink);
-          const nextPath = url.pathname.replace('/v1.0', '');
-          const nextOptions = { ...options };
-
-          const nextQueryParams: Record<string, string> = {};
-          for (const [key, value] of url.searchParams.entries()) {
-            nextQueryParams[key] = value;
-          }
-          nextOptions.queryParams = nextQueryParams;
-
-          const nextResponse = await graphClient.graphRequest(nextPath, nextOptions);
-          if (nextResponse?.content?.[0]?.text) {
-            const nextJsonResponse = JSON.parse(nextResponse.content[0].text);
-            if (nextJsonResponse.value && Array.isArray(nextJsonResponse.value)) {
-              allItems = allItems.concat(nextJsonResponse.value);
-            }
-            nextLink = nextJsonResponse['@odata.nextLink'];
-            pageCount++;
-          } else {
-            break;
-          }
+    // Plan 02-04 / MWARE-04: delegate pagination to src/lib/middleware/page-iterator.ts.
+    // The v1 inline loop at this site silently swallowed mid-stream errors
+    // (CONCERNS.md "fetchAllPages swallows pagination errors"); the new
+    // buffered wrapper throws on any mid-stream failure so the outer
+    // executeGraphTool catch-block surfaces them as typed `isError: true`
+    // MCP responses. D-06 caps at 20 pages by default (overridable via
+    // MS365_MCP_MAX_PAGES); _truncated + _nextLink surface in the envelope
+    // when the cap is hit. Dynamic import keeps page-iterator out of the
+    // module graph for callers that never opt-in to pagination.
+    const shouldFetchAllPages = params.fetchAllPages === true;
+    if (shouldFetchAllPages && response?.content?.[0]?.text) {
+      const { fetchAllPages } = await import('./lib/middleware/page-iterator.js');
+      // Seed the iterator with the already-fetched first page so we avoid
+      // a duplicate graphRequest call (preserves v1's "1 initial + N nextLinks"
+      // call-count contract that existing fetchAllPages tests rely on).
+      const firstPage = JSON.parse(response.content[0].text);
+      const combined = await fetchAllPages(path, options, graphClient, {
+        seedFirstPage: firstPage,
+      });
+      firstPage.value = combined.value;
+      if (combined._truncated) {
+        firstPage._truncated = true;
+        if (combined._nextLink !== undefined) {
+          firstPage._nextLink = combined._nextLink;
         }
-
-        if (pageCount >= maxPages) {
-          logger.warn(`Reached maximum page limit (${maxPages}) for pagination`);
-        }
-        if (allItems.length >= maxItems) {
-          logger.warn(
-            `Reached maximum item limit (${maxItems}) for pagination — truncated at ${allItems.length} items`
-          );
-        }
-
-        combinedResponse.value = allItems;
-        if (combinedResponse['@odata.count']) {
-          combinedResponse['@odata.count'] = allItems.length;
-        }
-        delete combinedResponse['@odata.nextLink'];
-
-        response.content[0].text = JSON.stringify(combinedResponse);
-
-        logger.info(
-          `Pagination complete: collected ${allItems.length} items across ${pageCount} pages`
-        );
-      } catch (e) {
-        logger.error(`Error during pagination: ${e}`);
       }
+      if (firstPage['@odata.count'] !== undefined) {
+        firstPage['@odata.count'] = combined.value.length;
+      }
+      delete firstPage['@odata.nextLink'];
+      response.content[0].text = JSON.stringify(firstPage);
+      logger.info(
+        `Pagination via page-iterator: items=${combined.value.length} truncated=${Boolean(combined._truncated)}`
+      );
     }
 
     if (response?.content?.[0]?.text) {
@@ -575,8 +550,9 @@ export function registerGraphTools(
       paramSchema['fetchAllPages'] = z
         .boolean()
         .describe(
-          'Follow @odata.nextLink and merge up to 100 pages into one response. ' +
-            'Can return enormous payloads—only when the user explicitly needs a full export. ' +
+          'Follow @odata.nextLink across up to 20 pages (configurable via MS365_MCP_MAX_PAGES). ' +
+            'When the cap is reached, the response includes `_truncated: true` and `_nextLink` for continuation. ' +
+            'Errors on any page propagate — no silent truncation. ' +
             'Prefer a small $top first, then paginate or narrow with $filter/$search.'
         )
         .optional();
