@@ -126,16 +126,17 @@ function buildTenantProxyOptions(tenant: TenantRow): ProxyOptions {
       revocationUrl: `${authority}/oauth2/v2.0/logout`,
     },
     verifyAccessToken: async (token: string): Promise<AuthInfo> => {
-      // Decode-only verification for Phase 3 — Graph validates signature on
-      // every Graph call, so per-request JWKS lookups would double latency
-      // for no added security. We decode scopes from scp claim (Pitfall 9
-      // fix) and return the raw token.
-      const response = await fetch(`${cloudEndpoints.graphApi}/v1.0/me`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!response.ok) {
-        throw new Error(`Token verification failed: ${response.status}`);
-      }
+      // WR-08 fix: actually be decode-only as the comment says. The previous
+      // implementation called fetch /me on every verification, which (a)
+      // doubled per-request latency by adding a Graph round-trip on top of
+      // the actual tool call, (b) failed open on transient Graph 5xx
+      // because the throw 401-ed all in-flight verifications, and (c)
+      // logged the userPrincipalName at info level (PII per D-01) in the
+      // legacy variant. Microsoft Graph validates the signature on the
+      // ACTUAL tool call (Pitfall 5 in 03-RESEARCH.md), so the /me probe
+      // added no security — only latency and PII risk. We decode the scp
+      // claim (Pitfall 9 fix) and trust Graph to fail the next call if the
+      // signature is invalid.
       return {
         token,
         clientId: tenant.client_id,
