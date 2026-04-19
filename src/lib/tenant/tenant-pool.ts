@@ -87,10 +87,25 @@ export class TenantPool {
    * repeated acquires for the same tenantId return the SAME client instance
    * until eviction.
    *
+   * @throws Error when tenant.disabled_at is set (WR-02 — direct callers
+   *   that bypass loadTenant must not get a working MSAL client for a
+   *   disabled tenant; the disable-cascade convention says wrapped_dek is
+   *   nulled when disabled_at is set, but database constraints don't
+   *   enforce the pairing — this guard is the runtime invariant.)
    * @throws Error when tenant.wrapped_dek is null (disabled or unprovisioned)
    * @throws Error when tenant.mode is 'app-only' without client_secret_resolved
    */
   async acquire(tenant: TenantRow): Promise<MsalClient | null> {
+    // WR-02 fix: explicit disabled_at gate. loadTenant filters disabled rows
+    // at SELECT time, but tests, CLIs, and future admin flows can construct
+    // a TenantRow without that path. Refuse here too rather than relying on
+    // the convention that disabled tenants always have wrapped_dek = NULL.
+    if (tenant.disabled_at) {
+      throw new Error(
+        `Tenant ${tenant.id} is disabled (disabled_at=${tenant.disabled_at.toISOString()})`
+      );
+    }
+
     const existing = this.pool.get(tenant.id);
     if (existing) return existing.client;
 
