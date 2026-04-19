@@ -218,3 +218,108 @@ describe('RetryHandler', () => {
     expect(next3).toHaveBeenCalledTimes(2);
   });
 });
+
+/**
+ * RetryHandler ↔ ODataErrorHandler composition tests.
+ *
+ * These tests exercise the real pipeline: [RetryHandler, ODataErrorHandler]
+ * composed via composePipeline with a terminal handler that returns canned
+ * responses. They prove the chain contract — ODataErrorHandler throws typed
+ * GraphError subclasses on non-2xx, RetryHandler catches them by class and
+ * retries retryable statuses (via retryAfterMs on GraphThrottleError, or the
+ * full-jitter fallback). Non-retryable 4xx (e.g., 400 → GraphValidationError)
+ * propagate through RetryHandler unchanged on the first attempt.
+ */
+describe('RetryHandler ↔ ODataErrorHandler integration', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  async function run(
+    responses: Array<{ status: number; body?: unknown; headers?: Record<string, string> }>
+  ): Promise<{
+    result?: Response;
+    error?: unknown;
+    terminalCalls: number;
+    finalRetryCount?: number;
+  }> {
+    const { composePipeline } = await import('../src/lib/middleware/pipeline.js');
+    const { RetryHandler } = await import('../src/lib/middleware/retry.js');
+    const { ODataErrorHandler } = await import('../src/lib/middleware/odata-error.js');
+    let callIdx = 0;
+    const terminal = vi.fn().mockImplementation(async () => {
+      const r = responses[Math.min(callIdx, responses.length - 1)];
+      callIdx++;
+      return new Response(JSON.stringify(r.body ?? {}), {
+        status: r.status,
+        headers: { 'content-type': 'application/json', ...(r.headers ?? {}) },
+      });
+    });
+    const pipeline = composePipeline([new RetryHandler(), new ODataErrorHandler()], terminal);
+    let result: Response | undefined;
+    let error: unknown;
+    let finalRetryCount: number | undefined;
+
+    const runPromise = requestContext.run({}, async () => {
+      try {
+        result = await pipeline({
+          url: 'https://graph.microsoft.com/v1.0/me',
+          method: 'GET',
+          headers: {},
+        });
+      } catch (e) {
+        error = e;
+      }
+      finalRetryCount = requestContext.getStore()?.retryCount;
+    });
+    await vi.runAllTimersAsync();
+    await runPromise;
+    return { result, error, terminalCalls: terminal.mock.calls.length, finalRetryCount };
+  }
+
+  it('429 retries via GraphThrottleError catch, yields 200 on success', async () => {
+    const { result, terminalCalls } = await run([
+      { status: 429, body: canonical429Throttle.body, headers: { 'retry-after': '0' } },
+      { status: 200, body: { value: [] } },
+    ]);
+    expect(result?.status).toBe(200);
+    expect(terminalCalls).toBe(2);
+  });
+
+  it('5xx exhaust throws GraphServerError with correct statusCode', async () => {
+    vi.stubEnv('MS365_MCP_RETRY_MAX_ATTEMPTS', '2');
+    const { GraphServerError } = await import('../src/lib/graph-errors.js');
+    const { error, terminalCalls, finalRetryCount } = await run([
+      { status: 503, body: canonical503ServiceUnavailable.body },
+      { status: 503, body: canonical503ServiceUnavailable.body },
+      { status: 503, body: canonical503ServiceUnavailable.body },
+    ]);
+    expect(error).toBeInstanceOf(GraphServerError);
+    expect((error as InstanceType<typeof GraphServerError>).statusCode).toBe(503);
+    expect(terminalCalls).toBe(3); // attempt 0 + 2 retries
+    expect(finalRetryCount).toBe(2);
+  });
+
+  it('400 throws GraphValidationError without retry', async () => {
+    const { GraphValidationError } = await import('../src/lib/graph-errors.js');
+    const { error, terminalCalls } = await run([
+      {
+        status: 400,
+        body: {
+          error: {
+            code: 'invalidRequest',
+            message: 'Invalid',
+            innerError: { 'request-id': 'x' },
+          },
+        },
+      },
+    ]);
+    expect(error).toBeInstanceOf(GraphValidationError);
+    expect(terminalCalls).toBe(1);
+  });
+});
