@@ -276,8 +276,9 @@ async function main(): Promise<void> {
     await server.start();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const stack = error instanceof Error ? error.stack : undefined;
     logger.error(`Startup error: ${message}`);
-    console.error(message);
+    console.error(stack ?? message);
     process.exit(1);
   }
 }

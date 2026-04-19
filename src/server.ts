@@ -3,7 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import express, { Request, Response } from 'express';
-import logger, { enableConsoleLogging } from './logger.js';
+import logger, { enableConsoleLogging, rawPinoLogger } from './logger.js';
 import { registerAuthTools } from './auth-tools.js';
 import { registerGraphTools, registerDiscoveryTools } from './graph-tools.js';
 import { buildMcpServerInstructions } from './mcp-instructions.js';
@@ -521,7 +521,7 @@ class MicrosoftGraphServer {
       // that req.id is stamped on the raw request before body parsing starts.
       app.use(
         pinoHttp({
-          logger,
+          logger: rawPinoLogger,
           genReqId: () => nanoid(),
           autoLogging: {
             ignore: (req) => {

@@ -200,6 +200,13 @@ interface AdaptedLogger {
 const adapted: AdaptedLogger = wrap(pinoInstance);
 
 /**
+ * Raw pino instance — exported for pino-http which requires the full pino
+ * surface (.levels, .bindings, .setBindings, etc.). All other callers should
+ * use the default `adapted` export to preserve Winston-style argument order.
+ */
+export const rawPinoLogger: pino.Logger = pinoInstance;
+
+/**
  * No-op in pino — stdout is the default destination.
  * Kept to preserve ABI for src/server.ts and any other callers.
  */
