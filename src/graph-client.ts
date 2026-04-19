@@ -7,6 +7,7 @@ import { getRequestTokens } from './request-context.js';
 import { composePipeline } from './lib/middleware/pipeline.js';
 import { TokenRefreshMiddleware } from './lib/middleware/token-refresh.js';
 import { ODataErrorHandler } from './lib/middleware/odata-error.js';
+import { RetryHandler } from './lib/middleware/retry.js';
 import { GraphError } from './lib/graph-errors.js';
 import type { GraphRequest } from './lib/middleware/types.js';
 
@@ -140,8 +141,8 @@ class GraphClient {
 
     // Phase 2 middleware pipeline. Middlewares compose outer-to-inner:
     //   - ETagMiddleware (02-07)                  — outermost
-    //   - RetryHandler (02-02)
-    //   - ODataErrorHandler (02-03)               — this plan
+    //   - RetryHandler (02-02)                    — this plan
+    //   - ODataErrorHandler (02-03)
     //   - TokenRefreshMiddleware (02-01)          — innermost
     // Each subsequent Phase 2 plan adds its middleware to this array in the
     // specified order. Order is load-bearing; see 02-CONTEXT.md and
@@ -149,7 +150,7 @@ class GraphClient {
     this.pipeline = composePipeline(
       [
         // ETagMiddleware — 02-07
-        // RetryHandler — 02-02
+        new RetryHandler(),
         new ODataErrorHandler(),
         new TokenRefreshMiddleware(this.authManager, this.secrets),
       ],

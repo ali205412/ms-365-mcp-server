@@ -180,16 +180,20 @@ describe('RetryHandler', () => {
     const mw = new RetryHandler();
 
     // 8a: POST 503 — no retry (writes without Idempotency-Key only retry on 429).
-    const next1 = vi.fn().mockImplementation(async () => toResponse(canonical503ServiceUnavailable));
+    const next1 = vi
+      .fn()
+      .mockImplementation(async () => toResponse(canonical503ServiceUnavailable));
     const r1 = await requestContext.run({}, () => mw.execute(mkReq({ method: 'POST' }), next1));
     expect(r1.status).toBe(503);
     expect(next1).toHaveBeenCalledTimes(1);
 
     // 8b: POST 429 — retries (server signal).
     let call2 = 0;
-    const next2 = vi.fn().mockImplementation(async () =>
-      ++call2 === 1 ? toResponse(canonical429Throttle) : new Response(null, { status: 200 })
-    );
+    const next2 = vi
+      .fn()
+      .mockImplementation(async () =>
+        ++call2 === 1 ? toResponse(canonical429Throttle) : new Response(null, { status: 200 })
+      );
     const exec2 = requestContext.run({}, () => mw.execute(mkReq({ method: 'POST' }), next2));
     await vi.runAllTimersAsync();
     const r2 = await exec2;
@@ -198,11 +202,13 @@ describe('RetryHandler', () => {
 
     // 8c: POST 503 WITH Idempotency-Key — caller opts into write retries.
     let call3 = 0;
-    const next3 = vi.fn().mockImplementation(async () =>
-      ++call3 === 1
-        ? toResponse(canonical503ServiceUnavailable)
-        : new Response(null, { status: 200 })
-    );
+    const next3 = vi
+      .fn()
+      .mockImplementation(async () =>
+        ++call3 === 1
+          ? toResponse(canonical503ServiceUnavailable)
+          : new Response(null, { status: 200 })
+      );
     const exec3 = requestContext.run({}, () =>
       mw.execute(mkReq({ method: 'POST', headers: { 'Idempotency-Key': 'test-key-123' } }), next3)
     );
