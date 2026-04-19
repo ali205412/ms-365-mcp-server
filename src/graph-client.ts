@@ -6,6 +6,8 @@ import { getCloudEndpoints } from './cloud-config.js';
 import { getRequestTokens } from './request-context.js';
 import { composePipeline } from './lib/middleware/pipeline.js';
 import { TokenRefreshMiddleware } from './lib/middleware/token-refresh.js';
+import { ODataErrorHandler } from './lib/middleware/odata-error.js';
+import { GraphError } from './lib/graph-errors.js';
 import type { GraphRequest } from './lib/middleware/types.js';
 
 /**
@@ -139,8 +141,8 @@ class GraphClient {
     // Phase 2 middleware pipeline. Middlewares compose outer-to-inner:
     //   - ETagMiddleware (02-07)                  — outermost
     //   - RetryHandler (02-02)
-    //   - ODataErrorHandler (02-03)
-    //   - TokenRefreshMiddleware (this plan)      — innermost
+    //   - ODataErrorHandler (02-03)               — this plan
+    //   - TokenRefreshMiddleware (02-01)          — innermost
     // Each subsequent Phase 2 plan adds its middleware to this array in the
     // specified order. Order is load-bearing; see 02-CONTEXT.md and
     // 02-RESEARCH.md "Example 1: Wiring the pipeline in GraphClient".
@@ -148,7 +150,7 @@ class GraphClient {
       [
         // ETagMiddleware — 02-07
         // RetryHandler — 02-02
-        // ODataErrorHandler — 02-03
+        new ODataErrorHandler(),
         new TokenRefreshMiddleware(this.authManager, this.secrets),
       ],
       (req) =>
@@ -171,27 +173,11 @@ class GraphClient {
 
     try {
       // 401-refresh is now owned by TokenRefreshMiddleware (innermost in the
-      // pipeline). The pipeline returns the post-refresh response, so the
-      // inline refresh branch that used to live here has been deleted.
+      // pipeline). 4xx / 5xx typed-error parsing is owned by ODataErrorHandler
+      // (02-03) — it throws a typed GraphError subclass on any non-2xx
+      // response, so the 2xx path below is the only branch we reach here.
+      // The pipeline returns the post-refresh / post-error-parse response.
       const response = await this.performRequest(endpoint, accessToken, options);
-
-      if (response.status === 403) {
-        const errorText = await response.text();
-        if (errorText.includes('scope') || errorText.includes('permission')) {
-          throw new Error(
-            `Microsoft Graph API scope error: ${response.status} ${response.statusText} - ${errorText}. This tool requires organization mode. Please restart with --org-mode flag.`
-          );
-        }
-        throw new Error(
-          `Microsoft Graph API error: ${response.status} ${response.statusText} - ${errorText}`
-        );
-      }
-
-      if (!response.ok) {
-        throw new Error(
-          `Microsoft Graph API error: ${response.status} ${response.statusText} - ${await response.text()}`
-        );
-      }
 
       const contentTypeHeader = response.headers?.get?.('content-type') || '';
       const isBinaryResponse = isBinaryContentType(contentTypeHeader);
@@ -299,6 +285,40 @@ class GraphClient {
 
       return this.formatJsonResponse(result, options.rawResponse, options.excludeResponse);
     } catch (error) {
+      // Typed GraphError from ODataErrorHandler (02-03) → surface structured
+      // fields into _meta.graph so AI callers can paste requestId into a
+      // Microsoft support ticket (Phase 2 Success Criteria #5).
+      if (error instanceof GraphError) {
+        let finalMessage = error.message;
+        if (error.requiresOrgMode) {
+          finalMessage +=
+            '. This tool requires organization mode. Please restart with --org-mode flag.';
+        }
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                error: finalMessage,
+                code: error.code,
+                requestId: error.requestId,
+              }),
+            },
+          ],
+          isError: true,
+          _meta: {
+            graph: {
+              code: error.code,
+              statusCode: error.statusCode,
+              requestId: error.requestId,
+              clientRequestId: error.clientRequestId,
+              date: error.date,
+            },
+          },
+        };
+      }
+      // Fallback for non-GraphError (network errors, auth-resolution failures,
+      // etc.). These never carry a Microsoft requestId so _meta.graph is omitted.
       logger.error(`Error in Graph API request: ${error}`);
       return {
         content: [{ type: 'text', text: JSON.stringify({ error: (error as Error).message }) }],
