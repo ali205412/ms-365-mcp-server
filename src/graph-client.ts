@@ -1,10 +1,12 @@
 import logger from './logger.js';
 import AuthManager from './auth.js';
-import { refreshAccessToken } from './lib/microsoft-auth.js';
 import { encode as toonEncode } from '@toon-format/toon';
 import type { AppSecrets } from './secrets.js';
 import { getCloudEndpoints } from './cloud-config.js';
 import { getRequestTokens } from './request-context.js';
+import { composePipeline } from './lib/middleware/pipeline.js';
+import { TokenRefreshMiddleware } from './lib/middleware/token-refresh.js';
+import type { GraphRequest } from './lib/middleware/types.js';
 
 /**
  * Maximum recursion depth for `removeODataProps`. A well-formed Graph response
@@ -116,6 +118,14 @@ class GraphClient {
   private authManager: AuthManager;
   private secrets: AppSecrets;
   private readonly outputFormat: 'json' | 'toon' = 'json';
+  /**
+   * Phase 2 middleware pipeline. Middlewares compose outer-to-inner; the
+   * terminal handler performs the raw `fetch()` call. Subsequent Phase 2 plans
+   * slot their middleware into the array in the specified order (see
+   * 02-CONTEXT.md Pattern E "Chain Ordering Invariant"). Order is
+   * load-bearing; changes here require a test update.
+   */
+  private readonly pipeline: (req: GraphRequest) => Promise<Response>;
 
   constructor(
     authManager: AuthManager,
@@ -125,29 +135,45 @@ class GraphClient {
     this.authManager = authManager;
     this.secrets = secrets;
     this.outputFormat = outputFormat;
+
+    // Phase 2 middleware pipeline. Middlewares compose outer-to-inner:
+    //   - ETagMiddleware (02-07)                  — outermost
+    //   - RetryHandler (02-02)
+    //   - ODataErrorHandler (02-03)
+    //   - TokenRefreshMiddleware (this plan)      — innermost
+    // Each subsequent Phase 2 plan adds its middleware to this array in the
+    // specified order. Order is load-bearing; see 02-CONTEXT.md and
+    // 02-RESEARCH.md "Example 1: Wiring the pipeline in GraphClient".
+    this.pipeline = composePipeline(
+      [
+        // ETagMiddleware — 02-07
+        // RetryHandler — 02-02
+        // ODataErrorHandler — 02-03
+        new TokenRefreshMiddleware(this.authManager, this.secrets),
+      ],
+      (req) =>
+        fetch(req.url, {
+          method: req.method,
+          headers: req.headers,
+          body: req.body,
+        })
+    );
   }
 
   async makeRequest(endpoint: string, options: GraphRequestOptions = {}): Promise<unknown> {
     const contextTokens = getRequestTokens();
-    let accessToken =
+    const accessToken =
       options.accessToken ?? contextTokens?.accessToken ?? (await this.authManager.getToken());
-    const refreshToken = options.refreshToken ?? contextTokens?.refreshToken;
 
     if (!accessToken) {
       throw new Error('No access token available');
     }
 
     try {
-      let response = await this.performRequest(endpoint, accessToken, options);
-
-      if (response.status === 401 && refreshToken) {
-        // Token expired, try to refresh
-        const newTokens = await this.refreshAccessToken(refreshToken);
-        accessToken = newTokens.accessToken;
-
-        // Retry the request with new token
-        response = await this.performRequest(endpoint, accessToken, options);
-      }
+      // 401-refresh is now owned by TokenRefreshMiddleware (innermost in the
+      // pipeline). The pipeline returns the post-refresh response, so the
+      // inline refresh branch that used to live here has been deleted.
+      const response = await this.performRequest(endpoint, accessToken, options);
 
       if (response.status === 403) {
         const errorText = await response.text();
@@ -219,34 +245,14 @@ class GraphClient {
     }
   }
 
-  private async refreshAccessToken(
-    refreshToken: string
-  ): Promise<{ accessToken: string; refreshToken?: string }> {
-    const tenantId = this.secrets.tenantId || 'common';
-    const clientId = this.secrets.clientId;
-    const clientSecret = this.secrets.clientSecret;
-
-    // Log whether using public or confidential client
-    if (clientSecret) {
-      logger.info('GraphClient: Refreshing token with confidential client');
-    } else {
-      logger.info('GraphClient: Refreshing token with public client');
-    }
-
-    const response = await refreshAccessToken(
-      refreshToken,
-      clientId,
-      clientSecret,
-      tenantId,
-      this.secrets.cloudType
-    );
-
-    return {
-      accessToken: response.access_token,
-      refreshToken: response.refresh_token,
-    };
-  }
-
+  /**
+   * Builds a GraphRequest from the (endpoint, accessToken, options) tuple and
+   * delegates to the Phase 2 middleware pipeline. The pipeline owns
+   * 401-refresh (TokenRefreshMiddleware — innermost) and, once subsequent
+   * Phase 2 plans land, retry / typed-error-parsing / ETag-plumbing concerns
+   * as well. The raw `fetch()` call lives in the terminal handler wired up in
+   * the constructor.
+   */
   private async performRequest(
     endpoint: string,
     accessToken: string,
@@ -263,11 +269,13 @@ class GraphClient {
       ...options.headers,
     };
 
-    return fetch(url, {
+    const req: GraphRequest = {
+      url,
       method: options.method || 'GET',
       headers,
       body: options.body,
-    });
+    };
+    return this.pipeline(req);
   }
 
   private serializeData(data: unknown, outputFormat: 'json' | 'toon', pretty = false): string {
