@@ -11,6 +11,7 @@ import GraphClient from './graph-client.js';
 import AuthManager, { buildScopesFromEndpoints } from './auth.js';
 import { MicrosoftOAuthProvider } from './oauth-provider.js';
 import { exchangeCodeForToken, refreshAccessToken } from './lib/microsoft-auth.js';
+import { decodeJwt } from 'jose';
 import type { CommandOptions } from './cli.ts';
 import { getSecrets, type AppSecrets } from './secrets.js';
 import { getCloudEndpoints } from './cloud-config.js';
@@ -1488,6 +1489,17 @@ class MicrosoftGraphServer {
       // /t/:tenantId/mcp route + authSelector (createBearerMiddleware +
       // createAuthSelectorMiddleware). Until then, this keeps the v1 HTTP
       // route behaviorally compatible WITHOUT the header-read security hole.
+      // CR-03 fix: enforce decode-only tid check on the legacy /mcp mount
+      // (same Pitfall 5 discipline as createBearerMiddleware in
+      // src/lib/microsoft-auth.ts). Without this, an operator who forgets to
+      // configure tenants in Postgres but still starts the server in HTTP
+      // mode gets a working /mcp endpoint that routes to whatever single
+      // tenant the env vars point at — the opposite of the multi-tenant
+      // isolation promise. When MS365_MCP_TENANT_ID is set to a real tenant
+      // GUID (not 'common'), reject any inbound bearer whose JWT tid does
+      // not match. Plan 03-09 retires this entire legacy mount; until then,
+      // this is the inline guard.
+      const legacySecrets = this.secrets;
       const legacyMcpAccessTokenExtractor = (
         req: Request & { microsoftAuth?: { accessToken: string } },
         res: Response,
@@ -1498,7 +1510,34 @@ class MicrosoftGraphServer {
           res.status(401).json({ error: 'Missing or invalid access token' });
           return;
         }
-        req.microsoftAuth = { accessToken: authHeader.substring(7) };
+        const token = authHeader.substring(7);
+
+        // Decode-only tid check — Microsoft Graph validates the signature on
+        // the actual tool call. We only need the tid claim to enforce that
+        // the bearer matches the configured single tenant (when one is set).
+        const expectedTid = legacySecrets?.tenantId;
+        if (expectedTid && expectedTid !== 'common') {
+          try {
+            const payload = decodeJwt(token);
+            if (typeof payload.tid !== 'string') {
+              res.status(401).json({ error: 'invalid_token', detail: 'missing_tid_claim' });
+              return;
+            }
+            if (payload.tid.toLowerCase() !== expectedTid.toLowerCase()) {
+              res.status(401).json({
+                error: 'tenant_mismatch',
+                detail: 'JWT tid does not match configured MS365_MCP_TENANT_ID',
+              });
+              return;
+            }
+          } catch (err) {
+            logger.info({ err: (err as Error).message }, 'legacy /mcp: JWT decode failed');
+            res.status(401).json({ error: 'invalid_token' });
+            return;
+          }
+        }
+
+        req.microsoftAuth = { accessToken: token };
         next();
       };
 
