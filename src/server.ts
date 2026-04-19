@@ -24,9 +24,27 @@ import { registerShutdownHooks } from './lib/shutdown.js';
 import { validateRedirectUri, type RedirectUriPolicy } from './lib/redirect-uri.js';
 import { createCorsMiddleware, type CorsMode } from './lib/cors.js';
 import type { CloudType } from './cloud-config.js';
+import type { PkceStore } from './lib/pkce-store/pkce-store.js';
+import { MemoryPkceStore } from './lib/pkce-store/memory-store.js';
 import crypto from 'node:crypto';
 import pinoHttp from 'pino-http';
 import { nanoid } from 'nanoid';
+
+/**
+ * Phase 3 tenancy scaffold (plan 03-03).
+ *
+ * The /authorize and /token handlers MUST key PKCE state by tenantId so
+ * cross-tenant replay is impossible (T-03-03-02). Until plan 03-08 adds
+ * URL-path tenant routing (`/t/:tenantId/*`) and the `loadTenant`
+ * middleware, we hardcode `'_'` as the single-tenant sentinel so the
+ * PkceStore interface is already in place and only one line flips when
+ * multi-tenant routing lands.
+ *
+ * When 03-08 ships, replace `PHASE3_TENANT_PLACEHOLDER` with
+ * `req.params.tenantId` in both call sites below. Grep for this constant
+ * to find them.
+ */
+const PHASE3_TENANT_PLACEHOLDER = '_';
 
 /**
  * Parse HTTP option into host and port components.
@@ -129,22 +147,6 @@ export function createRegisterHandler(policy: RedirectUriPolicy) {
 }
 
 /**
- * PKCE store entry for the two-leg PKCE bridge. The HTTP setup owns the
- * Map; the factory reads and mutates it per request. Typed here (rather
- * than inlined on the class) so the token-handler factory can accept the
- * Map as a dependency-injected parameter — tests use a fresh Map per
- * spec, production uses the per-instance Map on `MicrosoftGraphServer`.
- */
-export interface PkceStoreEntry {
-  clientCodeChallenge: string;
-  clientCodeChallengeMethod: string;
-  serverCodeVerifier: string;
-  createdAt: number;
-}
-
-export type PkceStore = Map<string, PkceStoreEntry>;
-
-/**
  * Secrets slice the /token handler needs. Decoupled from the full
  * `AppSecrets` interface so tests can inject a minimal stub without
  * bootstrapping the secrets provider.
@@ -156,6 +158,15 @@ export interface TokenHandlerSecrets {
   cloudType: CloudType;
 }
 
+/**
+ * /token handler config (plan 03-03).
+ *
+ * The `pkceStore` dep is the PkceStore interface from
+ * src/lib/pkce-store/pkce-store.ts — RedisPkceStore in HTTP mode, or
+ * MemoryPkceStore in stdio / tests. The v1 in-memory lookup map was
+ * removed along with its O(N) find scan at /token: we now compute
+ * sha256(client_verifier) and issue a single takeByChallenge() call.
+ */
 export interface TokenHandlerConfig {
   secrets: TokenHandlerSecrets;
   pkceStore: PkceStore;
@@ -260,9 +271,16 @@ export function createTokenHandler(config: TokenHandlerConfig) {
           'Token endpoint: authorization_code exchange'
         );
 
-        // Two-leg PKCE: if the client sent a code_verifier, hash it and
-        // look it up against each stored challenge. The matching entry
-        // carries the server's code_verifier (for Microsoft).
+        // Two-leg PKCE (plan 03-03, SECUR-03):
+        // Hash the client's verifier once to obtain the clientCodeChallenge,
+        // then issue a single `takeByChallenge` against the PkceStore. This
+        // is an O(1) lookup + atomic delete through the store's backing
+        // Redis (or an in-memory Map in stdio mode). Replaces the v1 O(N)
+        // scan over the old in-memory store + per-entry SHA-256 comparison.
+        //
+        // The atomic read-and-delete protects against T-03-03-01 (replay):
+        // two concurrent /token calls with the same verifier → exactly one
+        // succeeds, the other gets null.
         let serverCodeVerifier: string | undefined;
         if (body.code_verifier) {
           const clientVerifier = body.code_verifier as string;
@@ -271,16 +289,16 @@ export function createTokenHandler(config: TokenHandlerConfig) {
             .update(clientVerifier)
             .digest('base64url');
 
-          for (const [state, pkceData] of pkceStore) {
-            if (pkceData.clientCodeChallenge === clientChallengeComputed) {
-              serverCodeVerifier = pkceData.serverCodeVerifier;
-              pkceStore.delete(state);
-              logger.info(
-                { state: state.substring(0, 8) + '...' },
-                'Two-leg PKCE: matched client verifier, using server verifier'
-              );
-              break;
-            }
+          const pkceEntry = await pkceStore.takeByChallenge(
+            PHASE3_TENANT_PLACEHOLDER, // plan 03-08 replaces with req.params.tenantId
+            clientChallengeComputed
+          );
+          if (pkceEntry) {
+            serverCodeVerifier = pkceEntry.serverCodeVerifier;
+            logger.info(
+              { state: pkceEntry.state.substring(0, 8) + '...' },
+              'Two-leg PKCE: matched client verifier, using server verifier'
+            );
           }
         }
 
@@ -383,16 +401,13 @@ class MicrosoftGraphServer {
   private multiAccount: boolean = false;
   private accountNames: string[] = [];
 
-  // Two-leg PKCE: stores client's code_challenge and server's code_verifier, keyed by OAuth state
-  private pkceStore: Map<
-    string,
-    {
-      clientCodeChallenge: string;
-      clientCodeChallengeMethod: string;
-      serverCodeVerifier: string;
-      createdAt: number;
-    }
-  > = new Map();
+  // Two-leg PKCE (plan 03-03): PkceStore abstracts over RedisPkceStore (HTTP
+  // mode) and MemoryPkceStore (stdio / tests). Keyed by
+  // (tenantId, clientCodeChallenge) — the v1 Map<state, entry> + O(N) find
+  // has been fully removed along with its opportunistic cleanup timer
+  // (Redis TTL = 600s handles eviction; MemoryPkceStore uses Date.now()
+  // comparison on read).
+  private pkceStore: PkceStore;
 
   // Phase 3 (plan 03-01): pushed by src/index.ts before server.start() so
   // /readyz composition reflects every subsystem (Postgres in 03-01; Redis
@@ -400,10 +415,20 @@ class MicrosoftGraphServer {
   // Phase 1 baseline contract.
   private readinessChecks: ReadinessCheck[];
 
+  /**
+   * @param authManager - MSAL + scope owner.
+   * @param options - CLI/runtime flags (CommandOptions).
+   * @param readinessChecks - Pushed by src/index.ts before start() — /readyz composes these.
+   * @param deps - Phase 3+ dependency-injection bag. `pkceStore` defaults to
+   *   MemoryPkceStore when omitted so tests and stdio callers don't need to
+   *   construct the Redis substrate. HTTP-mode bootstraps inject
+   *   RedisPkceStore(getRedis()) via src/index.ts region:phase3-pkce-store.
+   */
   constructor(
     authManager: AuthManager,
     options: CommandOptions = {},
-    readinessChecks: ReadinessCheck[] = []
+    readinessChecks: ReadinessCheck[] = [],
+    deps: { pkceStore?: PkceStore } = {}
   ) {
     this.authManager = authManager;
     this.options = options;
@@ -411,6 +436,7 @@ class MicrosoftGraphServer {
     this.server = null;
     this.secrets = null;
     this.readinessChecks = readinessChecks;
+    this.pkceStore = deps.pkceStore ?? new MemoryPkceStore();
   }
 
   private createMcpServer(): McpServer {
@@ -708,8 +734,13 @@ class MicrosoftGraphServer {
           }
         });
 
-        // Two-leg PKCE: if the client sent a code_challenge, store it and generate
-        // a separate PKCE pair for the server↔Microsoft leg
+        // Two-leg PKCE (plan 03-03, SECUR-03):
+        // Persist {state, clientCodeChallenge, serverCodeVerifier, ...} via
+        // `pkceStore.put` keyed by (tenantId, clientCodeChallenge). Redis SET
+        // NX EX 600 enforces TTL (no opportunistic cleanup loop required —
+        // Redis auto-evicts stale entries) and rejects duplicate challenges
+        // rather than silently overwriting. /token later computes
+        // sha256(client_verifier) and does a single O(1) takeByChallenge.
         if (clientCodeChallenge && state) {
           const serverCodeVerifier = crypto.randomBytes(32).toString('base64url');
           const serverCodeChallenge = crypto
@@ -717,34 +748,33 @@ class MicrosoftGraphServer {
             .update(serverCodeVerifier)
             .digest('base64url');
 
-          // Clean up expired entries before adding new ones
-          const now = Date.now();
-          const maxAge = 10 * 60 * 1000; // 10 minutes
-          const maxEntries = 1000;
-          for (const [key, value] of this.pkceStore) {
-            if (now - value.createdAt > maxAge) {
-              this.pkceStore.delete(key);
-            }
-          }
-
-          // Reject if store is still at capacity after cleanup (prevents memory exhaustion)
-          if (this.pkceStore.size >= maxEntries) {
-            logger.warn(
-              `PKCE store at capacity (${maxEntries} entries) — rejecting new authorization request`
-            );
-            res.status(503).json({
-              error: 'server_busy',
-              error_description: 'Too many pending authorization requests. Try again later.',
-            });
-            return;
-          }
-
-          this.pkceStore.set(state, {
+          const redirectUri = url.searchParams.get('redirect_uri') ?? '';
+          const ok = await this.pkceStore.put(PHASE3_TENANT_PLACEHOLDER, {
+            state,
             clientCodeChallenge,
             clientCodeChallengeMethod: clientCodeChallengeMethod || 'S256',
             serverCodeVerifier,
+            clientId,
+            redirectUri,
+            tenantId: PHASE3_TENANT_PLACEHOLDER,
             createdAt: Date.now(),
           });
+
+          if (!ok) {
+            // NX rejected the write — another /authorize already staked
+            // this exact challenge. Rare but possible; surface 400 so the
+            // client regenerates its verifier/challenge and retries.
+            logger.warn(
+              { challengePrefix: clientCodeChallenge.substring(0, 8) + '...' },
+              'PKCE challenge collision on put'
+            );
+            res.status(400).json({
+              error: 'pkce_challenge_collision',
+              error_description:
+                'An outstanding authorization request already uses this code_challenge; regenerate and retry.',
+            });
+            return;
+          }
 
           // Send our server-generated code_challenge to Microsoft
           microsoftAuthUrl.searchParams.set('code_challenge', serverCodeChallenge);

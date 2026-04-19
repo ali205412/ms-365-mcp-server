@@ -82,6 +82,7 @@ async function startTokenServer(): Promise<{
   close: () => Promise<void>;
 }> {
   const { createTokenHandler } = await import('../src/server.js');
+  const { MemoryPkceStore } = await import('../src/lib/pkce-store/memory-store.js');
 
   const app = express();
   app.use(express.json());
@@ -100,7 +101,7 @@ async function startTokenServer(): Promise<{
     createTokenHandler({
       secrets,
       // Empty PKCE store — the handler should handle missing state gracefully.
-      pkceStore: new Map(),
+      pkceStore: new MemoryPkceStore(),
     })
   );
 

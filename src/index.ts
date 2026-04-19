@@ -17,6 +17,9 @@ import { registerShutdownHooks } from './lib/shutdown.js';
 import type { ReadinessCheck } from './lib/health.js';
 import * as postgres from './lib/postgres.js';
 import * as redisClient from './lib/redis.js';
+import { RedisPkceStore } from './lib/pkce-store/redis-store.js';
+import { MemoryPkceStore } from './lib/pkce-store/memory-store.js';
+import type { PkceStore } from './lib/pkce-store/pkce-store.js';
 import { version } from './version.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -285,6 +288,15 @@ async function main(): Promise<void> {
     // endregion:phase3-kek
 
     // region:phase3-pkce-store  (filled by 03-03 Task 2)
+    // Plan 03-03: PkceStore bootstrap — constructed ONCE, injected into
+    // MicrosoftGraphServer via the deps bag. HTTP mode uses Redis as the
+    // source of truth so multiple replicas see the same PKCE state (ROADMAP
+    // SC#6). Stdio mode uses the Map-backed MemoryPkceStore (single process,
+    // no external Redis required). The interface is identical across modes —
+    // /authorize + /token handlers do not fork by transport.
+    const pkceStore: PkceStore = isHttpMode
+      ? new RedisPkceStore(redisClient.getRedis())
+      : new MemoryPkceStore();
     // endregion:phase3-pkce-store
 
     // region:phase3-tenant-pool (filled by 03-05 Task 2/3)
@@ -365,7 +377,7 @@ async function main(): Promise<void> {
     // the user how to migrate them.
     maybeProbeKeytarLeftovers(args);
 
-    const server = new MicrosoftGraphServer(authManager, args, readinessChecks);
+    const server = new MicrosoftGraphServer(authManager, args, readinessChecks, { pkceStore });
     await server.initialize(version);
     await server.start();
 
