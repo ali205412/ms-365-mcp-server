@@ -71,6 +71,44 @@ async function loadAuditWriter() {
 }
 
 /**
+ * Canonical tenant id format. WR-04: validate the operator-supplied
+ * tenantId against this regex BEFORE constructing any Redis pattern so
+ * that `disable-tenant '*'` cannot expand the redis.keys glob to the
+ * cross-tenant `mcp:cache:*:*` and wipe every tenant's cache. Same
+ * GUID shape that loadTenant.ts:97 enforces on the HTTP path.
+ */
+const TENANT_GUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * WR-03 fix: SCAN-based deletion replaces the unbounded redis.keys() pattern
+ * fetch. KEYS blocks the Redis single-threaded command queue for O(n) over
+ * the entire keyspace; SCAN iterates in COUNT-sized batches and returns
+ * control to the event loop between cursor advances. Both paths handle the
+ * empty-batch case correctly (Redis SCAN can return zero matches per cursor
+ * step even when more matches remain on later cursors).
+ *
+ * @param {{
+ *   scan: (cursor: string, ...args: string[]) => Promise<[string, string[]]>,
+ *   del: (...keys: string[]) => Promise<number>,
+ * }} redis
+ * @param {string} pattern  Redis glob pattern, e.g. 'mcp:cache:<guid>:*'
+ * @returns {Promise<number>}  Total number of keys deleted across all batches.
+ */
+async function scanDel(redis, pattern) {
+  let cursor = '0';
+  let totalDeleted = 0;
+  do {
+    // COUNT is a hint; Redis may return more or fewer keys per cursor step.
+    const [next, batch] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', '100');
+    cursor = next;
+    if (batch.length > 0) {
+      totalDeleted += await redis.del(...batch);
+    }
+  } while (cursor !== '0');
+  return totalDeleted;
+}
+
+/**
  * Programmatic entry point. Accepts injected deps for tests.
  *
  * @param {string[]} argv
@@ -85,6 +123,13 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const tenantId = argv[0];
   if (!tenantId) {
     throw new Error('Usage: disable-tenant <tenant-id>');
+  }
+
+  // WR-04 fix: validate the GUID shape BEFORE building any Redis pattern.
+  // Without this, `disable-tenant '*'` would expand the glob to
+  // mcp:cache:*:* (every tenant's cache) inside the in-memory facade.
+  if (!TENANT_GUID_REGEX.test(tenantId)) {
+    throw new Error(`Invalid tenant id format: ${tenantId} (expected canonical GUID)`);
   }
 
   const pgMod = deps.postgres ?? (await loadProdPostgres());
@@ -133,17 +178,13 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     );
   });
 
-  // After-commit cleanup — retriable because the txn is already durable.
-  const cacheKeys = await redis.keys(`mcp:cache:${tenantId}:*`);
-  let cacheKeysDeleted = 0;
-  if (cacheKeys.length > 0) {
-    cacheKeysDeleted = await redis.del(...cacheKeys);
-  }
-  const pkceKeys = await redis.keys(`mcp:pkce:${tenantId}:*`);
-  let pkceKeysDeleted = 0;
-  if (pkceKeys.length > 0) {
-    pkceKeysDeleted = await redis.del(...pkceKeys);
-  }
+  // WR-03 fix: SCAN-based deletion (was redis.keys() — O(n) blocking
+  // single-threaded command queue over the entire keyspace). After-commit
+  // cleanup is retriable because the txn is already durable. Both the
+  // ioredis client and the MemoryRedisFacade implement scan with the same
+  // [cursor, batch] return contract.
+  const cacheKeysDeleted = await scanDel(redis, `mcp:cache:${tenantId}:*`);
+  const pkceKeysDeleted = await scanDel(redis, `mcp:pkce:${tenantId}:*`);
 
   // Synchronous pool eviction — removes the in-memory MSAL client so the
   // next acquire sees wrapped_dek=NULL and throws.

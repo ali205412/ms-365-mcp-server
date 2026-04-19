@@ -133,6 +133,39 @@ export class MemoryRedisFacade extends EventEmitter {
     return out;
   }
 
+  /**
+   * WR-03 fix: ioredis-compatible SCAN for the disable-tenant cascade
+   * (bin/disable-tenant.mjs:scanDel). Real ioredis returns
+   * `[nextCursor, batch]`; the in-memory facade returns the entire
+   * matching set on the first call (cursor='0' → next='0'), since
+   * iterating a Map<string, Entry> is already O(n) and there is no
+   * meaningful cursor state to preserve. The COUNT hint is accepted
+   * but ignored because the in-memory implementation cannot stream.
+   *
+   * Signature mirrors ioredis: scan(cursor, 'MATCH', pattern, 'COUNT', '100').
+   */
+  async scan(cursor: string, ...args: Array<string | number>): Promise<[string, string[]]> {
+    this.assertOpen();
+    let pattern = '*';
+    for (let i = 0; i < args.length; i++) {
+      const token = args[i];
+      if (typeof token !== 'string') continue;
+      if (token.toUpperCase() === 'MATCH' && typeof args[i + 1] === 'string') {
+        pattern = args[i + 1] as string;
+        i++;
+      }
+      // COUNT is acknowledged but ignored — see docstring.
+    }
+    if (cursor !== '0') {
+      // Subsequent cursor calls always return empty + '0' to terminate the
+      // caller's do-while loop. The in-memory store cannot resume from a
+      // cursor state since the Map is iterated in one pass on cursor='0'.
+      return ['0', []];
+    }
+    const matches = await this.keys(pattern);
+    return ['0', matches];
+  }
+
   async ping(): Promise<'PONG'> {
     this.assertOpen();
     return 'PONG';
