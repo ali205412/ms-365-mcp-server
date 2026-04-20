@@ -1,19 +1,24 @@
-# Reference Docker Compose stack for ms-365-mcp-server v2 (Phase 1).
+# Reference Docker Compose stack for ms-365-mcp-server v2.
 #
-# This Phase 1 reference ships the MCP server alone. Phase 3 extends this
-# file with postgres + redis services for multi-tenant state. The container
-# image already bakes in the SECUR-06 hardening from plan 01-03 (non-root
-# nodejs UID 1001, tini as PID 1, HEALTHCHECK hitting /healthz, STOPSIGNAL
-# SIGTERM); this Compose file stacks OPS-10 orchestration-layer defenses
-# (read-only root FS, dropped capabilities, no privilege escalation, tmpfs
-# /tmp) on top.
+# Phase 1 shipped the MCP server alone; Phase 3 introduced Postgres + Redis
+# as required backends for multi-tenant state (tenant registry, audit log,
+# delta tokens, envelope-encrypted refresh tokens, PKCE state, hot session
+# cache). This file now ships all three services as the reference deploy.
+#
+# The MCP container image bakes in SECUR-06 hardening from plan 01-03
+# (non-root nodejs UID 1001, tini as PID 1, HEALTHCHECK hitting /healthz,
+# STOPSIGNAL SIGTERM); this Compose file stacks OPS-10 orchestration-layer
+# defenses (read-only root FS, dropped capabilities, no-new-privileges,
+# tmpfs /tmp) on top. Postgres and Redis carry the same hardening posture.
 #
 # Usage:
 #   cp .env.example .env
-#   # Edit .env to set MS365_MCP_PUBLIC_URL + MS365_MCP_CORS_ORIGINS
+#   # Required: MS365_MCP_PUBLIC_URL, MS365_MCP_CORS_ORIGINS,
+#   #           MS365_MCP_KEK (base64-encoded 32 bytes).
 #   # Ensure ./data exists and is owned by UID 1001 (the nodejs user in
 #   # the image): `mkdir -p data && sudo chown 1001:1001 data && chmod 700 data`
 #   docker compose -f examples/docker-compose/docker-compose.yml up -d
+#   docker compose exec mcp node dist/bin/migrate.mjs   # apply Postgres schema
 #
 # Security posture (matches plan 01-08 T-01-08e mitigations):
 #   - Non-root user (baked into image at UID 1001)
@@ -21,11 +26,19 @@
 #   - All capabilities dropped (nothing from CAP_NET_ADMIN down)
 #   - no-new-privileges bit set (no setuid escape via exec)
 #   - Writable /app/data bind-mount ONLY for the token cache (stdio users)
+#   - Postgres + Redis speak to mcp over an internal bridge network; only
+#     the MCP service has a host-side port binding, and it is loopback-only
 #   - HEALTHCHECK inherits from Dockerfile (plan 01-03); stop_grace_period
 #     30s comfortably exceeds the 25s graceful shutdown budget (plan 01-05)
 #     and the 10s OTel flush race inside it
 #   - Localhost-only port bindings — operator publishes via reverse proxy
 #     (see examples/reverse-proxy/) rather than exposing 3000/9464 directly
+#
+# To point the MCP server at EXTERNAL Postgres / Redis instances (managed
+# cloud DB, RDS, ElastiCache) instead of running them locally, set
+# MS365_MCP_DATABASE_URL and MS365_MCP_REDIS_URL in .env and either comment
+# out the postgres: / redis: services + `depends_on` block or stop them
+# (they will still be defined but unused).
 
 services:
   mcp:
@@ -43,9 +56,27 @@ services:
       # Required in production HTTP mode (D-02 / plan 01-07 fail-fast gate):
       MS365_MCP_PUBLIC_URL: ${MS365_MCP_PUBLIC_URL}
       MS365_MCP_CORS_ORIGINS: ${MS365_MCP_CORS_ORIGINS}
-      # Token cache lives in the writable ./data bind-mount (stdio-mode users
-      # only — HTTP mode doesn't persist tokens on disk). v1 users migrate
-      # keychain entries here via `migrate-tokens`.
+      # Postgres — multi-tenant state (tenant registry, audit, delta tokens,
+      # api keys). Default points at the postgres: service below; override in
+      # .env to point at a managed DB.
+      MS365_MCP_DATABASE_URL: ${MS365_MCP_DATABASE_URL:-postgresql://mcp:mcp@postgres:5432/mcp}
+      # Redis — hot session state (PKCE, MSAL cache, rate limits). Default
+      # points at the redis: service below; override in .env for managed Redis.
+      MS365_MCP_REDIS_URL: ${MS365_MCP_REDIS_URL:-redis://redis:6379}
+      # KEK — 32-byte base64 root key used to wrap every per-tenant DEK.
+      # REQUIRED. Generate with: `openssl rand -base64 32`. Rotate via
+      # `node dist/bin/rotate-kek.mjs`. Never commit to source control.
+      MS365_MCP_KEK: ${MS365_MCP_KEK}
+      MS365_MCP_KEK_PREVIOUS: ${MS365_MCP_KEK_PREVIOUS:-}
+      # Optional admin dual-stack auth (plan 04-04). When both are set, the
+      # Entra OAuth + group membership check is enabled on /admin/*; API
+      # keys always work.
+      MS365_MCP_ADMIN_APP_CLIENT_ID: ${MS365_MCP_ADMIN_APP_CLIENT_ID:-}
+      MS365_MCP_ADMIN_GROUP_ID: ${MS365_MCP_ADMIN_GROUP_ID:-}
+      MS365_MCP_ADMIN_ORIGINS: ${MS365_MCP_ADMIN_ORIGINS:-}
+      # Token cache — stdio-mode holdover only; HTTP mode keeps tokens in
+      # Redis, wrapped with the per-tenant DEK. Kept for `migrate-tokens`
+      # round-trips from v1 users.
       MS365_MCP_TOKEN_CACHE_PATH: /app/data/.token-cache.json
       MS365_MCP_SELECTED_ACCOUNT_PATH: /app/data/.selected-account.json
       # Optional observability — set to emit OTLP traces/metrics. Leave
@@ -57,6 +88,15 @@ services:
       # failsafe setTimeout(exit(1)) inside the handler fires before Docker
       # sends SIGKILL.
       MS365_MCP_SHUTDOWN_GRACE_MS: ${MS365_MCP_SHUTDOWN_GRACE_MS:-25000}
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    networks:
+      - mcp-internal
 
     ports:
       # Expose on loopback only; use the reverse-proxy reference configs
@@ -94,11 +134,86 @@ services:
     # HEALTHCHECK inherits from the Dockerfile (plan 01-03). Override with
     # a `healthcheck:` block here only if you need per-deployment tuning.
 
-# Phase 3 will extend this file with `postgres:` + `redis:` services +
-# a `networks:` block. Phase 1 deployments have no external state.
+  postgres:
+    image: postgres:16-alpine
+    container_name: ms-365-mcp-postgres
+    restart: unless-stopped
+    environment:
+      # Defaults match the MS365_MCP_DATABASE_URL default above; override
+      # all three in .env if you rotate credentials. User/password/db are
+      # read by the Postgres image init scripts.
+      POSTGRES_USER: ${POSTGRES_USER:-mcp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mcp}
+      POSTGRES_DB: ${POSTGRES_DB:-mcp}
+      # Tighten default to reject connections that aren't over a TLS
+      # channel OR from inside the compose network. Internal bridge is
+      # already host-isolated; this is defense-in-depth.
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      POSTGRES_INITDB_ARGS: '--auth-host=scram-sha-256 --auth-local=scram-sha-256'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # pg_isready runs as the postgres user inside the container; the
+      # default -U is POSTGRES_USER. Using the same env as a safety pin.
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER:-mcp} -d $${POSTGRES_DB:-mcp}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - mcp-internal
+    # NO host port mapping — Postgres is only reachable from services on
+    # the mcp-internal bridge. Operators needing psql should exec in:
+    #   docker compose exec postgres psql -U mcp -d mcp
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 20s
 
-# If you prefer a named volume to the ./data bind-mount (e.g. when running
-# on a shared filesystem where UID mapping is awkward), uncomment below
-# and change the mcp.volumes entry to `mcp-data:/app/data:rw`.
-# volumes:
-#   mcp-data:
+  redis:
+    image: redis:7-alpine
+    container_name: ms-365-mcp-redis
+    restart: unless-stopped
+    # --requirepass + AOF persistence. MS365_MCP_REDIS_URL in the mcp
+    # service does NOT set auth by default; set REDIS_PASSWORD + bake it
+    # into MS365_MCP_REDIS_URL (redis://:<pw>@redis:6379) when promoting
+    # this deployment to expose Redis outside the internal bridge.
+    command: >-
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      # Use PING against localhost; auth is optional per REDIS_PASSWORD.
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - mcp-internal
+    # NO host port mapping — Redis is only reachable from services on the
+    # mcp-internal bridge. No AUTH by default is safe because the network
+    # is host-isolated; set REDIS_PASSWORD when you step outside that.
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 20s
+
+networks:
+  mcp-internal:
+    name: ms-365-mcp-internal
+    driver: bridge
+
+volumes:
+  postgres-data:
+    name: ms-365-mcp-postgres-data
+  redis-data:
+    name: ms-365-mcp-redis-data
+  # If you prefer a named volume to the ./data bind-mount (e.g. when
+  # running on a shared filesystem where UID mapping is awkward),
+  # uncomment below and change the mcp.volumes entry to
+  # `mcp-data:/app/data:rw`.
+  # mcp-data:
