@@ -550,9 +550,7 @@ describe('plan 04-05 Task 1 — GET /admin/audit', () => {
         { ts: new Date('2099-01-01T00:00:00Z').getTime(), id: 'z' },
         cursorSecret
       );
-      const res = await doGet(
-        `${url}/admin/audit?cursor=${encodeURIComponent(bogusCursor)}`
-      );
+      const res = await doGet(`${url}/admin/audit?cursor=${encodeURIComponent(bogusCursor)}`);
       expect(res.status).toBe(200);
       // Even with a valid cursor, the SQL-param tenant filter restricts rows
       // to TENANT_A. No TENANT_B row may appear.
