@@ -31,6 +31,10 @@ import {
   createLegacySsePostHandler,
 } from './lib/transports/legacy-sse.js';
 import { createAuthSelectorMiddleware } from './lib/auth-selector.js';
+import {
+  createToolsListFilterMiddleware,
+  wrapToolsListHandler,
+} from './lib/tool-selection/tools-list-filter.js';
 import crypto from 'node:crypto';
 import pinoHttp from 'pino-http';
 import { nanoid } from 'nanoid';
@@ -916,9 +920,11 @@ class MicrosoftGraphServer {
    * (stdio mode + HTTP mode's legacy /mcp path which 03-09 retires).
    */
   createMcpServer(tenant?: TenantRow): McpServer {
-    // tenant is currently only used to scope future (Phase 5) enabled_tools
-    // filtering — underscore-prefix silences the unused-arg lint check
-    // without renaming the parameter (plan 03-09 forward compatibility).
+    // `tenant` is currently consumed by Plan 05-05's tools/list filter wrap
+    // below — the filter reads from AsyncLocalStorage at request time, so
+    // the tenant row here is informational only (future plans may capture
+    // it for per-tenant metrics / audit wiring). Keep the param to preserve
+    // the factory signature that 03-09's buildMcpServer closure depends on.
     void tenant;
 
     const server = new McpServer(
@@ -962,6 +968,13 @@ class MicrosoftGraphServer {
         this.accountNames
       );
     }
+
+    // Plan 05-05 (COVRG-04, TENANT-08): wrap the SDK's default tools/list
+    // handler AFTER all tool registrations so the filter sees the populated
+    // `_registeredTools` map. Safe to call in stdio mode — `wrapToolsListHandler`
+    // reads `getRequestTenant()` from AsyncLocalStorage which falls back to
+    // the stdio bootstrap triple (Pitfall 8). Idempotent on repeat calls.
+    wrapToolsListHandler(server);
 
     return server;
   }
@@ -1199,9 +1212,23 @@ class MicrosoftGraphServer {
     const legacySseGet = createLegacySseGetHandler({ buildMcpServer });
     const legacySsePost = createLegacySsePostHandler({ buildMcpServer });
 
+    // Plan 05-05 (COVRG-04, TENANT-08): Express-level tools/list filter.
+    // Authoritative filtering happens inside createMcpServer via
+    // wrapToolsListHandler — Streamable HTTP (@hono/node-server) bypasses
+    // res.json/res.send. This middleware is defense in depth for any
+    // transport (including future web-standard replacements) that DOES
+    // route JSON-RPC responses through Express's response methods.
+    const toolsListFilter = createToolsListFilterMiddleware();
+
     app.get('/t/:tenantId/sse', seedTenantContext, authSelector, legacySseGet);
-    app.post('/t/:tenantId/messages', seedTenantContext, authSelector, legacySsePost);
-    app.post('/t/:tenantId/mcp', seedTenantContext, authSelector, streamableHttp);
+    app.post(
+      '/t/:tenantId/messages',
+      seedTenantContext,
+      authSelector,
+      toolsListFilter,
+      legacySsePost
+    );
+    app.post('/t/:tenantId/mcp', seedTenantContext, authSelector, toolsListFilter, streamableHttp);
     app.get('/t/:tenantId/mcp', seedTenantContext, authSelector, streamableHttp);
 
     // region:phase4-webhook-receiver
