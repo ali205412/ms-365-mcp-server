@@ -8,10 +8,7 @@
  * exercise the real implementation.
  */
 import { describe, it, expect } from 'vitest';
-import {
-  parseSelectorList,
-  type Selector,
-} from '../../src/lib/tool-selection/selector-ast.js';
+import { parseSelectorList, type Selector } from '../../src/lib/tool-selection/selector-ast.js';
 
 describe('plan 05-04 Task 1 — selector-ast parser', () => {
   describe('selector kinds (Test 1: all 6 variants)', () => {
@@ -80,7 +77,9 @@ describe('plan 05-04 Task 1 — selector-ast parser', () => {
     });
 
     it('rejects SQL injection tokens (spaces and quotes are off-whitelist)', () => {
-      expect(() => parseSelectorList("users'; DROP TABLE")).toThrow(/invalid characters/);
+      // Note: `;` would trip the earlier explicit `;` check; use `'` alone
+      // to exercise the general charset rejection path.
+      expect(() => parseSelectorList("users' DROP TABLE")).toThrow(/invalid characters/);
     });
 
     it('rejects null bytes', () => {
