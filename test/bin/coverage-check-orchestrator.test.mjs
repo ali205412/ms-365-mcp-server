@@ -151,7 +151,13 @@ describe('plan 05-08 task 2 — generate-graph-client.mjs coverage wiring', () =
       },
       runCoverageCheck: () => {
         callLog.push('runCoverageCheck');
-        return { totals: { current: 0, baseline: 0 }, byWorkload: {}, deltas: {}, warnings: [], errors: [] };
+        return {
+          totals: { current: 0, baseline: 0 },
+          byWorkload: {},
+          deltas: {},
+          warnings: [],
+          errors: [],
+        };
       },
     });
 

@@ -39,11 +39,17 @@ const WORKLOAD_RULES = [
   // Mail — /me/messages, /me/mailFolders, /users/*\/messages, /users/*\/mailFolders
   { workload: 'Mail', pattern: /^\/(me|users\/[^/]+)\/(messages|mailFolders)/ },
   // Calendars — /me/events, /me/calendar, /users/*\/events, /users/*\/calendar, /me/calendarGroups
-  { workload: 'Calendars', pattern: /^\/(me|users\/[^/]+)\/(events|calendar|calendarGroups|calendarView)/ },
+  {
+    workload: 'Calendars',
+    pattern: /^\/(me|users\/[^/]+)\/(events|calendar|calendarGroups|calendarView)/,
+  },
   // Personal Contacts — /me/contacts, /users/*\/contacts, /me/contactFolders
   { workload: 'Contacts', pattern: /^\/(me|users\/[^/]+)\/(contacts|contactFolders)/ },
   // Files/OneDrive — /me/drive, /users/*\/drive, /drives, /shares
-  { workload: 'Files', pattern: /^\/(me|users\/[^/]+)\/drive(s)?(\/|$)|^\/drives(\/|$)|^\/shares(\/|$)/ },
+  {
+    workload: 'Files',
+    pattern: /^\/(me|users\/[^/]+)\/drive(s)?(\/|$)|^\/drives(\/|$)|^\/shares(\/|$)/,
+  },
   // OneNote — /me/onenote, /users/*\/onenote, /groups/*\/onenote
   { workload: 'OneNote', pattern: /^\/(me|users\/[^/]+|groups\/[^/]+|sites\/[^/]+)\/onenote/ },
   // Planner — /me/planner, /planner, /groups/*\/planner
@@ -51,7 +57,10 @@ const WORKLOAD_RULES = [
   // ToDo — /me/todo, /users/*\/todo
   { workload: 'ToDo', pattern: /^\/(me|users\/[^/]+)\/todo/ },
   // Teams — /teams, /me/joinedTeams, /chats, /communications
-  { workload: 'Teams', pattern: /^\/(teams|chats|communications)(\/|$)|^\/(me|users\/[^/]+)\/(joinedTeams|chats)/ },
+  {
+    workload: 'Teams',
+    pattern: /^\/(teams|chats|communications)(\/|$)|^\/(me|users\/[^/]+)\/(joinedTeams|chats)/,
+  },
   // SharePoint — /sites
   { workload: 'SharePoint', pattern: /^\/sites(\/|$)/ },
   // Groups — /groups (but not /groups/*\/planner or /groups/*\/onenote, which are handled above)
@@ -67,11 +76,15 @@ const WORKLOAD_RULES = [
   // Reports — /reports
   { workload: 'Reports', pattern: /^\/reports(\/|$)/ },
   // Applications — /applications, /servicePrincipals, /oauth2PermissionGrants
-  { workload: 'Applications', pattern: /^\/(applications|servicePrincipals|oauth2PermissionGrants)(\/|$)/ },
+  {
+    workload: 'Applications',
+    pattern: /^\/(applications|servicePrincipals|oauth2PermissionGrants)(\/|$)/,
+  },
   // Identity — /identity, /identityGovernance, /directory, /directoryObjects, /directoryRoles
   {
     workload: 'Identity',
-    pattern: /^\/(identity|identityGovernance|directory|directoryObjects|directoryRoles|domains|invitations|organization|roleManagement)(\/|$)/,
+    pattern:
+      /^\/(identity|identityGovernance|directory|directoryObjects|directoryRoles|domains|invitations|organization|roleManagement)(\/|$)/,
   },
   // Intune / Device Management — /deviceManagement, /deviceAppManagement, /devices
   {
@@ -108,7 +121,8 @@ export function extractEndpoints(clientCode) {
   // Match each endpoint entry as a braced object containing path + alias
   // properties (order within the object is emitter-stable: method -> path ->
   // alias). Tolerate single-quoted, double-quoted, and template-literal paths.
-  const endpointRe = /\{\s*method:\s*["'][a-z]+["'][\s\S]*?path:\s*(?:["']([^"']+)["']|`([^`]+)`)[\s\S]*?alias:\s*["']([^"']+)["']/g;
+  const endpointRe =
+    /\{\s*method:\s*["'][a-z]+["'][\s\S]*?path:\s*(?:["']([^"']+)["']|`([^`]+)`)[\s\S]*?alias:\s*["']([^"']+)["']/g;
   const results = [];
   let match;
   while ((match = endpointRe.exec(clientCode)) !== null) {
@@ -283,6 +297,14 @@ function writeBaseline(baselinePath, byWorkload, totals) {
     totals,
     byWorkload: sorted,
   };
+  // Ensure the snapshot's parent directory exists. Rule-1 deviation from the
+  // initial implementation: a fresh bin/ without a prior snapshot would trip
+  // ENOENT on writeFileSync. Mirrors the robust behavior of writeSnapshot in
+  // runBetaPipeline's churn guard (bin/modules/beta.mjs).
+  const parent = baselinePath.replace(/[^/\\]+$/, '');
+  if (parent && !fs.existsSync(parent)) {
+    fs.mkdirSync(parent, { recursive: true });
+  }
   fs.writeFileSync(baselinePath, JSON.stringify(payload, null, 2) + '\n');
 }
 
@@ -358,7 +380,9 @@ export function renderMarkdownReport(report, meta = {}) {
   lines.push(`## Thresholds`);
   lines.push('');
   lines.push(`- Drops within **${WARN_THRESHOLD_PCT}%** of baseline are tolerated (noise).`);
-  lines.push(`- Drops between **${WARN_THRESHOLD_PCT}%** and **${ERROR_THRESHOLD_PCT}%** emit a warning.`);
+  lines.push(
+    `- Drops between **${WARN_THRESHOLD_PCT}%** and **${ERROR_THRESHOLD_PCT}%** emit a warning.`
+  );
   lines.push(`- Drops at or below **${ERROR_THRESHOLD_PCT}%** fail the build.`);
   lines.push('');
   return lines.join('\n');

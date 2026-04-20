@@ -130,6 +130,16 @@ describe('plan 05-01 task 2 — generate-graph-client.mjs main() orchestrator', 
       // prevent this test from invoking the real beta codegen (network +
       // openapi-zod-client binary).
       runBetaPipeline: async () => ({ betaCount: 0, aliases: [] }),
+      // Plan 05-08 wired runCoverageCheck into FULL_COVERAGE=1 flow; stub to
+      // prevent this test from requiring a real emitted client.ts (the test
+      // only exercises simplifier branch selection, not coverage semantics).
+      runCoverageCheck: () => ({
+        totals: { current: 0, baseline: 0 },
+        byWorkload: {},
+        deltas: {},
+        warnings: [],
+        errors: [],
+      }),
       simplifiers: {
         createAndSaveSimplifiedOpenAPI: () => {
           callLog.push('legacy');
@@ -165,6 +175,15 @@ describe('plan 05-01 task 2 — generate-graph-client.mjs main() orchestrator', 
       // prevent this test from invoking the real beta codegen (network +
       // openapi-zod-client binary).
       runBetaPipeline: async () => ({ betaCount: 0, aliases: [] }),
+      // Plan 05-08 wired runCoverageCheck into FULL_COVERAGE=1 flow; stub to
+      // prevent this test from requiring a real emitted client.ts.
+      runCoverageCheck: () => ({
+        totals: { current: 0, baseline: 0 },
+        byWorkload: {},
+        deltas: {},
+        warnings: [],
+        errors: [],
+      }),
       // No simplifiers override -> real implementation is used.
     });
 
