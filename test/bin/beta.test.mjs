@@ -127,9 +127,7 @@ describe('plan 05-02 task 1 — runBetaPipeline', () => {
     }
     // Sanity: the fixture's devicemanagement.configurations.getassignedrolescopetags
     // op (base 56 chars) + __beta__ (8) should be exactly 64 — right at the boundary.
-    const boundary = result.aliases.find((a) =>
-      a.includes('getassignedrolescopetags')
-    );
+    const boundary = result.aliases.find((a) => a.includes('getassignedrolescopetags'));
     expect(boundary).toBeDefined();
     expect(boundary.length).toBeLessThanOrEqual(64);
   });
