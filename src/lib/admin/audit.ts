@@ -53,6 +53,7 @@ import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { problemBadRequest, problemForbidden, problemInternal } from './problem-json.js';
 import { encodeCursor, decodeCursor } from './cursor.js';
+import { writeAuditStandalone } from '../audit.js';
 import logger from '../../logger.js';
 import type { AdminRouterDeps } from './router.js';
 
@@ -303,6 +304,54 @@ export function createAuditRoutes(deps: AdminRouterDeps): Router {
         next_cursor: nextCursor,
         has_more: hasMore,
       });
+
+      // ADMIN-06: self-audit the query. Use writeAuditStandalone (post-
+      // response, fire-and-forget) so a DB failure here cannot mask the
+      // successful query or leak into the response. Shadow log captures
+      // any DB outage. Meta contains only filter shape + row count — no
+      // row payloads, no actor secrets.
+      //
+      // audit_log.tenant_id is NOT NULL with ON DELETE CASCADE to tenants,
+      // so we only persist the self-audit when the query is tenant-scoped
+      // (tenant-scoped admin, or global admin with an explicit tenant_id
+      // filter). Cross-tenant global queries are observability-only via
+      // pino info (the writer is a global-admin action, not a tenant-owned
+      // event). This preserves the admin.audit.query coverage for the
+      // common tenant-scoped path without forging a zero-GUID FK target.
+      if (effectiveTenantFilter !== null) {
+        await writeAuditStandalone(deps.pgPool, {
+          tenantId: effectiveTenantFilter,
+          actor: admin.actor,
+          action: 'admin.audit.query',
+          target: effectiveTenantFilter,
+          ip: req.ip ?? null,
+          requestId: req.id ?? 'unknown',
+          result: 'success',
+          meta: {
+            tenantIdFilter: effectiveTenantFilter,
+            sinceFilter: since ?? null,
+            untilFilter: until ?? null,
+            actionFilter: action ?? null,
+            actorFilter: actor ?? null,
+            rowsReturned: page.length,
+          },
+        });
+      } else {
+        logger.info(
+          {
+            event: 'admin.audit.query',
+            actor: admin.actor,
+            tenantIdFilter: null,
+            sinceFilter: since ?? null,
+            untilFilter: until ?? null,
+            actionFilter: action ?? null,
+            actorFilter: actor ?? null,
+            rowsReturned: page.length,
+            requestId: req.id ?? 'unknown',
+          },
+          'admin-audit: global cross-tenant query (no per-tenant audit row)'
+        );
+      }
     } catch (err) {
       logger.error(
         { err: (err as Error).message, actor: admin.actor },
