@@ -110,13 +110,14 @@ describe('plan 03-01 — Postgres schema round-trip', () => {
     ({ pool } = makePool());
   });
 
-  it('discovers four migration files in lexicographic order', () => {
+  it('discovers migration files in lexicographic order', () => {
     const migrations = listMigrations();
     expect(migrations.map((m) => m.file)).toEqual([
       '20260501000000_tenants.sql',
       '20260501000100_audit_log.sql',
       '20260501000200_delta_tokens.sql',
       '20260501000300_api_keys.sql',
+      '20260601000000_subscriptions.sql',
     ]);
   });
 
