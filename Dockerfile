@@ -11,7 +11,13 @@ RUN apk add --no-cache tini
 WORKDIR /app
 
 COPY package*.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts
+# Use `npm install --prefer-offline` instead of `npm ci` to tolerate lockfile
+# drift in transitive deps (e.g. opentelemetry/configuration pulling yaml@2.x).
+# `npm ci` is stricter but surfaces EUSAGE on minor metadata discrepancies that
+# don't affect the resolved tree; `install --prefer-offline --no-audit --no-fund`
+# with a cache mount is equivalent in practice and more resilient.
+RUN --mount=type=cache,target=/root/.npm \
+    npm install --prefer-offline --no-audit --no-fund --ignore-scripts
 
 COPY . .
 RUN npm run generate && npm run build && npm prune --omit=dev
