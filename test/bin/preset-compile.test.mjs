@@ -100,8 +100,12 @@ describe('plan 05-03 task 1 — compileEssentialsPreset', () => {
   });
 
   it('Test 6: throws when a preset op is NOT in the registry (T-05-06 typo-resistance)', () => {
-    // Registry deliberately missing `send-mail` (a flagship preset op).
-    const registry = realPreset.ops.filter((op) => op !== 'send-mail');
+    // Drop the first real op from the synthetic registry to force a miss.
+    // Post-Phase-5 the preset uses Microsoft operationIds (e.g.
+    // `me.messages.ListAttachments`), so we read one off the real preset
+    // rather than hard-coding a friendly name that no longer exists.
+    const dropped = realPreset.ops[0];
+    const registry = realPreset.ops.filter((op) => op !== dropped);
     fs.writeFileSync(path.join(tmp, 'generated', 'client.ts'), makeFakeClient(registry));
     fs.writeFileSync(
       path.join(tmp, 'presets', 'essentials-v1.json'),

@@ -14,6 +14,21 @@
     "todo": 8,
     "subscriptions": 4
   },
+  "rationale": {
+    "me.messages.ListAttachments": "Mail attachment browsing is table-stakes for any Outlook-shaped flow; keep in preset so assistants can list without a discovery round-trip.",
+    "me.messages.CreateAttachments": "Pairs with the list op — no point exposing read without write. Flagship Outlook send-with-attachment flow.",
+    "me.mailFolders.ListChildFolders": "Folder-tree navigation is the minimum surface for any mail-reading assistant; discovery search alone does not replace tree walks.",
+    "me.events.event.accept": "Calendar-accept is a one-click action users explicitly ask assistants to do on their behalf; kept here so it does not require a discovery call.",
+    "me.events.delta": "Delta sync is the only way to keep a local calendar mirror correct without re-reading full pages; belongs in the baseline.",
+    "drives.drive.ListDrive": "Drive enumeration is the entry point to every OneDrive / SharePoint Files flow.",
+    "teams.ListAllChannels": "Teams channel listing is required to ground any chat/message operation in the right channel id.",
+    "users.ListActivities": "Cross-device activity feed is a Graph flagship surface; the platform leans on it for continuity scenarios.",
+    "groups.ListAcceptedSenders": "Group mail-delivery policy is one of the few admin ops that non-admins still frequently ask about for their own groups.",
+    "planner.planner.GetPlanner": "Planner root read is the cheapest single-shot grounding call for assistant-side task workflows.",
+    "me.todo.ListLists": "ToDo list enumeration is the required prefix for any downstream task-level action.",
+    "subscriptions.subscription.CreateSubscription": "Webhook subscriptions unlock Graph-triggered automation; preset gates the ability to register one without a discovery round-trip.",
+    "sites.site.ListSite": "SharePoint site discovery is the required prefix for any sites-scoped read or write."
+  },
   "ops": [
     "me.messages.ListAttachments",
     "me.messages.CreateAttachments",

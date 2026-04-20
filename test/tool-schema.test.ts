@@ -10,24 +10,59 @@ function schemaFor(name: string) {
   return describeToolSchema(entry.tool, entry.config?.llmTip);
 }
 
+// Post-Phase-5: the legacy v1 aliases (`list-mail-messages`, `send-mail`) no
+// longer exist; the full-coverage regen emits Microsoft's operationId-style
+// names. Pick representative tools off the live registry instead of
+// hard-coding aliases that rot with every upstream spec update.
+function firstMatching(
+  predicate: (name: string, entry: NonNullable<ReturnType<typeof registry.get>>) => boolean
+) {
+  for (const [name, entry] of registry) {
+    if (predicate(name, entry)) return { name, entry };
+  }
+  return null;
+}
+
 describe('describeToolSchema', () => {
   it('returns name, method, path, and parameters for a common tool', () => {
-    const s = schemaFor('list-mail-messages');
-    expect(s.name).toBe('list-mail-messages');
+    const pick = firstMatching(
+      (_name, e) => e.tool.method?.toUpperCase?.() === 'GET' && typeof e.tool.path === 'string'
+    );
+    if (!pick) throw new Error('Registry has no GET tool — full-coverage regen expected');
+    const s = schemaFor(pick.name);
+    expect(s.name).toBe(pick.name);
     expect(s.method).toBe('GET');
-    expect(s.path).toContain('/me/messages');
+    expect(typeof s.path).toBe('string');
+    expect(s.path.length).toBeGreaterThan(0);
     expect(Array.isArray(s.parameters)).toBe(true);
   });
 
   it('marks path parameters as required', () => {
-    const s = schemaFor('get-mail-message');
+    // Pick any tool with a Path parameter — every Graph REST resource path
+    // carries at least one when a sub-resource is addressed by ID.
+    const pick = firstMatching((_name, e) =>
+      (e.tool.parameters ?? []).some((p: { type?: string }) => p.type === 'Path')
+    );
+    if (!pick)
+      throw new Error('Registry has no Path-parameterised tool — full-coverage regen expected');
+    const s = schemaFor(pick.name);
     const pathParams = s.parameters.filter((p) => p.in === 'Path');
     expect(pathParams.length).toBeGreaterThan(0);
     for (const p of pathParams) expect(p.required).toBe(true);
   });
 
   it('emits JSON Schema objects (not Zod) for every parameter', () => {
-    const s = schemaFor('send-mail');
+    // Pick any POST tool with a body parameter — mirrors the original
+    // `send-mail` case without pinning to a legacy alias.
+    const pick = firstMatching(
+      (_name, e) =>
+        e.tool.method?.toUpperCase?.() === 'POST' &&
+        (e.tool.parameters ?? []).some((p: { type?: string }) => p.type === 'Body')
+    );
+    if (!pick)
+      throw new Error('Registry has no POST-with-body tool — full-coverage regen expected');
+    const s = schemaFor(pick.name);
+    expect(s.parameters.length).toBeGreaterThan(0);
     for (const p of s.parameters) {
       expect(p.schema).toBeDefined();
       expect(typeof p.schema).toBe('object');
