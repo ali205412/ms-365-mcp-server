@@ -1186,14 +1186,23 @@ class MicrosoftGraphServer {
     const authSelector = createAuthSelectorMiddleware({ tenantPool });
     const buildMcpServer = (tenant: TenantRow): McpServer => this.createMcpServer(tenant);
 
+    // Plan 05-04 TENANT-08: seed AsyncLocalStorage with tenantId +
+    // enabled_tools_set + preset_version BEFORE authSelector runs. The auth
+    // middlewares own their own requestContext.run() calls that spread the
+    // existing frame; by seeding tenant fields first, dispatch-guard can
+    // resolve the tenant triple inside executeGraphTool via getRequestTenant().
+    const { createSeedTenantContextMiddleware } =
+      await import('./lib/tool-selection/tenant-context-middleware.js');
+    const seedTenantContext = createSeedTenantContextMiddleware();
+
     const streamableHttp = createStreamableHttpHandler({ buildMcpServer });
     const legacySseGet = createLegacySseGetHandler({ buildMcpServer });
     const legacySsePost = createLegacySsePostHandler({ buildMcpServer });
 
-    app.get('/t/:tenantId/sse', authSelector, legacySseGet);
-    app.post('/t/:tenantId/messages', authSelector, legacySsePost);
-    app.post('/t/:tenantId/mcp', authSelector, streamableHttp);
-    app.get('/t/:tenantId/mcp', authSelector, streamableHttp);
+    app.get('/t/:tenantId/sse', seedTenantContext, authSelector, legacySseGet);
+    app.post('/t/:tenantId/messages', seedTenantContext, authSelector, legacySsePost);
+    app.post('/t/:tenantId/mcp', seedTenantContext, authSelector, streamableHttp);
+    app.get('/t/:tenantId/mcp', seedTenantContext, authSelector, streamableHttp);
 
     // region:phase4-webhook-receiver
     // Plan 04-07: Microsoft Graph change-notification receiver (WEBHK-01 +

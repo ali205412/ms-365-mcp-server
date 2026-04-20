@@ -38,6 +38,17 @@ import type { Pool } from 'pg';
 import { LRUCache } from 'lru-cache';
 import logger from '../../logger.js';
 import type { TenantRow } from './tenant-row.js';
+import { ensureEnabledToolsSet } from '../tool-selection/enabled-tools-parser.js';
+
+/**
+ * Phase 5 plan 05-04 extension to TenantRow that surfaces the per-request
+ * `enabled_tools_set` alongside the DB-backed columns. Dispatch guard
+ * (src/lib/tool-selection/dispatch-guard.ts) reads the Set via
+ * `req.tenant.enabled_tools_set`.
+ */
+export type TenantRowWithEnabledSet = TenantRow & {
+  enabled_tools_set?: ReadonlySet<string>;
+};
 
 /**
  * RFC 4122 GUID regex (case-insensitive, hex-only). Matches v1 through v5
@@ -101,7 +112,7 @@ export function createLoadTenantMiddleware(deps: LoadTenantDeps): LoadTenantMidd
     // Guard 2: cache hit (happy path).
     const cached = cache.get(raw);
     if (cached) {
-      (req as Request & { tenant?: TenantRow }).tenant = cached;
+      attachTenantWithEnabledSet(req, cached);
       next();
       return;
     }
@@ -127,7 +138,7 @@ export function createLoadTenantMiddleware(deps: LoadTenantDeps): LoadTenantMidd
       }
 
       cache.set(raw, row);
-      (req as Request & { tenant?: TenantRow }).tenant = row;
+      attachTenantWithEnabledSet(req, row);
       next();
     } catch (err) {
       // T-03-08-05: never leak DB-driver error text to the client. Log
@@ -151,4 +162,23 @@ export function createLoadTenantMiddleware(deps: LoadTenantDeps): LoadTenantMidd
     cache.clear();
   };
   return augmented;
+}
+
+/**
+ * Attach the tenant row to `req.tenant` AND compute/attach
+ * `req.tenant.enabled_tools_set` in one step. The frozen Set is computed
+ * from the tenant's `enabled_tools` text against its pinned `preset_version`
+ * via `ensureEnabledToolsSet` (WeakMap-memoized per-request). Plan 05-04
+ * dispatch guard consumes the Set at executeGraphTool entry.
+ *
+ * NOTE: the original `TenantRow` is preserved in the augmented object via
+ * spread — consumers that rely on `req.tenant.enabled_tools` (the raw text)
+ * or other DB columns continue to work unchanged.
+ */
+function attachTenantWithEnabledSet(req: Request, row: TenantRow): void {
+  const enabledSet = ensureEnabledToolsSet(req, row.enabled_tools, row.preset_version);
+  (req as Request & { tenant?: TenantRowWithEnabledSet }).tenant = {
+    ...row,
+    enabled_tools_set: enabledSet,
+  };
 }

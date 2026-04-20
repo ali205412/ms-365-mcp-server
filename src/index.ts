@@ -477,6 +477,93 @@ async function main(): Promise<void> {
     // the user how to migrate them.
     maybeProbeKeytarLeftovers(args);
 
+    // Plan 05-04 TENANT-08 (Pitfall 8): seed the stdio-mode dispatch-guard
+    // fallback. StdioServerTransport dispatches tool calls outside the ALS
+    // frame established here, so we cannot rely on requestContext.run() to
+    // carry the tenant triple. Instead register a module-level fallback that
+    // dispatch-guard consults when ALS is empty.
+    //
+    //   --tenant-id set: load the row from Postgres (already done at line
+    //     371-403 above) and compute enabled_tools_set via the parser.
+    //   --tenant-id absent (legacy stdio): register a permissive fallback
+    //     that mirrors the full registered tool surface — the v1-era
+    //     `--enabled-tools` regex filter at registerGraphTools time is the
+    //     sole source of truth in legacy mode. This preserves backwards
+    //     compatibility without falling open on HTTP mode (HTTP mode always
+    //     populates ALS via loadTenant + seedTenantContext).
+    if (!isHttpMode) {
+      const { setStdioFallback } = await import('./lib/tool-selection/dispatch-guard.js');
+      const tenantIdArg =
+        (args as CommandOptions).tenantId ??
+        process.env.MS365_MCP_TENANT_ID ??
+        process.env.MS365_MCP_TENANT_ID_HTTP;
+      if (tenantIdArg && process.env.MS365_MCP_DATABASE_URL) {
+        try {
+          const pool = postgres.getPool();
+          const { rows } = await pool.query<{
+            enabled_tools: string | null;
+            preset_version: string;
+          }>(
+            'SELECT enabled_tools, preset_version FROM tenants WHERE id = $1 AND disabled_at IS NULL',
+            [tenantIdArg]
+          );
+          if (rows[0]) {
+            const { computeEnabledToolsSet } =
+              await import('./lib/tool-selection/enabled-tools-parser.js');
+            const set = computeEnabledToolsSet(rows[0].enabled_tools, rows[0].preset_version);
+            setStdioFallback({
+              enabledToolsSet: set,
+              tenantId: tenantIdArg,
+              presetVersion: rows[0].preset_version,
+            });
+            logger.info(
+              { tenantId: tenantIdArg, presetVersion: rows[0].preset_version, toolCount: set.size },
+              'stdio dispatch-guard fallback registered from tenant row'
+            );
+          }
+        } catch (err) {
+          logger.warn(
+            { tenantId: tenantIdArg, err: (err as Error).message },
+            'stdio dispatch-guard fallback: tenant row load failed; falling back to permissive set'
+          );
+        }
+      }
+      // Legacy mode (or tenant-id row load failed): register a permissive
+      // fallback covering the full registry. The existing --enabled-tools
+      // regex filter at registerGraphTools time already narrows the surface.
+      const { api } = await import('./generated/client.js');
+      const { setStdioFallback: setFallback } =
+        await import('./lib/tool-selection/dispatch-guard.js');
+      if (!tenantIdArg || !process.env.MS365_MCP_DATABASE_URL) {
+        const allAliases = new Set<string>(
+          api.endpoints
+            .map((e) => e.alias)
+            .filter((a): a is string => typeof a === 'string' && a.length > 0)
+        );
+        // Add the synthetic tools registered beyond api.endpoints (parse-
+        // teams-url, graph-batch, graph-upload-large-file, search-tools,
+        // get-tool-schema, execute-tool, list-accounts). These are also
+        // filtered by the v1 --enabled-tools regex at registration time;
+        // the dispatch-guard must accept them when they DO register.
+        for (const synthetic of [
+          'parse-teams-url',
+          'graph-batch',
+          'graph-upload-large-file',
+          'search-tools',
+          'get-tool-schema',
+          'execute-tool',
+          'list-accounts',
+        ]) {
+          allAliases.add(synthetic);
+        }
+        setFallback({
+          enabledToolsSet: Object.freeze(allAliases),
+          tenantId: 'stdio-legacy',
+          presetVersion: 'stdio-legacy',
+        });
+      }
+    }
+
     const server = new MicrosoftGraphServer(authManager, args, readinessChecks, { pkceStore });
     await server.initialize(version);
     await server.start();
