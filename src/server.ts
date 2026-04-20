@@ -1048,6 +1048,47 @@ class MicrosoftGraphServer {
       );
     }
 
+    // region:phase4-admin-router
+    // Plan 04-01: Admin REST API skeleton. Mount BEFORE /t/:tenantId so
+    // /admin/* paths never accidentally route through loadTenant (which
+    // would 404 on the literal segment 'admin' failing the GUID regex —
+    // T-04-03c). Gated on Entra admin env so deployments without the admin
+    // app registration expose zero /admin/* surface (T-04-03b).
+    //
+    // NOTE: Plan 04-01 originally described mounting OUTSIDE mountTenantRoutes
+    // (just before the call at ~line 1326). pg/redis/tenantPool are resolved
+    // INSIDE this method, however, so mounting here keeps deps in scope
+    // without duplicating the resolution block. Mount order vs. /t/:tenantId
+    // is preserved — admin declaration precedes the first app.use('/t/…').
+    if (process.env.MS365_MCP_ADMIN_APP_CLIENT_ID && process.env.MS365_MCP_ADMIN_GROUP_ID) {
+      const { createAdminRouter, parseAdminOrigins } = await import('./lib/admin/router.js');
+      const { createCursorSecret } = await import('./lib/admin/cursor.js');
+      const { loadKek } = await import('./lib/crypto/kek.js');
+      const adminOrigins = parseAdminOrigins(process.env.MS365_MCP_ADMIN_ORIGINS);
+      const adminRouter = createAdminRouter({
+        pgPool: pg,
+        redis,
+        tenantPool,
+        kek: await loadKek(),
+        adminOrigins,
+        entraConfig: {
+          appClientId: process.env.MS365_MCP_ADMIN_APP_CLIENT_ID,
+          groupId: process.env.MS365_MCP_ADMIN_GROUP_ID,
+        },
+        cursorSecret: createCursorSecret(),
+      });
+      app.use('/admin', adminRouter);
+      // Log origin COUNT only — never the actual allowlist contents (PII-
+      // adjacent: reveals which operator domains use this deployment).
+      logger.info({ adminOriginCount: adminOrigins.length }, 'Phase 4: /admin/* router mounted');
+    } else {
+      logger.warn(
+        {},
+        'Phase 4: MS365_MCP_ADMIN_APP_CLIENT_ID or MS365_MCP_ADMIN_GROUP_ID unset; /admin/* not mounted'
+      );
+    }
+    // endregion:phase4-admin-router
+
     // Per-tenant CORS — falls back to the global allowlist when the tenant
     // did not customize CORS. loadTenant runs first so req.tenant is set.
     const isProdMode = process.env.NODE_ENV === 'production';
