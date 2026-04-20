@@ -34,6 +34,13 @@ export interface TenantRow {
   cors_origins: string[];
   allowed_scopes: string[];
   enabled_tools: string | null;
+  /**
+   * Plan 05-03 (D-19). The tenant's pinned preset version — migration
+   * 20260702000000_preset_version.sql defaults this to 'essentials-v1' and
+   * backfills pre-existing rows. NOT NULL in DB, so never null here.
+   * Consumed by Plan 05-04 (dispatch guard) via preset-loader.presetFor().
+   */
+  preset_version: string;
   wrapped_dek: Envelope | null;
   slug: string | null;
   disabled_at: Date | null;

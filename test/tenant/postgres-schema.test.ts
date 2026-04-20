@@ -118,6 +118,8 @@ describe('plan 03-01 — Postgres schema round-trip', () => {
       '20260501000200_delta_tokens.sql',
       '20260501000300_api_keys.sql',
       '20260601000000_subscriptions.sql',
+      // Plan 05-03 (D-19): tenants.preset_version column.
+      '20260702000000_preset_version.sql',
     ]);
   });
 

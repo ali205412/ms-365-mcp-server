@@ -93,6 +93,13 @@ describe('plan 05-01 task 2 — generate-graph-client.mjs main() orchestrator', 
         callLog.push('generateMcpTools');
         return true;
       },
+      // Plan 05-03 wired compileEssentialsPreset at the tail of main(); stub
+      // to prevent this 05-01 test from running the real compile step against
+      // a staged fixture that lacks the 150 preset aliases.
+      compileEssentialsPreset: () => {
+        callLog.push('compileEssentialsPreset');
+        return { count: 0, presetTsPath: '', missing: [] };
+      },
       // Wrap simplifier exports so the test can assert which branch ran.
       simplifiers: {
         createAndSaveSimplifiedOpenAPI: (...args) => {
@@ -130,6 +137,8 @@ describe('plan 05-01 task 2 — generate-graph-client.mjs main() orchestrator', 
       // prevent this test from invoking the real beta codegen (network +
       // openapi-zod-client binary).
       runBetaPipeline: async () => ({ betaCount: 0, aliases: [] }),
+      // Plan 05-03 wired compileEssentialsPreset at tail of main(); stub.
+      compileEssentialsPreset: () => ({ count: 0, presetTsPath: '', missing: [] }),
       simplifiers: {
         createAndSaveSimplifiedOpenAPI: () => {
           callLog.push('legacy');
@@ -165,6 +174,9 @@ describe('plan 05-01 task 2 — generate-graph-client.mjs main() orchestrator', 
       // prevent this test from invoking the real beta codegen (network +
       // openapi-zod-client binary).
       runBetaPipeline: async () => ({ betaCount: 0, aliases: [] }),
+      // Plan 05-03 wired compileEssentialsPreset at tail of main(); stub so
+      // the test exercises only the simplifier branch under assertion.
+      compileEssentialsPreset: () => ({ count: 0, presetTsPath: '', missing: [] }),
       // No simplifiers override -> real implementation is used.
     });
 
