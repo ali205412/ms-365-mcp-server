@@ -217,8 +217,10 @@ const VALID_BODY = {
   client_id: 'app-uuid',
   tenant_id: '11111111-2222-4333-8444-555555555555',
   cloud_type: 'global' as const,
-  redirect_uri_allowlist: ['https://app.example.com/callback'],
-  cors_origins: ['https://app.example.com'],
+  // Use localhost so validateRedirectUri's prod-mode policy accepts without
+  // requiring MS365_MCP_PUBLIC_URL (tests run in arbitrary CI envs).
+  redirect_uri_allowlist: ['http://localhost:3000/callback'],
+  cors_origins: ['http://localhost:3000'],
   allowed_scopes: ['User.Read', 'Mail.Read'],
 };
 
@@ -236,11 +238,16 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
     sharedPool = pool;
     const tp = makeTenantPoolStub();
 
-    const { url, close } = await startServer(pool, new MemoryRedisFacade(), {
-      actor: 'admin@example.com',
-      source: 'entra',
-      tenantScoped: null,
-    }, tp);
+    const { url, close } = await startServer(
+      pool,
+      new MemoryRedisFacade(),
+      {
+        actor: 'admin@example.com',
+        source: 'entra',
+        tenantScoped: null,
+      },
+      tp
+    );
 
     try {
       const res = await doPost(`${url}/admin/tenants`, VALID_BODY);
@@ -263,14 +270,14 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
       expect('wrappedDek' in res.body).toBe(false);
 
       // DB row exists with wrapped_dek populated
-      const { rows } = await pool.query(
-        'SELECT id, wrapped_dek FROM tenants WHERE id = $1',
-        [res.body.id]
-      );
+      const { rows } = await pool.query('SELECT id, wrapped_dek FROM tenants WHERE id = $1', [
+        res.body.id,
+      ]);
       expect(rows.length).toBe(1);
-      const env = typeof rows[0].wrapped_dek === 'string'
-        ? JSON.parse(rows[0].wrapped_dek)
-        : rows[0].wrapped_dek;
+      const env =
+        typeof rows[0].wrapped_dek === 'string'
+          ? JSON.parse(rows[0].wrapped_dek)
+          : rows[0].wrapped_dek;
       expect(env).not.toBeNull();
       expect(env.v).toBe(1);
       expect(typeof env.iv).toBe('string');
@@ -312,11 +319,16 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
     sharedPool = pool;
     const tp = makeTenantPoolStub();
 
-    const { url, close } = await startServer(pool, new MemoryRedisFacade(), {
-      actor: 'admin@example.com',
-      source: 'entra',
-      tenantScoped: null,
-    }, tp);
+    const { url, close } = await startServer(
+      pool,
+      new MemoryRedisFacade(),
+      {
+        actor: 'admin@example.com',
+        source: 'entra',
+        tenantScoped: null,
+      },
+      tp
+    );
     try {
       const res = await doPost(`${url}/admin/tenants`, {
         ...VALID_BODY,
@@ -334,11 +346,16 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
     sharedPool = pool;
     const tp = makeTenantPoolStub();
 
-    const { url, close } = await startServer(pool, new MemoryRedisFacade(), {
-      actor: 'admin@example.com',
-      source: 'entra',
-      tenantScoped: null,
-    }, tp);
+    const { url, close } = await startServer(
+      pool,
+      new MemoryRedisFacade(),
+      {
+        actor: 'admin@example.com',
+        source: 'entra',
+        tenantScoped: null,
+      },
+      tp
+    );
     try {
       const res = await doPost(`${url}/admin/tenants`, {
         ...VALID_BODY,
@@ -360,11 +377,16 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
     sharedPool = pool;
     const tp = makeTenantPoolStub();
 
-    const { url, close } = await startServer(pool, new MemoryRedisFacade(), {
-      actor: 'admin@example.com',
-      source: 'entra',
-      tenantScoped: null,
-    }, tp);
+    const { url, close } = await startServer(
+      pool,
+      new MemoryRedisFacade(),
+      {
+        actor: 'admin@example.com',
+        source: 'entra',
+        tenantScoped: null,
+      },
+      tp
+    );
     try {
       const first = await doPost(`${url}/admin/tenants`, {
         ...VALID_BODY,
@@ -389,11 +411,16 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
     sharedPool = pool;
     const tp = makeTenantPoolStub();
 
-    const { url, close } = await startServer(pool, new MemoryRedisFacade(), {
-      actor: 'scoped@example.com',
-      source: 'api-key',
-      tenantScoped: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-    }, tp);
+    const { url, close } = await startServer(
+      pool,
+      new MemoryRedisFacade(),
+      {
+        actor: 'scoped@example.com',
+        source: 'api-key',
+        tenantScoped: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      },
+      tp
+    );
     try {
       const res = await doPost(`${url}/admin/tenants`, VALID_BODY);
       expect(res.status).toBe(403);
@@ -408,11 +435,16 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
     sharedPool = pool;
     const tp = makeTenantPoolStub();
 
-    const { url, close } = await startServer(pool, new MemoryRedisFacade(), {
-      actor: 'admin@example.com',
-      source: 'entra',
-      tenantScoped: null,
-    }, tp);
+    const { url, close } = await startServer(
+      pool,
+      new MemoryRedisFacade(),
+      {
+        actor: 'admin@example.com',
+        source: 'entra',
+        tenantScoped: null,
+      },
+      tp
+    );
     try {
       const post = await doPost(`${url}/admin/tenants`, VALID_BODY);
       expect(post.status).toBe(201);
@@ -430,9 +462,10 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
       expect(rows.length).toBe(1);
       expect(rows[0].id).toBe(newId);
       // wrapped_dek populated → loadTenant + TenantPool.acquire will work
-      const env = typeof rows[0].wrapped_dek === 'string'
-        ? JSON.parse(rows[0].wrapped_dek)
-        : rows[0].wrapped_dek;
+      const env =
+        typeof rows[0].wrapped_dek === 'string'
+          ? JSON.parse(rows[0].wrapped_dek)
+          : rows[0].wrapped_dek;
       expect(env).not.toBeNull();
       expect(env.v).toBe(1);
     } finally {
@@ -445,11 +478,16 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
     sharedPool = pool;
     const tp = makeTenantPoolStub();
 
-    const { url, close } = await startServer(pool, new MemoryRedisFacade(), {
-      actor: 'admin@example.com',
-      source: 'entra',
-      tenantScoped: null,
-    }, tp);
+    const { url, close } = await startServer(
+      pool,
+      new MemoryRedisFacade(),
+      {
+        actor: 'admin@example.com',
+        source: 'entra',
+        tenantScoped: null,
+      },
+      tp
+    );
     try {
       await doPost(`${url}/admin/tenants`, VALID_BODY);
       await doPost(`${url}/admin/tenants`, {
@@ -501,18 +539,22 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
     sharedPool = pool;
     const tp = makeTenantPoolStub();
 
-    const { url, close } = await startServer(pool, new MemoryRedisFacade(), {
-      actor: 'admin@example.com',
-      source: 'entra',
-      tenantScoped: null,
-    }, tp);
+    const { url, close } = await startServer(
+      pool,
+      new MemoryRedisFacade(),
+      {
+        actor: 'admin@example.com',
+        source: 'entra',
+        tenantScoped: null,
+      },
+      tp
+    );
     try {
       for (let i = 0; i < 25; i++) {
+        const hex = i.toString(16).padStart(2, '0');
         await doPost(`${url}/admin/tenants`, {
           ...VALID_BODY,
-          tenant_id: `1111111${i.toString().padStart(1, '0')}-2222-4333-8444-55555555555${(i % 10)
-            .toString()
-            .padStart(1, '0')}`,
+          tenant_id: `111111${hex}-2222-4333-8444-555555555555`,
           slug: `slug-${i}`,
         });
       }
@@ -547,11 +589,16 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
     sharedPool = pool;
     const tp = makeTenantPoolStub();
 
-    const { url, close } = await startServer(pool, new MemoryRedisFacade(), {
-      actor: 'admin@example.com',
-      source: 'entra',
-      tenantScoped: null,
-    }, tp);
+    const { url, close } = await startServer(
+      pool,
+      new MemoryRedisFacade(),
+      {
+        actor: 'admin@example.com',
+        source: 'entra',
+        tenantScoped: null,
+      },
+      tp
+    );
     try {
       const created = await doPost(`${url}/admin/tenants`, VALID_BODY);
       expect(created.status).toBe(201);
@@ -577,11 +624,16 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
     sharedPool = pool;
     const tp = makeTenantPoolStub();
 
-    const global = await startServer(pool, new MemoryRedisFacade(), {
-      actor: 'g@example.com',
-      source: 'entra',
-      tenantScoped: null,
-    }, tp);
+    const global = await startServer(
+      pool,
+      new MemoryRedisFacade(),
+      {
+        actor: 'g@example.com',
+        source: 'entra',
+        tenantScoped: null,
+      },
+      tp
+    );
     let tenantAId: string;
     try {
       const a = await doPost(`${global.url}/admin/tenants`, VALID_BODY);
@@ -598,11 +650,16 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
       await global.close();
     }
 
-    const scoped = await startServer(pool, new MemoryRedisFacade(), {
-      actor: 's@example.com',
-      source: 'api-key',
-      tenantScoped: tenantAId!,
-    }, tp);
+    const scoped = await startServer(
+      pool,
+      new MemoryRedisFacade(),
+      {
+        actor: 's@example.com',
+        source: 'api-key',
+        tenantScoped: tenantAId!,
+      },
+      tp
+    );
     try {
       const list = await doGet(`${scoped.url}/admin/tenants?limit=10`);
       expect(list.status).toBe(200);
@@ -618,11 +675,16 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
     sharedPool = pool;
     const tp = makeTenantPoolStub();
 
-    const global = await startServer(pool, new MemoryRedisFacade(), {
-      actor: 'g@example.com',
-      source: 'entra',
-      tenantScoped: null,
-    }, tp);
+    const global = await startServer(
+      pool,
+      new MemoryRedisFacade(),
+      {
+        actor: 'g@example.com',
+        source: 'entra',
+        tenantScoped: null,
+      },
+      tp
+    );
     let idA: string;
     let idB: string;
     try {
@@ -638,26 +700,37 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
     }
 
     // Global admin: 200 both; 404 missing
-    const globalAgain = await startServer(pool, new MemoryRedisFacade(), {
-      actor: 'g@example.com',
-      source: 'entra',
-      tenantScoped: null,
-    }, tp);
+    const globalAgain = await startServer(
+      pool,
+      new MemoryRedisFacade(),
+      {
+        actor: 'g@example.com',
+        source: 'entra',
+        tenantScoped: null,
+      },
+      tp
+    );
     try {
       expect((await doGet(`${globalAgain.url}/admin/tenants/${idA}`)).status).toBe(200);
       expect(
-        (await doGet(`${globalAgain.url}/admin/tenants/99999999-9999-4999-8999-999999999999`)).status
+        (await doGet(`${globalAgain.url}/admin/tenants/99999999-9999-4999-8999-999999999999`))
+          .status
       ).toBe(404);
     } finally {
       await globalAgain.close();
     }
 
     // Scoped to A: 200 for A; 404 for B (no-info-leak per D-13)
-    const scoped = await startServer(pool, new MemoryRedisFacade(), {
-      actor: 's@example.com',
-      source: 'api-key',
-      tenantScoped: idA!,
-    }, tp);
+    const scoped = await startServer(
+      pool,
+      new MemoryRedisFacade(),
+      {
+        actor: 's@example.com',
+        source: 'api-key',
+        tenantScoped: idA!,
+      },
+      tp
+    );
     try {
       expect((await doGet(`${scoped.url}/admin/tenants/${idA}`)).status).toBe(200);
       const cross = await doGet(`${scoped.url}/admin/tenants/${idB}`);
@@ -680,11 +753,16 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
     });
     await redis.subscribe('mcp:tenant-invalidate');
 
-    const { url, close } = await startServer(pool, redis, {
-      actor: 'admin@example.com',
-      source: 'entra',
-      tenantScoped: null,
-    }, tp);
+    const { url, close } = await startServer(
+      pool,
+      redis,
+      {
+        actor: 'admin@example.com',
+        source: 'entra',
+        tenantScoped: null,
+      },
+      tp
+    );
     try {
       const created = await doPost(`${url}/admin/tenants`, VALID_BODY);
       expect(created.status).toBe(201);
@@ -728,11 +806,16 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
     sharedPool = pool;
     const tp = makeTenantPoolStub();
 
-    const { url, close } = await startServer(pool, new MemoryRedisFacade(), {
-      actor: 'admin@example.com',
-      source: 'entra',
-      tenantScoped: null,
-    }, tp);
+    const { url, close } = await startServer(
+      pool,
+      new MemoryRedisFacade(),
+      {
+        actor: 'admin@example.com',
+        source: 'entra',
+        tenantScoped: null,
+      },
+      tp
+    );
     try {
       const created = await doPost(`${url}/admin/tenants`, VALID_BODY);
       expect(created.status).toBe(201);
@@ -761,11 +844,16 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
     sharedPool = pool;
     const tp = makeTenantPoolStub();
 
-    const { url, close } = await startServer(pool, new MemoryRedisFacade(), {
-      actor: 'admin@example.com',
-      source: 'entra',
-      tenantScoped: null,
-    }, tp);
+    const { url, close } = await startServer(
+      pool,
+      new MemoryRedisFacade(),
+      {
+        actor: 'admin@example.com',
+        source: 'entra',
+        tenantScoped: null,
+      },
+      tp
+    );
     try {
       const created = await doPost(`${url}/admin/tenants`, VALID_BODY);
       const res = await doPatch(`${url}/admin/tenants/${created.body.id}`, {});
@@ -781,11 +869,16 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
     sharedPool = pool;
     const tp = makeTenantPoolStub();
 
-    const { url, close } = await startServer(pool, new MemoryRedisFacade(), {
-      actor: 'admin@example.com',
-      source: 'entra',
-      tenantScoped: null,
-    }, tp);
+    const { url, close } = await startServer(
+      pool,
+      new MemoryRedisFacade(),
+      {
+        actor: 'admin@example.com',
+        source: 'entra',
+        tenantScoped: null,
+      },
+      tp
+    );
     try {
       const created = await doPost(`${url}/admin/tenants`, VALID_BODY);
       const res = await doPatch(`${url}/admin/tenants/${created.body.id}`, { mode: 'bearer' });
@@ -807,16 +900,20 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
     sharedPool = pool;
     const tp = makeTenantPoolStub();
 
-    const { url, close } = await startServer(pool, new MemoryRedisFacade(), {
-      actor: 'admin@example.com',
-      source: 'entra',
-      tenantScoped: null,
-    }, tp);
+    const { url, close } = await startServer(
+      pool,
+      new MemoryRedisFacade(),
+      {
+        actor: 'admin@example.com',
+        source: 'entra',
+        tenantScoped: null,
+      },
+      tp
+    );
     try {
-      const res = await doPatch(
-        `${url}/admin/tenants/99999999-9999-4999-8999-999999999999`,
-        { cors_origins: ['https://x.example.com'] }
-      );
+      const res = await doPatch(`${url}/admin/tenants/99999999-9999-4999-8999-999999999999`, {
+        cors_origins: ['https://x.example.com'],
+      });
       expect(res.status).toBe(404);
     } finally {
       await close();
@@ -828,11 +925,16 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
     sharedPool = pool;
     const tp = makeTenantPoolStub();
 
-    const global = await startServer(pool, new MemoryRedisFacade(), {
-      actor: 'g@example.com',
-      source: 'entra',
-      tenantScoped: null,
-    }, tp);
+    const global = await startServer(
+      pool,
+      new MemoryRedisFacade(),
+      {
+        actor: 'g@example.com',
+        source: 'entra',
+        tenantScoped: null,
+      },
+      tp
+    );
     let idA: string;
     let idB: string;
     try {
@@ -847,11 +949,16 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
       await global.close();
     }
 
-    const scoped = await startServer(pool, new MemoryRedisFacade(), {
-      actor: 's@example.com',
-      source: 'api-key',
-      tenantScoped: idA!,
-    }, tp);
+    const scoped = await startServer(
+      pool,
+      new MemoryRedisFacade(),
+      {
+        actor: 's@example.com',
+        source: 'api-key',
+        tenantScoped: idA!,
+      },
+      tp
+    );
     try {
       const own = await doPatch(`${scoped.url}/admin/tenants/${idA}`, {
         cors_origins: ['https://z.example.com'],
@@ -872,11 +979,16 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
     sharedPool = pool;
     const tp = makeTenantPoolStub();
 
-    const { url, close } = await startServer(pool, new MemoryRedisFacade(), {
-      actor: 'admin@example.com',
-      source: 'entra',
-      tenantScoped: null,
-    }, tp);
+    const { url, close } = await startServer(
+      pool,
+      new MemoryRedisFacade(),
+      {
+        actor: 'admin@example.com',
+        source: 'entra',
+        tenantScoped: null,
+      },
+      tp
+    );
     try {
       const res = await doPost(`${url}/admin/tenants`, VALID_BODY);
       expect(res.status).toBe(201);
