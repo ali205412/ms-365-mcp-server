@@ -9,8 +9,8 @@
  *   1. TLS enforce (T-04-01)
  *   2. Admin CORS (separate env MS365_MCP_ADMIN_ORIGINS; T-04-03)
  *   3. GET /health (auth bypass — smoke probe only)
- *   4. Auth (TODO plan 04-04)
- *   5. Sub-routes (TODO plans 04-02, 04-03, 04-05)
+ *   4. Dual-stack admin auth (plan 04-04, X-Admin-Api-Key > Bearer)
+ *   5. Sub-routes (04-03 /api-keys mounted; TODO 04-02 /tenants + 04-05 /audit)
  *
  * The factory captures deps in a closure so callers get a single Express
  * Router handle to hand to `app.use('/admin', router)`. Per plan 04-01,
@@ -33,6 +33,7 @@ import type { RedisClient } from '../redis.js';
 import type { TenantPool } from '../tenant/tenant-pool.js';
 import { createAdminTlsEnforceMiddleware } from './tls-enforce.js';
 import { createApiKeyRoutes, subscribeToApiKeyRevoke } from './api-keys.js';
+import { createAdminAuthMiddleware } from './auth/dual-stack.js';
 import logger from '../../logger.js';
 
 /**
@@ -163,7 +164,13 @@ export function createAdminRouter(deps: AdminRouterDeps): Router {
     res.type('text/plain').status(200).send('admin-router-alive');
   });
 
-  // TODO(04-04): r.use(createAdminAuthMiddleware(deps));
+  // 4. Dual-stack admin auth (plan 04-04): X-Admin-Api-Key header first,
+  //    Authorization: Bearer (Entra) second, neither → 401 problem+json.
+  //    Mounted AFTER /health so the liveness probe bypasses auth, BEFORE
+  //    sub-routes so every /admin/tenants + /admin/api-keys + /admin/audit
+  //    handler sees req.admin populated with {actor, source, tenantScoped}.
+  r.use(createAdminAuthMiddleware(deps));
+
   // TODO(04-02): r.use('/tenants', createTenantRoutes(deps));
   r.use('/api-keys', createApiKeyRoutes(deps));
   // TODO(04-05): r.use('/audit', createAuditRoutes(deps));
