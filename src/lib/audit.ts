@@ -41,19 +41,40 @@ import logger from '../logger.js';
  *
  * Per-action meta shapes (schema-on-read, D-13):
  *
- *   oauth.authorize        { clientId, scopes?, redirectUri? }
- *   oauth.token.exchange   { clientId, scopes?, error? }
- *   oauth.refresh          { clientId, scopes?, error? }
- *   graph.error            { code, message, graphRequestId, httpStatus }
- *   tenant.disable         { cacheKeysDeleted, pkceKeysDeleted }
- *   kek.rotate             { rewrapped, skipped, batchId? }
- *   session.put            { sessionIdSuffix, scopes }
- *   session.delete         { sessionIdSuffix, reason }
- *   admin.tenant.create    { clientId, mode, cloudType }     (Phase 4)
- *   admin.tenant.update    { fields: string[] }              (Phase 4)
- *   admin.api-key.mint     { keyId, displaySuffix, tenantId }                          (Phase 4)
- *   admin.api-key.revoke   { keyId, tenantId }                                         (Phase 4)
- *   admin.api-key.rotate   { oldKeyId, newKeyId, displaySuffixes: {old, new}, tenantId } (Phase 4)
+ *   oauth.authorize                { clientId, scopes?, redirectUri? }
+ *   oauth.token.exchange           { clientId, scopes?, error? }
+ *   oauth.refresh                  { clientId, scopes?, error? }
+ *   graph.error                    { code, message, graphRequestId, httpStatus }
+ *   tenant.disable                 { cacheKeysDeleted, pkceKeysDeleted }
+ *   kek.rotate                     { rewrapped, skipped, batchId? }
+ *   session.put                    { sessionIdSuffix, scopes }
+ *   session.delete                 { sessionIdSuffix, reason }
+ *
+ *   Phase 4 admin.* (ADMIN-01..06):
+ *   admin.tenant.create            { tenantId, clientId, mode, cloudType }
+ *   admin.tenant.update            { tenantId, fieldsChanged: string[] }
+ *   admin.tenant.disable           { tenantId, cacheKeysDeleted, pkceKeysDeleted, apiKeysRevoked }
+ *   admin.tenant.delete            { tenantId, apiKeysRevoked }
+ *   admin.tenant.rotate-secret     { tenantId, oldWrappedDekHash, newWrappedDekHash }
+ *   admin.api-key.mint             { keyId, displaySuffix, tenantId }
+ *   admin.api-key.revoke           { keyId, tenantId }
+ *   admin.api-key.rotate           { oldKeyId, newKeyId, displaySuffixes: {old, new}, tenantId }
+ *   admin.audit.query              { tenantIdFilter, sinceFilter, untilFilter,
+ *                                    actionFilter, actorFilter, rowsReturned }
+ *
+ *   Phase 4 webhook.* (WEBHK-01..03, plans 04-07 + 04-08 — staged here so
+ *   downstream plans extend handlers only, not the union):
+ *   webhook.unauthorized               { change_type, resource, received_client_state_suffix }
+ *   webhook.duplicate                  { dedup_key_suffix }
+ *   webhook.received                   { subscription_id, change_type }
+ *   webhook.subscription.renewed       { subscription_id, expires_at }
+ *   webhook.subscription.renew_failed  { subscription_id, error_code, graph_request_id }
+ *
+ * Redaction discipline (D-01): meta JSONB MUST NOT contain plaintext_key,
+ * client_secret, wrapped_dek (the raw envelope — wrapped_dek_suffix or a
+ * sha256 hash is safe), refresh_token, Authorization header values, or any
+ * Graph bearer token. Pino's REDACT_PATHS does not descend into arbitrary
+ * JSONB cell values — call-sites are the last line of defence.
  */
 export type AuditAction =
   | 'oauth.authorize'
@@ -66,9 +87,18 @@ export type AuditAction =
   | 'session.delete'
   | 'admin.tenant.create'
   | 'admin.tenant.update'
+  | 'admin.tenant.disable'
+  | 'admin.tenant.delete'
+  | 'admin.tenant.rotate-secret'
   | 'admin.api-key.mint'
   | 'admin.api-key.revoke'
-  | 'admin.api-key.rotate';
+  | 'admin.api-key.rotate'
+  | 'admin.audit.query'
+  | 'webhook.unauthorized'
+  | 'webhook.duplicate'
+  | 'webhook.received'
+  | 'webhook.subscription.renewed'
+  | 'webhook.subscription.renew_failed';
 
 export interface AuditRow {
   tenantId: string;
