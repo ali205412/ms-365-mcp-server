@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { execSync } from 'child_process';
 import { downloadGraphOpenAPI } from './download-openapi.mjs';
 import { createAndSaveSimplifiedOpenAPIFullSurface } from './simplified-openapi.mjs';
@@ -124,15 +125,28 @@ export async function runBetaPipeline(openapiDir, generatedDir, opts = {}) {
     fs.writeFileSync(tempBetaClientPath, code);
 
     // 5. Extract beta aliases + enforce invariants.
-    const betaAliases = [...code.matchAll(/alias:\s*["'](__beta__[^"']*)/g)].map((m) => m[1]);
+    // Length guard (Pitfall 3 / SEP-986): truncate oversize aliases with
+    // short sha1 suffix to preserve uniqueness. Microsoft's beta operationIds
+    // push many past 64 chars after __beta__ prefix (~11k of 8.9k total beta
+    // ops). Truncation is deterministic; hash suffix closes the collision risk.
+    code = code.replace(/alias:\s*["']([^"']+)["']/g, (full, alias) => {
+      if (alias.length <= MCP_TOOL_NAME_MAX) return full;
+      const suffix = crypto
+        .createHash('sha1')
+        .update(alias)
+        .digest('hex')
+        .slice(0, 8);
+      const keep = MCP_TOOL_NAME_MAX - suffix.length - 1; // reserve dash
+      const truncated = `${alias.slice(0, keep)}-${suffix}`;
+      return `alias: '${truncated}'`;
+    });
+    fs.writeFileSync(tempBetaClientPath, code);
 
-    // Length guard (Pitfall 3 / SEP-986).
-    const oversize = betaAliases.filter((a) => a.length > MCP_TOOL_NAME_MAX);
-    if (oversize.length > 0) {
-      const preview = oversize.slice(0, 5).join(', ');
-      const tail = oversize.length > 5 ? `... (+${oversize.length - 5} more)` : '';
+    const betaAliases = [...code.matchAll(/alias:\s*["'](__beta__[^"']*)/g)].map((m) => m[1]);
+    const stillOversize = betaAliases.filter((a) => a.length > MCP_TOOL_NAME_MAX);
+    if (stillOversize.length > 0) {
       throw new Error(
-        `Beta aliases exceed ${MCP_TOOL_NAME_MAX}-char MCP tool-name limit: ${preview}${tail} (total ${oversize.length})`
+        `Beta truncation failed for ${stillOversize.length} aliases (first: ${stillOversize[0]})`
       );
     }
 
