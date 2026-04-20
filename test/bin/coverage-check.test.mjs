@@ -270,22 +270,39 @@ describe('plan 05-08 task 1 — runCoverageCheck', () => {
   });
 
   it('Test 9: per-workload deltas are correctly signed in the report', () => {
+    // Baseline: 25 Mail + 50 Calendars. Current: 26 Mail + 48 Calendars.
+    // Mail grows +1 (silent). Calendars drops -2/50 = -4% (silent noise band).
+    // Validates the deltas map carries correctly-signed values across
+    // growth and modest-drop classifications without triggering errors/warns.
     const baseEntries = [
-      { path: '/me/messages', alias: 'mail-a' },
-      { path: '/me/events', alias: 'cal-a' },
-      { path: '/me/events/{id}', alias: 'cal-b' },
+      ...Array.from({ length: 25 }, (_, i) => ({
+        path: `/me/messages/${i}`,
+        alias: `mail-op-${i}`,
+      })),
+      ...Array.from({ length: 50 }, (_, i) => ({
+        path: `/me/events/${i}`,
+        alias: `cal-op-${i}`,
+      })),
     ];
     const currEntries = [
-      { path: '/me/messages', alias: 'mail-a' },
-      { path: '/me/messages/{id}', alias: 'mail-b' }, // Mail grows +1
-      { path: '/me/events', alias: 'cal-a' }, // Calendars drops -1
+      ...Array.from({ length: 26 }, (_, i) => ({
+        path: `/me/messages/${i}`,
+        alias: `mail-op-${i}`,
+      })),
+      ...Array.from({ length: 48 }, (_, i) => ({
+        path: `/me/events/${i}`,
+        alias: `cal-op-${i}`,
+      })),
     ];
     writeBaseline(baselinePath, countByWorkload(mkTempClient(tmpDir, baseEntries)));
     fs.writeFileSync(clientPath, buildClientFixture(currEntries));
 
     const report = runCoverageCheck(clientPath, baselinePath);
     expect(report.deltas.Mail).toBe(1);
-    expect(report.deltas.Calendars).toBe(-1);
+    expect(report.deltas.Calendars).toBe(-2);
+    // Both deltas fall in the silent band — Mail grows, Calendars drops -4%.
+    expect(report.errors).toEqual([]);
+    expect(report.warnings).toEqual([]);
   });
 });
 
