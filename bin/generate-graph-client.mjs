@@ -3,24 +3,33 @@
  * Microsoft Graph OpenAPI -> Zod client codegen orchestrator.
  *
  * Plan 05-01 extended this orchestrator to support a full-coverage branch
- * alongside the v1 legacy 212-op path. The branch is controlled by
- * environment variables that are read at `main()` entry:
+ * alongside the v1 legacy 212-op path. Plan 05-02 appended the beta pipeline
+ * step when full-coverage is on. The branch is controlled by environment
+ * variables that are read at `main()` entry:
  *
  *   MS365_MCP_FULL_COVERAGE (default "0")
  *     "1" -> retain every path from the Graph v1.0 spec (~5,021 ops) and
  *            skip the src/endpoints.json filter. The emitted
- *            src/generated/client.ts carries the full tool catalog.
+ *            src/generated/client.ts carries the full tool catalog AND the
+ *            Plan 05-02 beta pipeline runs (step 4) -- appending every beta
+ *            endpoint with the `__beta__` alias prefix.
  *     "0" -> legacy behavior (filter against src/endpoints.json => 212 ops).
+ *            Beta pipeline is skipped entirely.
  *
  *   MS365_MCP_USE_SNAPSHOT (default "0")
  *     "1" -> prefer the committed openapi/openapi.yaml snapshot over the
  *            live Microsoft upstream. If the snapshot is missing AND the
  *            network is unreachable, codegen fails closed (T-05-01).
+ *            Also honored by the beta pipeline for openapi/openapi-beta.yaml.
  *     "0" -> legacy download behavior (fetch when missing or --force).
  *
  *   MS365_MCP_ACCEPT_BETA_CHURN (default "0")
- *     Reserved for Plan 05-02 (beta churn guard). Declared here so operators
- *     see the full Phase 5 env surface in one place.
+ *     Plan 05-02 churn guard (CONTEXT D-18). Consulted by runBetaPipeline's
+ *     snapshot-diff step: when previously-known beta ops disappear from the
+ *     upstream spec AND this env var is NOT "1", the build exits non-zero
+ *     with a bounded preview of removed aliases. Set to "1" only after
+ *     reviewing `bin/.last-beta-snapshot.json` diff and accepting the
+ *     upstream shrinkage.
  *
  * For real-spec runs against the Microsoft upstream, raise the Node heap
  * to avoid OOM on recursive $ref expansion (Pitfall 1 in 05-RESEARCH.md):
@@ -29,10 +38,14 @@
  *   MS365_MCP_FULL_COVERAGE=1 \
  *   npm run generate
  *
- * Test harness: tests import `main({ rootDir, simplifiers, generateMcpTools })`
- * from this module. The deps bag lets tests stage a tmpdir and stub out the
- * expensive `openapi-zod-client` invocation while still exercising the real
- * branch selection + simplifier calls.
+ * Test harness: tests import `main({ rootDir, simplifiers, generateMcpTools,
+ * runBetaPipeline })` from this module. The deps bag lets tests stage a
+ * tmpdir and stub out the expensive `openapi-zod-client` invocation while
+ * still exercising the real branch selection + simplifier calls.
+ *
+ * Ordering note: Plan 05-08 (coverage harness) appends a `runCoverageCheck`
+ * step AFTER runBetaPipeline. Do not reshuffle the ordering -- the coverage
+ * check counts aliases emitted by BOTH v1 and beta pipelines together.
  */
 
 import path from 'path';
@@ -43,6 +56,7 @@ import {
   createAndSaveSimplifiedOpenAPI,
   createAndSaveSimplifiedOpenAPIFullSurface,
 } from './modules/simplified-openapi.mjs';
+import { runBetaPipeline as defaultRunBetaPipeline } from './modules/beta.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -60,6 +74,9 @@ const DEFAULT_ROOT = path.resolve(__dirname, '..');
  * @param {{createAndSaveSimplifiedOpenAPI: Function, createAndSaveSimplifiedOpenAPIFullSurface: Function}} [deps.simplifiers]
  *   Override either/both simplifier entry points.
  * @param {Function} [deps.generateMcpTools]  Override the zod-client invocation.
+ * @param {Function} [deps.runBetaPipeline]  Override the Plan 05-02 beta pipeline.
+ *   Only invoked when MS365_MCP_FULL_COVERAGE=1. Tests inject a stub that
+ *   records invocation without running the real openapi-zod-client binary.
  * @returns {Promise<void>}
  */
 export async function main(deps = {}) {
@@ -70,6 +87,7 @@ export async function main(deps = {}) {
     ...(deps.simplifiers ?? {}),
   };
   const generateMcpTools = deps.generateMcpTools ?? defaultGenerateMcpTools;
+  const runBetaPipeline = deps.runBetaPipeline ?? defaultRunBetaPipeline;
 
   const forceDownload = deps.forceDownload ?? process.argv.slice(2).includes('--force');
 
@@ -114,6 +132,13 @@ export async function main(deps = {}) {
   console.log('\n🚀 Step 3: Generating client code using openapi-zod-client');
   generateMcpTools(null, generatedDir);
   console.log('✅ Successfully generated client code');
+
+  if (fullCoverage) {
+    console.log('\n🧪 Step 4: Running beta pipeline (MS365_MCP_FULL_COVERAGE=1)');
+    const snapshotPath = path.join(__dirname, '.last-beta-snapshot.json');
+    await runBetaPipeline(openapiDir, generatedDir, { snapshotPath });
+    console.log('✅ Beta pipeline complete');
+  }
 }
 
 // Only auto-invoke when executed directly (node bin/generate-graph-client.mjs).

@@ -109,7 +109,10 @@ describe('plan 05-02 task 2 — runChurnGuard', () => {
   });
 
   it('Test 4b: removal preview is capped at 10 names (T-05-04 bounded output)', () => {
-    const prev = Array.from({ length: 15 }, (_, i) => `__beta__removed-${String(i).padStart(2, '0')}`);
+    const prev = Array.from(
+      { length: 15 },
+      (_, i) => `__beta__removed-${String(i).padStart(2, '0')}`
+    );
     writeSnapshotFixture(snapshotPath, prev);
     vi.stubEnv('MS365_MCP_ACCEPT_BETA_CHURN', '0');
 
@@ -193,7 +196,7 @@ export const api = new Zodios(endpoints);
         fs.writeFileSync(path.join(generatedDir, 'client.ts'), stub);
         fs.writeFileSync(path.join(generatedDir, 'hack.ts'), '// stub');
       },
-      runBetaPipeline: async (...args) => {
+      runBetaPipeline: async () => {
         callLog.push('runBetaPipeline');
         return { betaCount: 0, aliases: [] };
       },
@@ -238,8 +241,8 @@ export const api = new Zodios(endpoints);
     expect(callLog).toContain('generateMcpTools');
     expect(callLog).not.toContain('runBetaPipeline');
     // No temp fragment created when FULL_COVERAGE=0.
-    expect(
-      fs.existsSync(path.join(tmpDir, 'src', 'generated', '.client-beta-fragment.ts'))
-    ).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, 'src', 'generated', '.client-beta-fragment.ts'))).toBe(
+      false
+    );
   });
 });
