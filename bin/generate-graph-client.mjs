@@ -78,6 +78,7 @@ import {
   renderMarkdownReport,
 } from './modules/coverage-check.mjs';
 import { compileEssentialsPreset as defaultCompileEssentialsPreset } from './modules/compile-preset.mjs';
+import { stubMissingSchemas as defaultStubMissingSchemas } from './modules/stub-missing-schemas.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -119,6 +120,7 @@ export async function main(deps = {}) {
   const runCoverageCheck = deps.runCoverageCheck ?? defaultRunCoverageCheck;
   const compileEssentialsPreset =
     deps.compileEssentialsPreset ?? defaultCompileEssentialsPreset;
+  const stubMissingSchemas = deps.stubMissingSchemas ?? defaultStubMissingSchemas;
 
   const forceDownload = deps.forceDownload ?? process.argv.slice(2).includes('--force');
 
@@ -169,6 +171,22 @@ export async function main(deps = {}) {
     const snapshotPath = path.join(__dirname, '.last-beta-snapshot.json');
     await runBetaPipeline(openapiDir, generatedDir, { snapshotPath });
     console.log('✅ Beta pipeline complete');
+
+    // Post-beta-merge: stub any `microsoft_graph_*` identifiers that are
+    // referenced but never declared. Upstream v1+beta share a minority of
+    // schema names neither pipeline emits; without stubs the module throws
+    // `ReferenceError: microsoft_graph_accessReview is not defined` at import
+    // time. Runs only when FULL_COVERAGE=1 because the bug only manifests
+    // when the beta merge has landed.
+    console.log('\n🩹 Step 4b: Stubbing missing upstream schemas');
+    const clientTsForStubs = path.join(generatedDir, 'client.ts');
+    const { stubbed } = stubMissingSchemas(clientTsForStubs);
+    if (stubbed.length > 0) {
+      console.log(`✅ Stubbed ${stubbed.length} undefined schema(s)`);
+      console.log(`   First: ${stubbed.slice(0, 3).join(', ')}${stubbed.length > 3 ? ', ...' : ''}`);
+    } else {
+      console.log('✅ No missing schemas detected');
+    }
 
     console.log('\n📊 Step 5: Running coverage verification harness');
     const clientPath = path.join(generatedDir, 'client.ts');

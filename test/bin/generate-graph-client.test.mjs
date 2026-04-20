@@ -137,6 +137,10 @@ describe('plan 05-01 task 2 — generate-graph-client.mjs main() orchestrator', 
       // prevent this test from invoking the real beta codegen (network +
       // openapi-zod-client binary).
       runBetaPipeline: async () => ({ betaCount: 0, aliases: [] }),
+      // Post-Phase-5 addition: stubMissingSchemas runs after the beta merge;
+      // the real stubber reads client.ts which this test never writes, so
+      // inject a no-op.
+      stubMissingSchemas: () => ({ stubbed: [] }),
       // Plan 05-08 wired runCoverageCheck into FULL_COVERAGE=1 flow; stub to
       // prevent this test from requiring a real emitted client.ts.
       runCoverageCheck: () => ({
@@ -183,6 +187,8 @@ describe('plan 05-01 task 2 — generate-graph-client.mjs main() orchestrator', 
       // prevent this test from invoking the real beta codegen (network +
       // openapi-zod-client binary).
       runBetaPipeline: async () => ({ betaCount: 0, aliases: [] }),
+      // Post-Phase-5: stubMissingSchemas requires a real client.ts; no-op here.
+      stubMissingSchemas: () => ({ stubbed: [] }),
       // Plan 05-08 wired runCoverageCheck into FULL_COVERAGE=1 flow; stub.
       runCoverageCheck: () => ({
         totals: { current: 0, baseline: 0 },
