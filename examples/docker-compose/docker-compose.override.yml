@@ -1,0 +1,4 @@
+services:
+  mcp:
+    image: ms365-mcp:smoke
+    pull_policy: never
