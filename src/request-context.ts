@@ -26,6 +26,12 @@ export interface RequestContext {
   // Phase 3 plan 03-05 additions — populated by 03-06 auth middlewares:
   flow?: AuthFlow; // which identity flow produced this request
   authClientId?: string; // tenant-row client_id that authenticated the call (audit correlation)
+  // Phase 5 plan 05-04 additions — populated by server.ts at /t/:tenantId/mcp
+  // entry (HTTP mode) + src/index.ts at stdio bootstrap (stdio mode). Consumed
+  // by dispatch-guard (src/lib/tool-selection/dispatch-guard.ts) at the top
+  // of executeGraphTool (src/graph-tools.ts). TENANT-08 isolation.
+  enabledToolsSet?: ReadonlySet<string>;
+  presetVersion?: string;
 }
 
 export const requestContext = new AsyncLocalStorage<RequestContext>();
@@ -45,4 +51,26 @@ export function getRequestId(): string | undefined {
  */
 export function getFlow(): AuthFlow | undefined {
   return requestContext.getStore()?.flow;
+}
+
+/**
+ * Phase 5 plan 05-04 helper: surface the tenant triple (id, enabled set,
+ * preset version) for dispatch-guard invocation inside `executeGraphTool`.
+ * Returns the three fields that the guard needs, leaving other context
+ * fields private to their respective consumers.
+ *
+ * Outside an active request context, all three fields are undefined —
+ * callers MUST treat that as a fail-closed signal (checkDispatch does).
+ */
+export function getRequestTenant(): {
+  id?: string;
+  enabledToolsSet?: ReadonlySet<string>;
+  presetVersion?: string;
+} {
+  const ctx = requestContext.getStore();
+  return {
+    id: ctx?.tenantId ?? undefined,
+    enabledToolsSet: ctx?.enabledToolsSet,
+    presetVersion: ctx?.presetVersion,
+  };
 }

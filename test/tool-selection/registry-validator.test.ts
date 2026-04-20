@@ -35,43 +35,38 @@ describe('plan 05-04 Task 1 — registry-validator', () => {
 
   describe('validateSelectors (happy paths)', () => {
     it('Test 12: known op selector → {ok: true}', async () => {
-      const { validateSelectors } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
+      const { validateSelectors } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
       const r = validateSelectors(['mail.messages.send']);
       expect(r.ok).toBe(true);
     });
 
     it('Test 14: workload selector passes when ANY alias starts with the workload prefix', async () => {
-      const { validateSelectors } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
+      const { validateSelectors } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
       // "users" workload: both users.list and users.read have "users" as first segment
       const r = validateSelectors(['users:*']);
       expect(r.ok).toBe(true);
     });
 
     it('Test 14b: workload classifier strips __beta__ prefix', async () => {
-      const { validateSelectors } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
+      const { validateSelectors } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
       // __beta__security-alerts has "security" as its first segment after stripping.
       const r = validateSelectors(['security:*']);
       expect(r.ok).toBe(true);
     });
 
     it('valid preset selector → {ok: true}', async () => {
-      const { validateSelectors } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
+      const { validateSelectors } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
       const r = validateSelectors(['preset:essentials-v1']);
       expect(r.ok).toBe(true);
     });
 
     it('mixed known selectors all valid → {ok: true}', async () => {
-      const { validateSelectors } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
+      const { validateSelectors } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
       const r = validateSelectors([
         'preset:essentials-v1',
         'users:*',
@@ -84,9 +79,8 @@ describe('plan 05-04 Task 1 — registry-validator', () => {
 
   describe('validateSelectors (suggestions)', () => {
     it('Test 13: unknown op with typo → ranked suggestions', async () => {
-      const { validateSelectors } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
+      const { validateSelectors } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
       const r = validateSelectors(['mail.messages.sned']);
       expect(r.ok).toBe(false);
       if (r.ok) throw new Error('unreachable');
@@ -96,9 +90,8 @@ describe('plan 05-04 Task 1 — registry-validator', () => {
     });
 
     it('Test 13b: suggestions list capped at 3 items', async () => {
-      const { validateSelectors } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
+      const { validateSelectors } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
       // "users.XX" is distance 2 from both users.list and users.read
       const r = validateSelectors(['users.xx']);
       expect(r.ok).toBe(false);
@@ -107,9 +100,8 @@ describe('plan 05-04 Task 1 — registry-validator', () => {
     });
 
     it('Test 13c: distance > 3 excluded from suggestions', async () => {
-      const { validateSelectors } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
+      const { validateSelectors } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
       // Nothing in the registry is within distance 3 of "zzzzzzzz"
       const r = validateSelectors(['zzzzzzzz']);
       expect(r.ok).toBe(false);
@@ -118,9 +110,8 @@ describe('plan 05-04 Task 1 — registry-validator', () => {
     });
 
     it('unknown preset → suggests from PRESET_VERSIONS pool only', async () => {
-      const { validateSelectors } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
+      const { validateSelectors } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
       const r = validateSelectors(['preset:nonexistent-preset']);
       expect(r.ok).toBe(false);
       if (r.ok) throw new Error('unreachable');
@@ -135,9 +126,8 @@ describe('plan 05-04 Task 1 — registry-validator', () => {
     });
 
     it('unknown workload → suggests from WORKLOAD_PREFIXES pool only', async () => {
-      const { validateSelectors } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
+      const { validateSelectors } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
       const r = validateSelectors(['userz:*']);
       expect(r.ok).toBe(false);
       if (r.ok) throw new Error('unreachable');
@@ -149,9 +139,8 @@ describe('plan 05-04 Task 1 — registry-validator', () => {
     });
 
     it('invalid selector characters → invalid=[original input], no suggestions', async () => {
-      const { validateSelectors } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
+      const { validateSelectors } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
       const r = validateSelectors(['bad<script>']);
       expect(r.ok).toBe(false);
     });
@@ -159,9 +148,8 @@ describe('plan 05-04 Task 1 — registry-validator', () => {
 
   describe('getRegistryAliases / getWorkloadPrefixes exports', () => {
     it('getRegistryAliases returns frozen Set of every alias', async () => {
-      const { getRegistryAliases } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
+      const { getRegistryAliases } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
       const aliases = getRegistryAliases();
       expect(aliases.has('mail.messages.send')).toBe(true);
       expect(aliases.has('__beta__security-alerts')).toBe(true);
@@ -169,9 +157,8 @@ describe('plan 05-04 Task 1 — registry-validator', () => {
     });
 
     it('getWorkloadPrefixes returns frozen Set with __beta__-stripped prefixes', async () => {
-      const { getWorkloadPrefixes } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
+      const { getWorkloadPrefixes } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
       const prefixes = getWorkloadPrefixes();
       expect(prefixes.has('mail')).toBe(true);
       expect(prefixes.has('users')).toBe(true);

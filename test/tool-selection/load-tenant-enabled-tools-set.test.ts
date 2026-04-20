@@ -63,19 +63,17 @@ function makeRow(overrides: Partial<TenantRow> = {}): TenantRow {
 }
 
 function makeMockPool(row: TenantRow): Pool {
-  const query = vi.fn(
-    async (_sql: string, params: unknown[]): Promise<QueryResult<TenantRow>> => {
-      const id = params[0] as string;
-      const found = row.id === id && row.disabled_at === null ? row : null;
-      return {
-        rows: found ? [found] : [],
-        rowCount: found ? 1 : 0,
-        command: 'SELECT',
-        oid: 0,
-        fields: [],
-      };
-    }
-  );
+  const query = vi.fn(async (_sql: string, params: unknown[]): Promise<QueryResult<TenantRow>> => {
+    const id = params[0] as string;
+    const found = row.id === id && row.disabled_at === null ? row : null;
+    return {
+      rows: found ? [found] : [],
+      rowCount: found ? 1 : 0,
+      command: 'SELECT',
+      oid: 0,
+      fields: [],
+    };
+  });
   return { query } as unknown as Pool;
 }
 
@@ -109,9 +107,7 @@ describe('plan 05-04 Task 2 — loadTenant populates req.tenant.enabled_tools_se
   });
 
   it('Test 7: NULL enabled_tools → preset Set on req.tenant.enabled_tools_set', async () => {
-    const { createLoadTenantMiddleware } = await import(
-      '../../src/lib/tenant/load-tenant.js'
-    );
+    const { createLoadTenantMiddleware } = await import('../../src/lib/tenant/load-tenant.js');
     const row = makeRow({ enabled_tools: null, preset_version: 'essentials-v1' });
     const pool = makeMockPool(row);
     const mw = createLoadTenantMiddleware({ pool });
@@ -133,9 +129,7 @@ describe('plan 05-04 Task 2 — loadTenant populates req.tenant.enabled_tools_se
   });
 
   it('explicit "users-list,mail-send" → Set with exactly those two ops', async () => {
-    const { createLoadTenantMiddleware } = await import(
-      '../../src/lib/tenant/load-tenant.js'
-    );
+    const { createLoadTenantMiddleware } = await import('../../src/lib/tenant/load-tenant.js');
     const row = makeRow({
       enabled_tools: 'users-list,mail-send',
       preset_version: 'essentials-v1',
@@ -158,9 +152,7 @@ describe('plan 05-04 Task 2 — loadTenant populates req.tenant.enabled_tools_se
   });
 
   it('empty string enabled_tools → empty Set (explicit no-tools)', async () => {
-    const { createLoadTenantMiddleware } = await import(
-      '../../src/lib/tenant/load-tenant.js'
-    );
+    const { createLoadTenantMiddleware } = await import('../../src/lib/tenant/load-tenant.js');
     const row = makeRow({ enabled_tools: '', preset_version: 'essentials-v1' });
     const pool = makeMockPool(row);
     const mw = createLoadTenantMiddleware({ pool });
@@ -177,9 +169,7 @@ describe('plan 05-04 Task 2 — loadTenant populates req.tenant.enabled_tools_se
   });
 
   it('cache hit re-parses into a fresh Set (WeakMap keys on the Request)', async () => {
-    const { createLoadTenantMiddleware } = await import(
-      '../../src/lib/tenant/load-tenant.js'
-    );
+    const { createLoadTenantMiddleware } = await import('../../src/lib/tenant/load-tenant.js');
     const row = makeRow({ enabled_tools: null, preset_version: 'essentials-v1' });
     const pool = makeMockPool(row);
     const mw = createLoadTenantMiddleware({ pool });

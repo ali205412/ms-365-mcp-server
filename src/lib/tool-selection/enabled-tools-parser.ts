@@ -80,9 +80,7 @@ export function computeEnabledToolsSet(
   // Construction step 2: any `+...` selector triggers preset seeding.
   const hasAdditive = selectors.some(
     (s) =>
-      s.kind === 'additive-workload' ||
-      s.kind === 'additive-op' ||
-      s.kind === 'additive-preset'
+      s.kind === 'additive-workload' || s.kind === 'additive-op' || s.kind === 'additive-preset'
   );
 
   const out = new Set<string>();

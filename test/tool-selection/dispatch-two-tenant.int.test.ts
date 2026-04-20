@@ -60,22 +60,22 @@ function captureHandlers(
     string,
     (args: Record<string, unknown>) => Promise<{ content: unknown[]; isError?: boolean }>
   >();
-  const toolSpy = vi
-    .spyOn(server, 'tool')
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK overload
-    .mockImplementation(((name: string, ..._rest: unknown[]) => {
-      const handler = _rest[_rest.length - 1];
-      if (typeof handler === 'function') {
-        handlers.set(
-          name,
-          handler as (
-            args: Record<string, unknown>
-          ) => Promise<{ content: unknown[]; isError?: boolean }>
-        );
-      }
-      return { register: vi.fn() };
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    }) as any);
+  const toolSpy = vi.spyOn(server, 'tool').mockImplementation(((
+    name: string,
+    ..._rest: unknown[]
+  ) => {
+    const handler = _rest[_rest.length - 1];
+    if (typeof handler === 'function') {
+      handlers.set(
+        name,
+        handler as (
+          args: Record<string, unknown>
+        ) => Promise<{ content: unknown[]; isError?: boolean }>
+      );
+    }
+    return { register: vi.fn() };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  }) as any);
 
   registerGraphTools(server, makeGraphClient(), false);
   toolSpy.mockRestore();
@@ -94,9 +94,8 @@ describe('plan 05-04 Task 2 — two-tenant dispatch isolation', () => {
     const { registerGraphTools } = await import('../../src/graph-tools.js');
     const { requestContext } = await import('../../src/request-context.js');
     const { presetFor } = await import('../../src/lib/tool-selection/preset-loader.js');
-    const { computeEnabledToolsSet } = await import(
-      '../../src/lib/tool-selection/enabled-tools-parser.js'
-    );
+    const { computeEnabledToolsSet } =
+      await import('../../src/lib/tool-selection/enabled-tools-parser.js');
 
     const handlers = captureHandlers(registerGraphTools);
     const sendMail = handlers.get('mail-send')!;
@@ -155,9 +154,8 @@ describe('plan 05-04 Task 2 — two-tenant dispatch isolation', () => {
     const { registerGraphTools } = await import('../../src/graph-tools.js');
     const { requestContext } = await import('../../src/request-context.js');
     const { presetFor } = await import('../../src/lib/tool-selection/preset-loader.js');
-    const { computeEnabledToolsSet } = await import(
-      '../../src/lib/tool-selection/enabled-tools-parser.js'
-    );
+    const { computeEnabledToolsSet } =
+      await import('../../src/lib/tool-selection/enabled-tools-parser.js');
 
     const handlers = captureHandlers(registerGraphTools);
     const usersList = handlers.get('users-list')!;
@@ -216,9 +214,8 @@ describe('plan 05-04 Task 2 — two-tenant dispatch isolation', () => {
 
   it('tenant A set and tenant B set are not identity-equal (different Set objects)', async () => {
     const { presetFor } = await import('../../src/lib/tool-selection/preset-loader.js');
-    const { computeEnabledToolsSet } = await import(
-      '../../src/lib/tool-selection/enabled-tools-parser.js'
-    );
+    const { computeEnabledToolsSet } =
+      await import('../../src/lib/tool-selection/enabled-tools-parser.js');
     const aSet = presetFor('essentials-v1');
     const bSet = computeEnabledToolsSet('users-list,mail-send', 'essentials-v1');
     // Must be distinct Set instances — the tenant-isolation invariant

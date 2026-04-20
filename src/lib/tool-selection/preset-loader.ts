@@ -12,10 +12,7 @@
  * fail-closed default — an unknown preset_version means the tenant gets ZERO
  * tools rather than accidentally falling back to a wider surface.
  */
-import {
-  ESSENTIALS_V1_OPS,
-  PRESET_VERSIONS,
-} from '../../presets/generated-index.js';
+import { ESSENTIALS_V1_OPS, PRESET_VERSIONS } from '../../presets/generated-index.js';
 
 export { ESSENTIALS_V1_OPS };
 

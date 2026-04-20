@@ -8,7 +8,8 @@ import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { TOOL_CATEGORIES } from './tool-categories.js';
-import { getRequestTokens } from './request-context.js';
+import { getRequestTokens, getRequestTenant } from './request-context.js';
+import { checkDispatch } from './lib/tool-selection/dispatch-guard.js';
 import { parseTeamsUrl } from './lib/teams-url-parser.js';
 import { buildBM25Index, scoreQuery, tokenize, type BM25Index } from './lib/bm25.js';
 export interface DiscoverySearchIndex {
@@ -137,6 +138,41 @@ async function executeGraphTool(
   authManager?: AuthManager
 ): Promise<CallToolResult> {
   logger.info(`Tool ${tool.alias} called with params: ${JSON.stringify(params)}`);
+
+  // ── DISPATCH GATE (plan 05-04, TENANT-08, D-20) ────────────────────────
+  // Read enabled_tools_set + tenantId + preset_version from AsyncLocalStorage.
+  //   HTTP mode: populated by src/server.ts at /t/:tenantId/mcp entry
+  //              (loadTenant middleware → requestContext.run wrapper).
+  //   Stdio mode: populated by src/index.ts bootstrap when --tenant-id is set.
+  // Rejection returns an MCP tool error envelope (D-20), NOT HTTP 403.
+  // checkDispatch never throws — rejection shape matches CallToolResult.
+  const tenantInfo = getRequestTenant();
+  const rejection = checkDispatch(
+    tool.alias,
+    tenantInfo.enabledToolsSet,
+    tenantInfo.id,
+    tenantInfo.presetVersion
+  );
+  if (rejection) {
+    logger.info(
+      { tool: tool.alias, tenantId: tenantInfo.id, preset: tenantInfo.presetVersion },
+      'dispatch-guard: tool not enabled for tenant'
+    );
+    return rejection as CallToolResult;
+  }
+
+  // ── BETA LOG (plan 05-04, D-18) ────────────────────────────────────────
+  // Structured pino info log for every `__beta__*` dispatch that passed the
+  // gate. Operators can filter on `beta:true` to spot beta usage per-tenant
+  // without combing through every tool call. No raw enabled_tools text is
+  // logged — tenant.id + alias are safe per 05-RESEARCH.md:467.
+  if (tool.alias.startsWith('__beta__')) {
+    logger.info(
+      { beta: true, toolAlias: tool.alias, tenantId: tenantInfo.id },
+      'beta tool invoked'
+    );
+  }
+
   try {
     // Resolve account-specific token if `account` parameter is provided (or auto-resolve for single account).
     // Skip in OAuth/HTTP mode — let the request context drive token selection via GraphClient.

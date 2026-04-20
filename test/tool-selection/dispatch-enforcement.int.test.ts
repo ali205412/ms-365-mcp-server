@@ -84,29 +84,31 @@ function makeGraphClient(): GraphClient {
  * Capture the handler closure that registerGraphTools registers for a given
  * tool alias. We spy on McpServer.tool to grab the 5th argument (handler).
  */
-function captureHandlers(registerGraphTools: typeof import('../../src/graph-tools.js').registerGraphTools) {
+function captureHandlers(
+  registerGraphTools: typeof import('../../src/graph-tools.js').registerGraphTools
+) {
   const server = new McpServer({ name: 'test', version: '0.0.0' });
   const handlers = new Map<
     string,
     (args: Record<string, unknown>) => Promise<{ content: unknown[]; isError?: boolean }>
   >();
-  const toolSpy = vi
-    .spyOn(server, 'tool')
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK overload
-    .mockImplementation(((name: string, ..._rest: unknown[]) => {
-      // The handler is the LAST argument in every tool() overload the SDK exposes.
-      const handler = _rest[_rest.length - 1];
-      if (typeof handler === 'function') {
-        handlers.set(
-          name,
-          handler as (
-            args: Record<string, unknown>
-          ) => Promise<{ content: unknown[]; isError?: boolean }>
-        );
-      }
-      return { register: vi.fn() };
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    }) as any);
+  const toolSpy = vi.spyOn(server, 'tool').mockImplementation(((
+    name: string,
+    ..._rest: unknown[]
+  ) => {
+    // The handler is the LAST argument in every tool() overload the SDK exposes.
+    const handler = _rest[_rest.length - 1];
+    if (typeof handler === 'function') {
+      handlers.set(
+        name,
+        handler as (
+          args: Record<string, unknown>
+        ) => Promise<{ content: unknown[]; isError?: boolean }>
+      );
+    }
+    return { register: vi.fn() };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  }) as any);
 
   registerGraphTools(server, makeGraphClient(), false);
   toolSpy.mockRestore();
@@ -114,8 +116,12 @@ function captureHandlers(registerGraphTools: typeof import('../../src/graph-tool
 }
 
 describe('plan 05-04 Task 2 — dispatch enforcement (integration)', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    // Clear any stdio fallback bleed-in from other test files so the
+    // "undefined ALS → reject" path surfaces correctly.
+    const { setStdioFallback } = await import('../../src/lib/tool-selection/dispatch-guard.js');
+    setStdioFallback(undefined);
   });
 
   it('Test 1: NULL enabled_tools + preset tool → Graph call proceeds (200)', async () => {
@@ -179,9 +185,8 @@ describe('plan 05-04 Task 2 — dispatch enforcement (integration)', () => {
 
     const { registerGraphTools } = await import('../../src/graph-tools.js');
     const { requestContext } = await import('../../src/request-context.js');
-    const { computeEnabledToolsSet } = await import(
-      '../../src/lib/tool-selection/enabled-tools-parser.js'
-    );
+    const { computeEnabledToolsSet } =
+      await import('../../src/lib/tool-selection/enabled-tools-parser.js');
 
     // Enabled-tools that includes the beta tool via the "+__beta__security:*"
     // workload-expansion path. The parser strips __beta__ for workload
@@ -209,15 +214,15 @@ describe('plan 05-04 Task 2 — dispatch enforcement (integration)', () => {
     const betaLog = calls.find((c) => {
       const msg = typeof c[0] === 'string' ? c[0] : c[1];
       const meta = typeof c[0] === 'string' ? c[1] : c[0];
-      return msg === 'beta tool invoked' || (meta && typeof meta === 'object' && (meta as Record<string, unknown>).beta === true);
+      return (
+        msg === 'beta tool invoked' ||
+        (meta && typeof meta === 'object' && (meta as Record<string, unknown>).beta === true)
+      );
     });
     expect(betaLog).toBeDefined();
-    const betaMeta =
-      typeof betaLog![0] === 'string' ? betaLog![1] : betaLog![0];
+    const betaMeta = typeof betaLog![0] === 'string' ? betaLog![1] : betaLog![0];
     expect((betaMeta as Record<string, unknown>).beta).toBe(true);
-    expect((betaMeta as Record<string, unknown>).toolAlias).toBe(
-      '__beta__security-alerts-list'
-    );
+    expect((betaMeta as Record<string, unknown>).toolAlias).toBe('__beta__security-alerts-list');
     expect((betaMeta as Record<string, unknown>).tenantId).toBe(
       '22222222-2222-2222-2222-222222222222'
     );

@@ -61,9 +61,7 @@ const REGISTRY_ALIASES: ReadonlySet<string> = Object.freeze(
 );
 
 const WORKLOAD_PREFIXES: ReadonlySet<string> = Object.freeze(
-  new Set(
-    [...REGISTRY_ALIASES].map(extractWorkloadPrefix).filter((w) => w.length > 0)
-  )
+  new Set([...REGISTRY_ALIASES].map(extractWorkloadPrefix).filter((w) => w.length > 0))
 );
 
 const PRESET_NAMES: ReadonlySet<string> = Object.freeze(new Set(PRESET_VERSIONS.keys()));
