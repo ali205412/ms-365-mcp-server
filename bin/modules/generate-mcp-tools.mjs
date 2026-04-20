@@ -50,6 +50,10 @@ export function generateMcpTools(openApiSpec, outputDir) {
     // Match: path: '/...range(param=':value')...',
     // Replace with: path: `/...range(param=':value')...`,
     clientCode = clientCode.replace(/(path:\s*)'(\/[^']*\([^)]*=':[\w]+'\)[^']*)'/g, '$1`$2`');
+    // Additional: handle @-prefixed literal params (userId='@userId', etc.)
+    // common in Graph beta action paths. Any path with an embedded '@ sequence
+    // inside parentheses is wrapped in backticks.
+    clientCode = clientCode.replace(/(path:\s*)'(\/[^']*\([^)\n]*'@[^)\n]*\)[^']*)'/g, '$1`$2`');
 
     fs.writeFileSync(clientFilePath, clientCode);
 
