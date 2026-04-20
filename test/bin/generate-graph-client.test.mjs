@@ -175,10 +175,7 @@ describe('plan 05-01 task 2 — generate-graph-client.mjs main() orchestrator', 
 
     vi.stubEnv('MS365_MCP_FULL_COVERAGE', '1');
     vi.stubEnv('MS365_MCP_USE_SNAPSHOT', '0');
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockRejectedValue(new Error('ENETUNREACH'))
-    );
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ENETUNREACH')));
 
     await expect(
       generateMain({
@@ -194,10 +191,7 @@ describe('plan 05-01 task 2 — generate-graph-client.mjs main() orchestrator', 
 
     vi.stubEnv('MS365_MCP_FULL_COVERAGE', '1');
     vi.stubEnv('MS365_MCP_USE_SNAPSHOT', '1');
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockRejectedValue(new Error('ENETUNREACH'))
-    );
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ENETUNREACH')));
 
     await expect(
       generateMain({

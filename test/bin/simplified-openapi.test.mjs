@@ -124,9 +124,7 @@ describe('plan 05-01 task 1 — createAndSaveSimplifiedOpenAPIFullSurface', () =
 
   it('Test 2: recursive $ref (directoryObject.members) flattens without throwing', () => {
     const outPath = path.join(tmpDir, 'trimmed.yaml');
-    expect(() =>
-      createAndSaveSimplifiedOpenAPIFullSurface(FIXTURE_PATH, outPath)
-    ).not.toThrow();
+    expect(() => createAndSaveSimplifiedOpenAPIFullSurface(FIXTURE_PATH, outPath)).not.toThrow();
 
     const output = yaml.load(fs.readFileSync(outPath, 'utf8'));
     // directoryObject survives (it is referenced from /directoryObjects/{…}).
@@ -176,7 +174,10 @@ describe('plan 05-01 task 1 — downloadGraphOpenAPI + MS365_MCP_USE_SNAPSHOT', 
   });
 
   it('Test 4 (T-05-01): MS365_MCP_USE_SNAPSHOT=1 + file exists -> returns false, no network', async () => {
-    fs.writeFileSync(targetFile, 'openapi: "3.0.0"\ninfo: {title: snap, version: "1.0"}\npaths: {}\n');
+    fs.writeFileSync(
+      targetFile,
+      'openapi: "3.0.0"\ninfo: {title: snap, version: "1.0"}\npaths: {}\n'
+    );
     vi.stubEnv('MS365_MCP_USE_SNAPSHOT', '1');
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
@@ -190,7 +191,10 @@ describe('plan 05-01 task 1 — downloadGraphOpenAPI + MS365_MCP_USE_SNAPSHOT', 
   });
 
   it('Test 5 (T-05-01): MS365_MCP_USE_SNAPSHOT=1 + network fails + file exists -> returns false (no throw)', async () => {
-    fs.writeFileSync(targetFile, 'openapi: "3.0.0"\ninfo: {title: snap, version: "1.0"}\npaths: {}\n');
+    fs.writeFileSync(
+      targetFile,
+      'openapi: "3.0.0"\ninfo: {title: snap, version: "1.0"}\npaths: {}\n'
+    );
     vi.stubEnv('MS365_MCP_USE_SNAPSHOT', '1');
     const fetchSpy = vi.fn().mockRejectedValue(new Error('ENETUNREACH'));
     vi.stubGlobal('fetch', fetchSpy);
@@ -224,8 +228,6 @@ describe('plan 05-01 task 1 — downloadGraphOpenAPI + MS365_MCP_USE_SNAPSHOT', 
     const fetchSpy = vi.fn().mockRejectedValue(new Error('ENETUNREACH'));
     vi.stubGlobal('fetch', fetchSpy);
 
-    await expect(
-      downloadGraphOpenAPI(tmpDir, targetFile, undefined, false)
-    ).rejects.toThrow();
+    await expect(downloadGraphOpenAPI(tmpDir, targetFile, undefined, false)).rejects.toThrow();
   });
 });
