@@ -94,11 +94,7 @@ export interface TenantBm25Cache {
    * the full tool universe — only aliases in both `registry` and
    * `enabledSet` contribute documents.
    */
-  get(
-    tenantId: string,
-    enabledSet: ReadonlySet<string>,
-    registry: ToolRegistry
-  ): BM25Index;
+  get(tenantId: string, enabledSet: ReadonlySet<string>, registry: ToolRegistry): BM25Index;
 
   /**
    * Drop every cache entry whose key begins with `${tenantId}:`. Returns
@@ -172,9 +168,7 @@ function schemaHash(enabledSet: ReadonlySet<string>): string {
  * sub subscriber can call `invalidate` on the same reference the discovery
  * handlers read from.
  */
-export function createTenantBm25Cache(
-  opts: TenantBm25CacheOptions = {}
-): TenantBm25Cache {
+export function createTenantBm25Cache(opts: TenantBm25CacheOptions = {}): TenantBm25Cache {
   const cache = new LRUCache<string, BM25Index>({
     max: opts.max ?? DEFAULT_MAX_ENTRIES,
     ttl: opts.ttlMs ?? DEFAULT_TTL_MS,
@@ -220,10 +214,7 @@ export function createTenantBm25Cache(
         }
       }
       if (removed > 0) {
-        logger.info(
-          { tenantId, evicted: removed },
-          'per-tenant-bm25: invalidated cache entries'
-        );
+        logger.info({ tenantId, evicted: removed }, 'per-tenant-bm25: invalidated cache entries');
       }
       return removed;
     },

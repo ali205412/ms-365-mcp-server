@@ -259,10 +259,7 @@ describe('plan 05-06 Task 2 — discovery per-tenant filter + pub/sub invalidati
     // Malformed payloads — subscriber must ignore them all.
     await redis.publish(TOOL_SELECTION_INVALIDATE_CHANNEL, 'not-a-guid');
     await redis.publish(TOOL_SELECTION_INVALIDATE_CHANNEL, '');
-    await redis.publish(
-      TOOL_SELECTION_INVALIDATE_CHANNEL,
-      JSON.stringify({ tenantId: TENANT_A })
-    );
+    await redis.publish(TOOL_SELECTION_INVALIDATE_CHANNEL, JSON.stringify({ tenantId: TENANT_A }));
     await redis.publish(TOOL_SELECTION_INVALIDATE_CHANNEL, '../../etc/passwd');
 
     await new Promise((r) => setImmediate(r));
@@ -272,18 +269,14 @@ describe('plan 05-06 Task 2 — discovery per-tenant filter + pub/sub invalidati
   });
 
   it('Test 5: publishToolSelectionInvalidation validates GUID before publish', async () => {
-    await expect(
-      publishToolSelectionInvalidation(redis, 'not-a-guid')
-    ).rejects.toThrow(/invalid GUID/i);
+    await expect(publishToolSelectionInvalidation(redis, 'not-a-guid')).rejects.toThrow(
+      /invalid GUID/i
+    );
 
-    await expect(
-      publishToolSelectionInvalidation(redis, '')
-    ).rejects.toThrow(/invalid GUID/i);
+    await expect(publishToolSelectionInvalidation(redis, '')).rejects.toThrow(/invalid GUID/i);
 
     // Valid GUID resolves without throwing.
-    await expect(
-      publishToolSelectionInvalidation(redis, TENANT_A)
-    ).resolves.not.toThrow();
+    await expect(publishToolSelectionInvalidation(redis, TENANT_A)).resolves.not.toThrow();
   });
 
   it('Test 6: subscriber ignores messages on unrelated channels', async () => {

@@ -9,14 +9,40 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { TOOL_CATEGORIES } from './tool-categories.js';
 import { getRequestTokens, getRequestTenant } from './request-context.js';
-import { checkDispatch } from './lib/tool-selection/dispatch-guard.js';
+import { checkDispatch, _getStdioFallbackForTest } from './lib/tool-selection/dispatch-guard.js';
 import { parseTeamsUrl } from './lib/teams-url-parser.js';
 import { buildBM25Index, scoreQuery, tokenize, type BM25Index } from './lib/bm25.js';
+import {
+  createTenantBm25Cache,
+  type ToolRegistry,
+  type ToolRegistryEntry,
+  type TenantBm25Cache,
+} from './lib/tool-selection/per-tenant-bm25.js';
 export interface DiscoverySearchIndex {
   bm25: BM25Index;
   nameTokens: Map<string, Set<string>>;
 }
 import { describeToolSchema } from './lib/tool-schema.js';
+
+/**
+ * Plan 05-06 (COVRG-05, D-20, T-05-12) — module-level per-tenant BM25 cache.
+ *
+ * Scoped to the process. Populated by `registerDiscoveryTools` (called
+ * once per McpServer instance). Exported so:
+ *   - src/server.ts bootstrap can wire the Redis pub/sub subscriber to
+ *     call `discoveryCache.invalidate(tenantId)` on mcp:tool-selection-
+ *     invalidate messages;
+ *   - tests can observe size() / call _clear() between cases.
+ *
+ * Singleton lifetime matches the process. Invalidation (pub/sub or TTL)
+ * is how per-tenant entries roll over. HOT reload in tests goes through
+ * the same singleton — tests MUST call `discoveryCache._clear()` in
+ * beforeEach if they care about cache state.
+ */
+export const discoveryCache: TenantBm25Cache = createTenantBm25Cache({
+  max: 200,
+  ttlMs: 10 * 60 * 1000,
+});
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1164,6 +1190,118 @@ export function scoreDiscoveryQuery(
   return ranked;
 }
 
+/**
+ * Project the `buildToolsRegistry` Map down to the lightweight
+ * `ToolRegistry` shape the per-tenant BM25 cache needs. Only four fields
+ * contribute to ranking (alias, path, description, llmTip); isolating
+ * them here keeps the cache module free of the richer EndpointConfig type
+ * and makes the token-weighting algorithm testable against fixtures.
+ */
+function projectToolRegistry(toolsRegistry: ReturnType<typeof buildToolsRegistry>): ToolRegistry {
+  const projected = new Map<string, ToolRegistryEntry>();
+  for (const [alias, { tool, config }] of toolsRegistry) {
+    projected.set(alias, {
+      alias,
+      path: tool.path,
+      description: tool.description,
+      llmTip: config?.llmTip,
+    });
+  }
+  return projected;
+}
+
+/**
+ * Resolve the effective tenant triple for a discovery handler. Mirrors
+ * dispatch-guard's fallback order:
+ *   1. ALS frame (HTTP mode: seeded by /t/:tenantId route middleware)
+ *   2. Module-level stdio fallback (stdio mode: seeded by src/index.ts
+ *      bootstrap via setStdioFallback)
+ *   3. None → returns `undefined`, handlers fail closed with an empty
+ *      result / error envelope.
+ *
+ * Kept local rather than exported from dispatch-guard because the
+ * dispatch path (executeGraphTool) already has `checkDispatch` which
+ * serves a subtly different purpose: dispatch rejects; discovery filters.
+ */
+function resolveTenantForDiscovery():
+  | {
+      id: string;
+      enabledToolsSet: ReadonlySet<string>;
+      presetVersion: string;
+    }
+  | undefined {
+  const als = getRequestTenant();
+  if (als.id && als.enabledToolsSet && als.presetVersion) {
+    return {
+      id: als.id,
+      enabledToolsSet: als.enabledToolsSet,
+      presetVersion: als.presetVersion,
+    };
+  }
+  const fallback = _getStdioFallbackForTest();
+  if (fallback) {
+    return {
+      id: fallback.tenantId,
+      enabledToolsSet: fallback.enabledToolsSet,
+      presetVersion: fallback.presetVersion,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Build a per-request `nameTokens` map covering just the tenant's
+ * enabled aliases. scoreDiscoveryQuery needs this for the name-precision
+ * bonus; caching it would require caching the full DiscoverySearchIndex
+ * rather than a bare BM25Index. O(n) per request where n = tenant's
+ * enabled-tools count (≤5000) which measures <5ms even on the largest
+ * enabled sets.
+ */
+function buildTenantNameTokens(
+  enabledSet: ReadonlySet<string>,
+  registry: ToolRegistry
+): Map<string, Set<string>> {
+  const nameTokens = new Map<string, Set<string>>();
+  for (const alias of enabledSet) {
+    if (!registry.has(alias)) continue;
+    nameTokens.set(alias, new Set(tokenize(alias)));
+  }
+  return nameTokens;
+}
+
+/**
+ * Per-tenant variant of `scoreDiscoveryQuery`. Identical ranking (BM25 +
+ * name-precision bonus) but scoped to a pre-built BM25 index over the
+ * tenant's enabled subset.
+ */
+function scoreTenantDiscoveryQuery(
+  query: string,
+  bm25: BM25Index,
+  nameTokens: Map<string, Set<string>>
+): Array<{ id: string; score: number }> {
+  const queryTokenSet = new Set(tokenize(query));
+  if (queryTokenSet.size === 0) return [];
+  const ranked = scoreQuery(query, bm25);
+  const NAME_BONUS_WEIGHT = 2;
+  for (const r of ranked) {
+    const nt = nameTokens.get(r.id);
+    if (!nt || nt.size === 0) continue;
+    let matchedIdf = 0;
+    let matchedCount = 0;
+    for (const qt of queryTokenSet) {
+      if (nt.has(qt)) {
+        matchedCount++;
+        matchedIdf += bm25.idf.get(qt) ?? 0;
+      }
+    }
+    if (matchedCount === 0) continue;
+    const precision = matchedCount / nt.size;
+    r.score += precision * matchedIdf * NAME_BONUS_WEIGHT;
+  }
+  ranked.sort((a, b) => b.score - a.score);
+  return ranked;
+}
+
 export function registerDiscoveryTools(
   server: McpServer,
   graphClient: GraphClient,
@@ -1173,7 +1311,10 @@ export function registerDiscoveryTools(
   _multiAccount: boolean = false
 ): void {
   const toolsRegistry = buildToolsRegistry(readOnly, orgMode);
-  const searchIndex = buildDiscoverySearchIndex(toolsRegistry);
+  // Plan 05-06: project down to the shape the per-tenant BM25 cache
+  // consumes. Built once per registerDiscoveryTools call; reused for every
+  // search-tools / get-tool-schema invocation.
+  const projectedRegistry: ToolRegistry = projectToolRegistry(toolsRegistry);
   logger.info(`Discovery mode: ${toolsRegistry.size} tools available in registry`);
 
   const categoryNames = Object.keys(TOOL_CATEGORIES).join(', ');
@@ -1193,7 +1334,7 @@ export function registerDiscoveryTools(
 
   server.tool(
     'search-tools',
-    `Search through ${toolsRegistry.size} Microsoft Graph API tools. Ranks results by BM25 over tool name, llmTip, description, and path (tokenized on hyphens, camelCase, and whitespace). After picking a tool, call get-tool-schema to see its parameters, then execute-tool to invoke it.`,
+    `Search through Microsoft Graph API tools enabled for this tenant. Ranks results by BM25 over tool name, llmTip, description, and path (tokenized on hyphens, camelCase, and whitespace). After picking a tool, call get-tool-schema to see its parameters, then execute-tool to invoke it.`,
     {
       query: z
         .string()
@@ -1214,12 +1355,55 @@ export function registerDiscoveryTools(
       const categoryDef = category ? TOOL_CATEGORIES[category] : undefined;
       const categoryFilter = (name: string) => !categoryDef || categoryDef.pattern.test(name);
 
+      // ── PER-TENANT ISOLATION (plan 05-06, T-05-12) ───────────────────
+      // Resolve the tenant triple; refuse to leak the full registry when
+      // no tenant context is available. This is the PRIMARY mitigation
+      // for T-05-12 (cross-tenant metadata leakage via shared rankings).
+      const tenant = resolveTenantForDiscovery();
+      if (!tenant) {
+        logger.warn(
+          {},
+          'search-tools: no tenant context (ALS or stdio fallback); returning empty result set'
+        );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  found: 0,
+                  total: 0,
+                  tools: [],
+                  tip: 'Tenant context unavailable — discovery is fail-closed. Contact operator.',
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+
+      // Build (or cache-hit) the per-tenant BM25 index over the enabled
+      // subset intersected with the registered tool universe. schemaHash
+      // drift auto-invalidates when the enabled set rotates.
+      const tenantIndex = discoveryCache.get(tenant.id, tenant.enabledToolsSet, projectedRegistry);
+
       let orderedNames: string[];
       if (query && query.trim().length > 0) {
-        const ranked = scoreDiscoveryQuery(query, searchIndex);
+        // Rebuild nameTokens per-request for the name-precision bonus
+        // (intentionally not cached — rebuild cost is ≤5ms on 5000-entry
+        // enabled sets; caching would force the per-tenant cache to hold
+        // the richer DiscoverySearchIndex shape and double its memory).
+        const nameTokens = buildTenantNameTokens(tenant.enabledToolsSet, projectedRegistry);
+        const ranked = scoreTenantDiscoveryQuery(query, tenantIndex, nameTokens);
         orderedNames = ranked.map((r) => r.id).filter(categoryFilter);
       } else {
-        orderedNames = [...toolsRegistry.keys()].filter(categoryFilter);
+        // No query → list every alias in the tenant's enabled set that
+        // is also in the registered universe. Category filter still applies.
+        orderedNames = [...tenant.enabledToolsSet]
+          .filter((alias) => projectedRegistry.has(alias))
+          .filter(categoryFilter);
       }
 
       const tools = orderedNames.slice(0, maxLimit).map(toResultEntry).filter(Boolean);
@@ -1231,7 +1415,10 @@ export function registerDiscoveryTools(
             text: JSON.stringify(
               {
                 found: tools.length,
-                total: toolsRegistry.size,
+                // Report the tenant's enabled-set size, not the full
+                // registry size — advertising the global total leaks
+                // cross-tenant shape (T-05-12).
+                total: tenant.enabledToolsSet.size,
                 tools,
                 tip: 'Call get-tool-schema(tool_name) to see parameters before invoking execute-tool.',
               },
@@ -1256,6 +1443,46 @@ export function registerDiscoveryTools(
       openWorldHint: false,
     },
     async ({ tool_name }) => {
+      // Plan 05-06 T-05-12: enforce tenant scope before exposing schema.
+      // Same fail-closed posture as search-tools; a schema dump for a
+      // tool outside the tenant's enabled set is metadata leakage.
+      const tenant = resolveTenantForDiscovery();
+      if (!tenant) {
+        logger.warn({}, 'get-tool-schema: no tenant context; refusing schema dump');
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                error: 'tenant context unavailable',
+                tip: 'Tenant context not seeded — contact operator.',
+              }),
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      if (!tenant.enabledToolsSet.has(tool_name)) {
+        logger.info(
+          { tool: tool_name, tenantId: tenant.id },
+          'get-tool-schema: tool not enabled for tenant'
+        );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                error: `Tool not enabled for tenant: ${tool_name}`,
+                tenantId: tenant.id,
+                tip: 'Use search-tools to discover tools available to this tenant.',
+              }),
+            },
+          ],
+          isError: true,
+        };
+      }
+
       const entry = toolsRegistry.get(tool_name);
       if (!entry) {
         return {

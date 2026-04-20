@@ -1039,6 +1039,9 @@ class MicrosoftGraphServer {
 
     const { createLoadTenantMiddleware } = await import('./lib/tenant/load-tenant.js');
     const { subscribeToTenantInvalidation } = await import('./lib/tenant/tenant-invalidation.js');
+    const { subscribeToToolSelectionInvalidation } =
+      await import('./lib/tool-selection/tool-selection-invalidation.js');
+    const { discoveryCache } = await import('./graph-tools.js');
     const { createPerTenantCorsMiddleware } = await import('./lib/cors.js');
 
     const loadTenant = createLoadTenantMiddleware({ pool: pg });
@@ -1058,6 +1061,34 @@ class MicrosoftGraphServer {
       logger.warn(
         { err: (err as Error).message },
         'Phase 3 tenant routes: tenant-invalidate subscription failed (falling back to 60s TTL)'
+      );
+    }
+
+    // Plan 05-06 (COVRG-05, D-20/D-21): subscribe to the tool-selection
+    // invalidation channel. Admin PATCH /admin/tenants/{id}/enabled-tools
+    // (Plan 05-07) publishes a tenantId here after COMMIT; we evict every
+    // cached BM25 index for that tenant so the next discovery call picks
+    // up the new enabled_tools_set. Failure to subscribe is non-fatal —
+    // the 10-minute TTL still bounds staleness.
+    //
+    // Real ioredis clients support `.duplicate()` (Pitfall 6 — dedicated
+    // subscriber connection with auto-resubscribe on reconnect). The
+    // MemoryRedisFacade lacks duplicate() — fall back to the shared
+    // client. Both facades route subscribe/publish through an in-memory
+    // channel map so the shared-client path is safe for tests and stdio.
+    try {
+      const subscriberClient =
+        'duplicate' in redis && typeof (redis as { duplicate: unknown }).duplicate === 'function'
+          ? (redis as { duplicate: () => typeof redis }).duplicate()
+          : redis;
+      await subscribeToToolSelectionInvalidation(subscriberClient, {
+        invalidate: (tenantId: string) => discoveryCache.invalidate(tenantId),
+      });
+      logger.info('Plan 05-06 tool-selection routes: subscribed to mcp:tool-selection-invalidate');
+    } catch (err) {
+      logger.warn(
+        { err: (err as Error).message },
+        'Plan 05-06 tool-selection routes: invalidation subscription failed (falling back to 10-minute TTL)'
       );
     }
 
