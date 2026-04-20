@@ -158,6 +158,14 @@ function validateProdHttpConfig(args: CommandOptions): void {
 }
 
 /**
+ * Plan 04-08 renewal-cron handle. Module-level so the Phase 3 shutdown
+ * orchestrator can stop it between server.close (Phase 1) and
+ * tenantPool.drain (Phase 3) per the RESEARCH.md:1348-1358 shutdown order.
+ * Null when the cron wasn't enabled via MS365_MCP_SUBSCRIPTION_CRON.
+ */
+let subscriptionCronHandle: { stop(): Promise<void> } | null = null;
+
+/**
  * Phase 3 (plan 03-01 Task 2) graceful-shutdown orchestrator.
  *
  * Runs in parallel with the Phase 1 shutdown handler installed by
@@ -172,6 +180,22 @@ function validateProdHttpConfig(args: CommandOptions): void {
  */
 async function phase3ShutdownOrchestrator(): Promise<void> {
   try {
+    // region:phase4-sub-cron-teardown (filled by 04-08)
+    // Plan 04-08: subscription renewal cron teardown — runs BEFORE
+    // tenant-pool drain per RESEARCH.md:1348-1358 so any in-flight renewal
+    // loop can complete (using a still-warm tenant pool) before the pool is
+    // emptied. Idempotent — handle is null when the cron was never started.
+    if (subscriptionCronHandle) {
+      try {
+        const { stopRenewalCron } = await import('./lib/admin/subscriptions.js');
+        await stopRenewalCron(subscriptionCronHandle);
+      } catch (err) {
+        logger.warn({ err: (err as Error).message }, 'subscription cron stop failed (non-fatal)');
+      }
+      subscriptionCronHandle = null;
+    }
+    // endregion:phase4-sub-cron-teardown
+
     // region:phase3-shutdown-tenant-pool (filled by 03-05)
     // Plan 03-05: TenantPool teardown — FIRST step per CONTEXT.md order:
     // tenantPool.drain → redis.shutdown → pg.shutdown. Draining the MSAL pool
@@ -456,6 +480,49 @@ async function main(): Promise<void> {
     const server = new MicrosoftGraphServer(authManager, args, readinessChecks, { pkceStore });
     await server.initialize(version);
     await server.start();
+
+    // region:phase4-subscription-cron (filled by 04-08)
+    // Plan 04-08 (WEBHK-03, D-17): optional in-process subscription renewal
+    // cron. Gated on MS365_MCP_SUBSCRIPTION_CRON env var — absence leaves the
+    // cron off (default) so deployments that run multiple replicas don't
+    // need a distributed lock. When enabled, emits a startup WARN so the
+    // operator sees the single-replica constraint in the log aggregator.
+    //
+    // Only HTTP mode runs the cron: the tenant-pool + Postgres substrate is
+    // the prerequisite. Stdio mode has no tenant registry to scan.
+    if (isHttpMode && process.env.MS365_MCP_SUBSCRIPTION_CRON) {
+      try {
+        const { startRenewalCron } = await import('./lib/admin/subscriptions.js');
+        const { getTenantPool } = await import('./lib/tenant/tenant-pool.js');
+        const { loadKek } = await import('./lib/crypto/kek.js');
+        const { getSecrets } = await import('./secrets.js');
+        const { default: GraphClient } = await import('./graph-client.js');
+
+        const tenantPool = getTenantPool();
+        if (!tenantPool) {
+          throw new Error('tenant pool not initialized');
+        }
+        const kek = await loadKek();
+        const secrets = await getSecrets();
+        const graphClient = new GraphClient(authManager, secrets);
+
+        subscriptionCronHandle = startRenewalCron({
+          pgPool: postgres.getPool(),
+          tenantPool,
+          graphClient,
+          kek,
+        });
+        logger.warn(
+          'Single-replica subscription cron enabled — do not run on multiple replicas without distributed lock'
+        );
+      } catch (err) {
+        logger.error(
+          { err: err instanceof Error ? err.message : String(err) },
+          'subscription cron failed to start (non-fatal); continuing without renewal'
+        );
+      }
+    }
+    // endregion:phase4-subscription-cron
 
     // Phase 3 (plan 03-01 Task 2) — register a secondary SIGTERM/SIGINT
     // handler AFTER server.start() so it stacks on top of the handler

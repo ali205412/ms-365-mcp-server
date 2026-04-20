@@ -942,6 +942,83 @@ export function registerGraphTools(
   // Layer 3 (list-accounts tool) is registered by registerAuthTools in auth-tools.ts.
   // It is the canonical owner of account discovery — no duplicate registration here.
 
+  // Plan 04-08 (WEBHK-03): subscription lifecycle MCP tools
+  // (subscriptions-create/renew/delete/list). Registered only in HTTP mode
+  // (requires the Phase 3 tenant substrate) and only when MS365_MCP_PUBLIC_URL
+  // is configured — without it, the notificationUrl SSRF-protection invariant
+  // cannot be enforced (the URL would have no scheme+host to compare against).
+  //
+  // The registration itself is best-effort: any substrate import failure
+  // (e.g. tenant-pool not initialized in stdio mode, pgPool unavailable)
+  // is logged as a warn and the subscription tools are silently skipped so
+  // the rest of the Graph tool surface continues to serve.
+  if (process.env.MS365_MCP_PUBLIC_URL) {
+    try {
+      const publicUrl = process.env.MS365_MCP_PUBLIC_URL;
+      // Dynamic imports — the subscription tools only load when we decide to
+      // register them. Keeps the cold-start cost on stdio / non-HTTP paths at
+      // zero (the subscriptions module pulls in pg + Zod paths that would
+      // otherwise be loaded for no reason in those modes).
+      void (async () => {
+        try {
+          const [{ registerSubscriptionTools }, postgres, { getTenantPool }, { loadKek }] =
+            await Promise.all([
+              import('./lib/admin/subscriptions.js'),
+              import('./lib/postgres.js'),
+              import('./lib/tenant/tenant-pool.js'),
+              import('./lib/crypto/kek.js'),
+            ]);
+          const tenantPool = getTenantPool();
+          if (!tenantPool) {
+            logger.warn(
+              'subscriptions-* tools NOT registered: tenant pool not initialized (likely stdio mode)'
+            );
+            return;
+          }
+          const pgPool = postgres.getPool();
+          const kek = await loadKek();
+          registerSubscriptionTools(server, {
+            graphClient,
+            pgPool,
+            tenantPool,
+            publicUrl,
+            kek,
+            // The resolver is evaluated lazily per-invocation so the current
+            // request's tenantId (populated by loadTenant middleware into
+            // request-context) drives the tool behavior. Falls back to the
+            // caller-supplied MS365_MCP_TENANT_ID when no request context
+            // is active (legacy stdio tool invocation).
+            tenantIdResolver: () => {
+              const ctx = getRequestTokens();
+              const tenantId = ctx?.tenantId ?? process.env.MS365_MCP_TENANT_ID;
+              if (!tenantId) {
+                throw new Error(
+                  'subscriptions-*: no tenant context (set MS365_MCP_TENANT_ID or invoke via tenant-scoped route)'
+                );
+              }
+              return tenantId;
+            },
+          });
+          logger.info('subscriptions-* MCP tools registered (plan 04-08)');
+        } catch (err) {
+          logger.warn(
+            { err: (err as Error).message },
+            'subscriptions-* tools NOT registered: substrate bootstrap failed'
+          );
+        }
+      })();
+    } catch (err) {
+      logger.warn(
+        { err: (err as Error).message },
+        'subscriptions-* tools registration failed outright'
+      );
+    }
+  } else {
+    logger.info(
+      'subscriptions-* tools NOT registered: MS365_MCP_PUBLIC_URL not set (required for SSRF-safe notificationUrl)'
+    );
+  }
+
   logger.info(
     `Tool registration complete: ${registeredCount} registered, ${skippedCount} skipped, ${failedCount} failed`
   );
