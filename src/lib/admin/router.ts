@@ -1,0 +1,170 @@
+/**
+ * Admin sub-router factory (plan 04-01, ADMIN-01..06).
+ *
+ * Mounts at `/admin` in src/server.ts BEFORE `/t/:tenantId` so admin paths
+ * never route through loadTenant (which would 404 on 'admin' failing the GUID
+ * regex — see T-04-03c).
+ *
+ * Middleware order:
+ *   1. TLS enforce (T-04-01)
+ *   2. Admin CORS (separate env MS365_MCP_ADMIN_ORIGINS; T-04-03)
+ *   3. GET /health (auth bypass — smoke probe only)
+ *   4. Auth (TODO plan 04-04)
+ *   5. Sub-routes (TODO plans 04-02, 04-03, 04-05)
+ *
+ * The factory captures deps in a closure so callers get a single Express
+ * Router handle to hand to `app.use('/admin', router)`. Per plan 04-01,
+ * deps are validated eagerly — a missing Entra admin app reg is a
+ * configuration error, not a request-time surprise.
+ *
+ * Per D-01 redaction: this router does NOT log Authorization or
+ * X-Admin-Api-Key headers. CORS middleware never logs. Request bodies are
+ * unseen at this layer.
+ */
+import {
+  Router,
+  type Request,
+  type Response,
+  type NextFunction,
+  type RequestHandler,
+} from 'express';
+import type { Pool } from 'pg';
+import type { RedisClient } from '../redis.js';
+import type { TenantPool } from '../tenant/tenant-pool.js';
+import { createAdminTlsEnforceMiddleware } from './tls-enforce.js';
+
+/**
+ * Dependency bag. Factory-with-DI shape matches src/lib/tenant/load-tenant.ts:
+ * no import-time globals, all runtime state injected.
+ */
+export interface AdminRouterDeps {
+  pgPool: Pool;
+  redis: RedisClient;
+  tenantPool: TenantPool;
+  kek: Buffer;
+  adminOrigins: string[];
+  entraConfig: {
+    appClientId: string;
+    groupId: string;
+  };
+  /** 32-byte HMAC secret for pagination cursors. Rotated per-process. */
+  cursorSecret: Buffer;
+}
+
+/**
+ * Split MS365_MCP_ADMIN_ORIGINS on commas, trim, drop empty entries.
+ *
+ * Empty env → empty array → CORS middleware rejects every Origin.
+ * Deny-by-default matches D-14 ("admin CORS separate from per-tenant CORS;
+ * default deny-all").
+ */
+export function parseAdminOrigins(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+// ── CORS ────────────────────────────────────────────────────────────────────
+
+const ADMIN_ALLOWED_METHODS = 'GET, POST, PATCH, DELETE, OPTIONS';
+// X-Admin-Api-Key is the header the dual-stack auth (plan 04-04) reads for
+// API-key mode; it MUST be in Access-Control-Allow-Headers so browser callers
+// can present it. Authorization covers the Entra OAuth path.
+const ADMIN_ALLOWED_HEADERS = 'Content-Type, Authorization, X-Admin-Api-Key, If-Match';
+
+/**
+ * Admin-scoped CORS middleware — closure over the allowlist passed at
+ * construction time. Mirrors src/lib/cors.ts:createCorsMiddleware shape but
+ * ships here to keep admin-specific concerns (additional headers, stricter
+ * defaults) localized.
+ *
+ * Semantics:
+ *   - Origin absent: OPTIONS → 204 (no preflight needed); else next().
+ *   - Origin present and allowlisted: set ACAO + ACAM + ACAH + ACAC;
+ *     OPTIONS → 204; else next().
+ *   - Origin present but NOT allowlisted: OPTIONS → 403 (loud signal to
+ *     operator); else next() without ACAO (browser blocks in that case).
+ *
+ * Does NOT log — CORS policy decisions are routine and would flood logs.
+ */
+function createAdminCorsMiddleware({ allowlist }: { allowlist: string[] }): RequestHandler {
+  const allowSet = new Set(allowlist);
+
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const origin = req.headers.origin;
+
+    if (!origin || typeof origin !== 'string') {
+      if (req.method === 'OPTIONS') {
+        res.sendStatus(204);
+        return;
+      }
+      next();
+      return;
+    }
+
+    const isAllowed = allowSet.has(origin);
+
+    if (isAllowed) {
+      res.header('Access-Control-Allow-Origin', origin);
+      res.header('Vary', 'Origin');
+      res.header('Access-Control-Allow-Methods', ADMIN_ALLOWED_METHODS);
+      res.header('Access-Control-Allow-Headers', ADMIN_ALLOWED_HEADERS);
+      res.header('Access-Control-Allow-Credentials', 'true');
+    } else {
+      // Always emit Vary so browser caches do not serve a denied response for
+      // a later allowed origin.
+      res.header('Vary', 'Origin');
+    }
+
+    if (req.method === 'OPTIONS') {
+      // 403 on denied origin is a hard signal to operators that the allowlist
+      // needs updating — silently 200-ing without ACAO produces inscrutable
+      // browser errors.
+      res.sendStatus(isAllowed ? 204 : 403);
+      return;
+    }
+
+    next();
+  };
+}
+
+// ── Router factory ──────────────────────────────────────────────────────────
+
+/**
+ * Build the admin sub-router. Throws if deps are incomplete.
+ */
+export function createAdminRouter(deps: AdminRouterDeps): Router {
+  if (!deps.entraConfig?.appClientId) {
+    throw new Error('createAdminRouter: entraConfig.appClientId is required');
+  }
+  if (!deps.entraConfig.groupId) {
+    throw new Error('createAdminRouter: entraConfig.groupId is required');
+  }
+
+  const r = Router();
+
+  // 1. TLS gate — fails fast before any other work happens.
+  r.use(createAdminTlsEnforceMiddleware());
+
+  // 2. Admin-scoped CORS — separate allowlist from per-tenant CORS.
+  r.use(createAdminCorsMiddleware({ allowlist: deps.adminOrigins }));
+
+  // 3. /health — auth bypass ONLY for this path. A smoke probe for bootstrap
+  //    and reverse-proxy health checks. Returns plain text so there is zero
+  //    JSON ambiguity; the caller just asserts status 200 + body text.
+  //    NOTE: this is the ONLY admin route that bypasses auth. All other
+  //    handlers added in later plans (04-02..04-05) go through
+  //    createAdminAuthMiddleware first.
+  r.get('/health', (_req, res) => {
+    res.type('text/plain').status(200).send('admin-router-alive');
+  });
+
+  // TODO(04-04): r.use(createAdminAuthMiddleware(deps));
+  // TODO(04-02): r.use('/tenants', createTenantRoutes(deps));
+  // TODO(04-03): r.use('/api-keys', createApiKeyRoutes(deps));
+  // TODO(04-05): r.use('/audit', createAuditRoutes(deps));
+
+  return r;
+}
