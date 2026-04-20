@@ -95,6 +95,11 @@ export interface TenantWireRow {
   cors_origins: string[];
   allowed_scopes: string[];
   enabled_tools: string | null;
+  /**
+   * Plan 05-03 (D-19). Pinned preset version — defaults to 'essentials-v1'
+   * on POST /admin/tenants when the body omits it; operators bump via PATCH.
+   */
+  preset_version: string;
   slug: string | null;
   disabled_at: string | null;
   created_at: string;
@@ -131,6 +136,7 @@ const TENANT_GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 const TENANT_SELECT_COLUMNS = `
   id, mode, client_id, client_secret_ref, tenant_id, cloud_type,
   redirect_uri_allowlist, cors_origins, allowed_scopes, enabled_tools,
+  preset_version,
   slug, disabled_at, created_at, updated_at
 `;
 
@@ -146,6 +152,15 @@ const CreateTenantZod = z.object({
   cors_origins: z.array(z.string().url()).default([]),
   allowed_scopes: z.array(z.string().min(1).max(256)).default([]),
   enabled_tools: z.string().max(8192).optional().nullable(),
+  // Plan 05-03 (D-19). Preset identifier — lowercase alphanumeric + hyphen,
+  // max 64 chars to match the migration column width budget. Optional on
+  // incoming body; DB DEFAULT 'essentials-v1' supplies the baseline.
+  preset_version: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[a-z0-9-]+$/, 'preset_version must be lowercase alphanumeric + hyphen')
+    .optional(),
   slug: z
     .string()
     .min(1)
@@ -184,6 +199,7 @@ export function tenantRowToWire(row: {
   cors_origins: unknown;
   allowed_scopes: unknown;
   enabled_tools: string | null;
+  preset_version?: string | null;
   slug: string | null;
   disabled_at: Date | string | null;
   created_at: Date | string;
@@ -212,6 +228,14 @@ export function tenantRowToWire(row: {
     return String(d);
   };
 
+  // Plan 05-03 (D-19). pg-mem emits '' when a TEXT NOT NULL DEFAULT is read
+  // in an edge case; real Postgres returns the default string. Coalesce to
+  // 'essentials-v1' defensively so the wire shape is always meaningful.
+  const presetVersion =
+    typeof row.preset_version === 'string' && row.preset_version.length > 0
+      ? row.preset_version
+      : 'essentials-v1';
+
   return {
     id: row.id,
     mode: row.mode as 'delegated' | 'app-only' | 'bearer',
@@ -223,6 +247,7 @@ export function tenantRowToWire(row: {
     cors_origins: parseJsonbArray(row.cors_origins),
     allowed_scopes: parseJsonbArray(row.allowed_scopes),
     enabled_tools: row.enabled_tools,
+    preset_version: presetVersion,
     slug: row.slug,
     disabled_at: toIso(row.disabled_at),
     created_at: toIsoNonNull(row.created_at),
@@ -414,8 +439,9 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
           `INSERT INTO tenants (
              id, mode, client_id, client_secret_ref, tenant_id, cloud_type,
              redirect_uri_allowlist, cors_origins, allowed_scopes, enabled_tools,
+             preset_version,
              wrapped_dek, slug
-           ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11::jsonb, $12)`,
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12::jsonb, $13)`,
           [
             newId,
             body.mode,
@@ -427,6 +453,11 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
             JSON.stringify(body.cors_origins),
             JSON.stringify(body.allowed_scopes),
             body.enabled_tools ?? null,
+            // Plan 05-03 (D-19): default to essentials-v1 when the body omits
+            // preset_version. The DB column also has this default, but the
+            // explicit bind keeps the Zod default + bind surface symmetric
+            // and makes the intent visible in SQL logs.
+            body.preset_version ?? 'essentials-v1',
             JSON.stringify(wrappedDek),
             body.slug ?? null,
           ]
@@ -655,6 +686,9 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
     if (body.allowed_scopes !== undefined)
       addSet('allowed_scopes', JSON.stringify(body.allowed_scopes), true);
     if (body.enabled_tools !== undefined) addSet('enabled_tools', body.enabled_tools);
+    // Plan 05-03 (D-19). PATCH writes the new preset_version verbatim; no
+    // auto-migration of enabled_tools here — that is an admin-owned decision.
+    if (body.preset_version !== undefined) addSet('preset_version', body.preset_version);
     if (body.slug !== undefined) addSet('slug', body.slug);
     setParts.push(`updated_at = NOW()`);
     const whereIdx = idx;

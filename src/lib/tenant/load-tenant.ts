@@ -48,8 +48,7 @@ import type { TenantRow } from './tenant-row.js';
  * Rejects: non-hex chars, wrong segment lengths, missing hyphens, extra
  * whitespace, surrounding braces.
  */
-const TENANT_GUID_REGEX =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const TENANT_GUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface LoadTenantDeps {
   pool: Pool;
@@ -115,6 +114,7 @@ export function createLoadTenantMiddleware(deps: LoadTenantDeps): LoadTenantMidd
         `SELECT
            id, mode, client_id, client_secret_ref, tenant_id, cloud_type,
            redirect_uri_allowlist, cors_origins, allowed_scopes, enabled_tools,
+           preset_version,
            wrapped_dek, slug, disabled_at, created_at, updated_at
          FROM tenants
          WHERE id = $1 AND disabled_at IS NULL`,
