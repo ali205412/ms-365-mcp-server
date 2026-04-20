@@ -126,6 +126,10 @@ describe('plan 05-01 task 2 — generate-graph-client.mjs main() orchestrator', 
         callLog.push('generateMcpTools');
         return true;
       },
+      // Plan 05-02 wired runBetaPipeline into FULL_COVERAGE=1 flow; stub to
+      // prevent this test from invoking the real beta codegen (network +
+      // openapi-zod-client binary).
+      runBetaPipeline: async () => ({ betaCount: 0, aliases: [] }),
       simplifiers: {
         createAndSaveSimplifiedOpenAPI: () => {
           callLog.push('legacy');
@@ -157,6 +161,10 @@ describe('plan 05-01 task 2 — generate-graph-client.mjs main() orchestrator', 
     await generateMain({
       rootDir: tmpDir,
       generateMcpTools: () => true,
+      // Plan 05-02 wired runBetaPipeline into FULL_COVERAGE=1 flow; stub to
+      // prevent this test from invoking the real beta codegen (network +
+      // openapi-zod-client binary).
+      runBetaPipeline: async () => ({ betaCount: 0, aliases: [] }),
       // No simplifiers override -> real implementation is used.
     });
 

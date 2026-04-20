@@ -1,0 +1,207 @@
+openapi: '3.0.0'
+info:
+  title: Microsoft Graph beta (test fixture)
+  version: beta
+  description: Minimal beta spec fixture for Plan 05-02 pipeline tests.
+servers:
+  - url: https://graph.microsoft.com/beta
+paths:
+  # Overlap with v1.0 fixture — same operationId should survive the prefix
+  # injection and resolve via the __beta__ prefix, NOT via operationId
+  # mutation.
+  /me/messages:
+    get:
+      operationId: me.messages.list
+      summary: List messages (beta)
+      description: List messages from the signed-in user mailbox (beta variant)
+      responses:
+        '200':
+          description: Messages
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/betaMessageCollection'
+  # Beta-only surface — copilot, security, compliance, devicemanagement
+  /copilot/chats:
+    post:
+      operationId: copilot.chats.create
+      summary: Create copilot chat
+      description: Create a new Copilot chat session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/copilotChat'
+      responses:
+        '201':
+          description: Created chat
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/copilotChat'
+  /security/alerts_v2:
+    get:
+      operationId: security.alerts-v2.list
+      summary: List security alerts
+      description: List v2 security alerts (beta Defender surface)
+      responses:
+        '200':
+          description: Alerts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/betaAlertCollection'
+  /compliance/ediscovery/cases:
+    get:
+      operationId: compliance.ediscovery.cases.list
+      summary: List eDiscovery cases
+      description: List eDiscovery cases (beta Purview)
+      responses:
+        '200':
+          description: Cases
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/betaCaseCollection'
+  /deviceManagement/deviceConfigurations:
+    get:
+      operationId: devicemanagement.deviceconfigurations.list
+      summary: List device configurations
+      description: List Intune device configurations (beta)
+      responses:
+        '200':
+          description: Configurations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/betaConfigurationCollection'
+  /deviceManagement/deviceConfigurations/{id}:
+    get:
+      operationId: devicemanagement.deviceconfigurations.get
+      summary: Get device configuration
+      description: Get a single Intune device configuration (beta)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/betaConfiguration'
+  /identityGovernance/accessReviews/definitions:
+    get:
+      operationId: identitygovernance.accessreviews.definitions.list
+      summary: List access reviews
+      description: List access review definitions (beta Entra Governance)
+      responses:
+        '200':
+          description: Definitions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  value:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        displayName:
+                          type: string
+  # Long operationId — exercises the 55-60 pre-prefix length band so Test 2
+  # asserts the 64-char guard with some headroom after the __beta__ prefix.
+  # Base length = 53 chars -> __beta__ + 53 = 61 chars (under 64).
+  /deviceManagement/deviceConfigurations/{id}/assignedRoleScopeTags:
+    get:
+      operationId: devicemanagement.configurations.getassignedrolescopetags
+      summary: Get assigned role scope tags
+      description: Long-operationId case for 64-char MCP SEP-986 limit test
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Tags
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  value:
+                    type: array
+                    items:
+                      type: string
+components:
+  schemas:
+    copilotChat:
+      type: object
+      properties:
+        id:
+          type: string
+        topic:
+          type: string
+    betaMessageCollection:
+      type: object
+      properties:
+        value:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              subject:
+                type: string
+    betaAlertCollection:
+      type: object
+      properties:
+        value:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              severity:
+                type: string
+              status:
+                type: string
+    betaCaseCollection:
+      type: object
+      properties:
+        value:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              displayName:
+                type: string
+    betaConfigurationCollection:
+      type: object
+      properties:
+        value:
+          type: array
+          items:
+            $ref: '#/components/schemas/betaConfiguration'
+    betaConfiguration:
+      type: object
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        version:
+          type: integer
