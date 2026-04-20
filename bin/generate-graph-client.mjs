@@ -46,6 +46,14 @@
  * Ordering note: Plan 05-08 (coverage harness) appends a `runCoverageCheck`
  * step AFTER runBetaPipeline. Do not reshuffle the ordering -- the coverage
  * check counts aliases emitted by BOTH v1 and beta pipelines together.
+ *
+ * Plan 05-03 adds Step 5: compileEssentialsPreset validates src/presets/
+ * essentials-v1.json against the generated registry and emits a
+ * ReadonlySet<string> TypeScript artifact. The step runs ALWAYS (including
+ * under FULL_COVERAGE=0) because the preset is a constant 150-op contract.
+ * Legacy mode will throw on preset ops absent from endpoints.json (e.g. the
+ * 4 subscription ops); that is acceptable -- surfaces the legacy/preset gap
+ * at generate time rather than shipping a broken preset reference.
  */
 
 import path from 'path';
@@ -57,6 +65,7 @@ import {
   createAndSaveSimplifiedOpenAPIFullSurface,
 } from './modules/simplified-openapi.mjs';
 import { runBetaPipeline as defaultRunBetaPipeline } from './modules/beta.mjs';
+import { compileEssentialsPreset as defaultCompileEssentialsPreset } from './modules/compile-preset.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -77,6 +86,9 @@ const DEFAULT_ROOT = path.resolve(__dirname, '..');
  * @param {Function} [deps.runBetaPipeline]  Override the Plan 05-02 beta pipeline.
  *   Only invoked when MS365_MCP_FULL_COVERAGE=1. Tests inject a stub that
  *   records invocation without running the real openapi-zod-client binary.
+ * @param {Function} [deps.compileEssentialsPreset]  Override the Plan 05-03 preset
+ *   compile step. Tests inject a no-op stub when they stage a generated/client.ts
+ *   without the 150 preset aliases; production uses the real implementation.
  * @returns {Promise<void>}
  */
 export async function main(deps = {}) {
@@ -88,6 +100,8 @@ export async function main(deps = {}) {
   };
   const generateMcpTools = deps.generateMcpTools ?? defaultGenerateMcpTools;
   const runBetaPipeline = deps.runBetaPipeline ?? defaultRunBetaPipeline;
+  const compileEssentialsPreset =
+    deps.compileEssentialsPreset ?? defaultCompileEssentialsPreset;
 
   const forceDownload = deps.forceDownload ?? process.argv.slice(2).includes('--force');
 
@@ -139,6 +153,16 @@ export async function main(deps = {}) {
     await runBetaPipeline(openapiDir, generatedDir, { snapshotPath });
     console.log('✅ Beta pipeline complete');
   }
+
+  // Plan 05-03 Step 5: compile essentials-v1 preset -> generated-index.ts.
+  // Runs unconditionally -- the preset is a 150-op constant that must stay
+  // in sync with whichever registry shipped. Under FULL_COVERAGE=0 this
+  // step will throw on the 4 subscription ops that only exist in the full
+  // v1.0 spec (acceptable per plan -- surfaces the gap at generate time).
+  console.log('\n📚 Step 5: Compiling essentials preset (plan 05-03)');
+  const presetsDir = path.join(srcDir, 'presets');
+  const { count: presetCount } = compileEssentialsPreset(generatedDir, presetsDir);
+  console.log(`✅ Preset compiled (${presetCount} ops)`);
 }
 
 // Only auto-invoke when executed directly (node bin/generate-graph-client.mjs).

@@ -200,6 +200,12 @@ export const api = new Zodios(endpoints);
         callLog.push('runBetaPipeline');
         return { betaCount: 0, aliases: [] };
       },
+      // Plan 05-03 wired compileEssentialsPreset at tail of main(); stub so
+      // this test focuses on the beta pipeline ordering invariant.
+      compileEssentialsPreset: () => {
+        callLog.push('compileEssentialsPreset');
+        return { count: 0, presetTsPath: '', missing: [] };
+      },
     });
 
     // generateMcpTools must run first; runBetaPipeline must run after.
@@ -235,6 +241,12 @@ export const api = new Zodios(endpoints);
       runBetaPipeline: async () => {
         callLog.push('runBetaPipeline');
         return { betaCount: 0, aliases: [] };
+      },
+      // Plan 05-03 wired compileEssentialsPreset at tail of main(); stub so
+      // this test focuses on the FULL_COVERAGE=0 branch-selection invariant.
+      compileEssentialsPreset: () => {
+        callLog.push('compileEssentialsPreset');
+        return { count: 0, presetTsPath: '', missing: [] };
       },
     });
 
