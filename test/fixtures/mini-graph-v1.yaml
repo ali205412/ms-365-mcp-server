@@ -1,0 +1,256 @@
+openapi: '3.0.0'
+info:
+  title: Microsoft Graph v1.0 (test fixture)
+  version: 1.0.0
+  description: Minimal v1.0 spec fixture for codegen smoke tests (Plan 05-01).
+servers:
+  - url: https://graph.microsoft.com/v1.0
+paths:
+  /users:
+    get:
+      operationId: users.list
+      summary: List users
+      description: List all users in the tenant
+      responses:
+        '200':
+          description: A collection of users
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/userCollection'
+    post:
+      operationId: users.create
+      summary: Create user
+      description: Create a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/user'
+      responses:
+        '201':
+          description: Created user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/user'
+  /users/{user-id}:
+    get:
+      operationId: users.get
+      summary: Get user
+      description: Get a single user
+      parameters:
+        - name: user-id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: User
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/user'
+  /me/messages:
+    get:
+      operationId: me.messages.list
+      summary: List messages
+      description: List messages from the signed-in user mailbox
+      responses:
+        '200':
+          description: Messages
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/messageCollection'
+  /me/messages/{message-id}:
+    get:
+      operationId: me.messages.get
+      summary: Get message
+      description: Get a single message
+      parameters:
+        - name: message-id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Message
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/message'
+  /groups:
+    get:
+      operationId: groups.list
+      summary: List groups
+      description: List all groups
+      responses:
+        '200':
+          description: Groups
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/groupCollection'
+  /groups/{group-id}:
+    get:
+      operationId: groups.get
+      summary: Get group
+      description: Get a single group
+      parameters:
+        - name: group-id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Group
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/group'
+  /directoryObjects/{directoryObject-id}:
+    get:
+      operationId: directoryObjects.get
+      summary: Get directory object
+      description: Retrieve a directory object (exercises recursive $ref via members)
+      parameters:
+        - name: directoryObject-id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Directory object
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/directoryObject'
+  /me:
+    get:
+      operationId: me.get
+      summary: Get signed-in user
+      description: Get the signed-in user
+      responses:
+        '200':
+          description: Me
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/user'
+  /me/drive/root/children:
+    get:
+      operationId: me.drive.root.children.list
+      summary: List root drive children
+      description: List the top-level items in the signed-in user drive
+      responses:
+        '200':
+          description: Drive items
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  value:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        name:
+                          type: string
+components:
+  schemas:
+    user:
+      type: object
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        userPrincipalName:
+          type: string
+        mail:
+          type: string
+    userCollection:
+      type: object
+      properties:
+        value:
+          type: array
+          items:
+            $ref: '#/components/schemas/user'
+    message:
+      type: object
+      properties:
+        id:
+          type: string
+        subject:
+          type: string
+        body:
+          type: object
+          properties:
+            content:
+              type: string
+            contentType:
+              type: string
+    messageCollection:
+      type: object
+      properties:
+        value:
+          type: array
+          items:
+            $ref: '#/components/schemas/message'
+    group:
+      type: object
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        description:
+          type: string
+    groupCollection:
+      type: object
+      properties:
+        value:
+          type: array
+          items:
+            $ref: '#/components/schemas/group'
+    # Self-referencing schema — exercises the recursive-ref flattener
+    # (Plan 05-01 Task 1 Test 2). The `members` property lists further
+    # directoryObject entries, forming a cycle via $ref to the same schema.
+    directoryObject:
+      type: object
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/directoryObject'
+        memberOf:
+          type: array
+          items:
+            $ref: '#/components/schemas/directoryObject'
+        deeplyNested:
+          type: object
+          properties:
+            level2:
+              type: object
+              properties:
+                level3:
+                  type: object
+                  properties:
+                    level4:
+                      type: object
+                      properties:
+                        level5:
+                          type: string
