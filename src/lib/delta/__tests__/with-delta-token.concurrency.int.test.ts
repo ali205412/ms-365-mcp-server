@@ -101,7 +101,7 @@ describe('withDeltaToken — concurrency / FOR UPDATE contract (plan 04-09 Task 
     vi.clearAllMocks();
   });
 
-  it('Test 1: two sequential calls chain delta links — second fn observes first fn\'s persisted nextDeltaLink', async () => {
+  it("Test 1: two sequential calls chain delta links — second fn observes first fn's persisted nextDeltaLink", async () => {
     const pool = await makePool();
     await seedTenant(pool, TENANT_A);
 

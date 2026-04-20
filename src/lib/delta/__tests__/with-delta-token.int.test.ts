@@ -126,7 +126,8 @@ describe('withDeltaToken — happy-path integration (plan 04-09 Task 2, MWARE-08
         observedDeltaLink.push(deltaLink);
         return {
           data: msgs,
-          nextDeltaLink: 'https://graph.microsoft.com/v1.0/users/alice/messages/delta?$deltatoken=first-v1',
+          nextDeltaLink:
+            'https://graph.microsoft.com/v1.0/users/alice/messages/delta?$deltatoken=first-v1',
         };
       }
     );
