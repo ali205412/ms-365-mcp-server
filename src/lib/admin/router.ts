@@ -10,7 +10,7 @@
  *   2. Admin CORS (separate env MS365_MCP_ADMIN_ORIGINS; T-04-03)
  *   3. GET /health (auth bypass — smoke probe only)
  *   4. Dual-stack admin auth (plan 04-04, X-Admin-Api-Key > Bearer)
- *   5. Sub-routes (04-02 /tenants + 04-03 /api-keys mounted; TODO 04-05 /audit)
+ *   5. Sub-routes (04-02 /tenants + 04-03 /api-keys + 04-05 /audit mounted)
  *
  * The factory captures deps in a closure so callers get a single Express
  * Router handle to hand to `app.use('/admin', router)`. Per plan 04-01,
@@ -34,6 +34,7 @@ import type { TenantPool } from '../tenant/tenant-pool.js';
 import { createAdminTlsEnforceMiddleware } from './tls-enforce.js';
 import { createApiKeyRoutes, subscribeToApiKeyRevoke } from './api-keys.js';
 import { createTenantsRoutes } from './tenants.js';
+import { createAuditRoutes } from './audit.js';
 import { createAdminAuthMiddleware } from './auth/dual-stack.js';
 import logger from '../../logger.js';
 
@@ -174,7 +175,7 @@ export function createAdminRouter(deps: AdminRouterDeps): Router {
 
   r.use('/tenants', createTenantsRoutes(deps));
   r.use('/api-keys', createApiKeyRoutes(deps));
-  // TODO(04-05): r.use('/audit', createAuditRoutes(deps));
+  r.use('/audit', createAuditRoutes(deps));
 
   // Kick off the pub/sub subscriber for cross-replica API-key revocation
   // propagation (04-03, D-15). Fire-and-forget: subscription failure does not
