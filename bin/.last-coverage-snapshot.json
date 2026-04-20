@@ -1,5 +1,28 @@
 {
-  "generated_at": null,
-  "totals": 0,
-  "byWorkload": {}
+  "generated_at": "2026-04-20T15:42:45.450Z",
+  "totals": 42335,
+  "byWorkload": {
+    "Applications": 727,
+    "Calendars": 704,
+    "Compliance": 4,
+    "Contacts": 292,
+    "Copilot": 156,
+    "Files": 4591,
+    "Groups": 3533,
+    "Identity": 4662,
+    "Intune": 5157,
+    "Mail": 566,
+    "OneNote": 1260,
+    "Other": 9106,
+    "People": 174,
+    "Planner": 577,
+    "Reports": 570,
+    "Search": 42,
+    "Security": 1441,
+    "SharePoint": 1626,
+    "Subscriptions": 13,
+    "Teams": 2782,
+    "ToDo": 232,
+    "Users": 4120
+  }
 }
