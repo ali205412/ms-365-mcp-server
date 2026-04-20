@@ -78,6 +78,18 @@ const REDACT_PATHS: string[] = [
   '*.apiKey',
   '*.admin_api_key',
   '*.x_admin_api_key',
+  // ── Phase 4 plan 04-03 — admin API-key storage secrets. plaintext_key is
+  //     returned ONCE at mint and never stored; key_hash is the argon2id
+  //     envelope; neither should ever land in a log frame.
+  '*.plaintext_key',
+  '*.plaintextKey',
+  '*.key_hash',
+  '*.keyHash',
+  // ── Phase 4 plan 04-07 — webhook subscription clientState is the
+  //     Graph-delivered authentication secret. Per-tenant-DEK-encrypted at
+  //     rest; redact from logs belt-and-suspenders.
+  '*.client_state',
+  '*.clientState',
 ];
 
 // ── Destination selection ─────────────────────────────────────────────────────

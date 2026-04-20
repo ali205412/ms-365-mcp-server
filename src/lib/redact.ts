@@ -32,6 +32,10 @@ const SENSITIVE_HEADERS = new Set([
   'cookie',
   'prefer',
   'x-microsoft-refresh-token',
+  // Phase 4 plan 04-03: admin API key header. Caught by pino's REDACT_PATHS
+  // ('req.headers["x-admin-api-key"]') for log records; this helper covers
+  // ad-hoc `scrubHeaders(headers)` call-sites (e.g., audit meta building).
+  'x-admin-api-key',
 ]);
 
 /**
