@@ -1,6 +1,82 @@
 import fs from 'fs';
 import yaml from 'js-yaml';
 
+/**
+ * Full-surface simplifier for Plan 05-01 (MS365_MCP_FULL_COVERAGE=1).
+ *
+ * Unlike `createAndSaveSimplifiedOpenAPI`, this function does NOT filter paths
+ * against `src/endpoints.json` — it retains every path in the input spec. The
+ * same depth cap + recursive-ref cleanup helpers are applied to prevent the
+ * downstream `openapi-zod-client` invocation from OOMing on deep Graph schema
+ * trees (T-05-02, 05-RESEARCH.md Pitfall 1 / 4).
+ *
+ * @param {string} openapiFilePath  Source OpenAPI YAML (e.g. openapi/openapi.yaml).
+ * @param {string} outputFilePath   Target trimmed YAML (e.g. openapi/openapi-trimmed.yaml).
+ * @param {{ maxDepth?: number }} [options]
+ *   maxDepth defaults to 3 — schemas nested deeper than this are truncated to
+ *   a bare `type: object` with a descriptive `description` note.
+ */
+export function createAndSaveSimplifiedOpenAPIFullSurface(
+  openapiFilePath,
+  outputFilePath,
+  options = {}
+) {
+  const maxDepth = options.maxDepth ?? 3;
+
+  const spec = fs.readFileSync(openapiFilePath, 'utf8');
+  const openApiSpec = yaml.load(spec);
+
+  // Normalize operations (operationId fallback + description fallback +
+  // inline $ref parameter resolution) WITHOUT dropping any path / method.
+  if (openApiSpec.paths) {
+    for (const [key, value] of Object.entries(openApiSpec.paths)) {
+      if (!value || typeof value !== 'object') continue;
+      for (const [method, operation] of Object.entries(value)) {
+        if (!operation || typeof operation !== 'object') continue;
+        // Keep the upstream operationId — no rewrite. Downstream
+        // (generate-mcp-tools.mjs post-processor + Plan 05-02 beta prefixer)
+        // owns alias mutation.
+        if (!operation.description && operation.summary) {
+          operation.description = operation.summary;
+        }
+        if (operation.parameters) {
+          operation.parameters = operation.parameters.map((param) => {
+            if (param.$ref && param.$ref.startsWith('#/components/parameters/')) {
+              const paramName = param.$ref.replace('#/components/parameters/', '');
+              const resolvedParam = openApiSpec.components?.parameters?.[paramName];
+              if (resolvedParam) {
+                return { ...resolvedParam };
+              }
+            }
+            return param;
+          });
+          // Also ignore the `method` variable — used only to satisfy eslint
+          // when the for-of destructures it.
+          void method;
+        }
+      }
+    }
+  }
+
+  // Same schema + path sanitation as the legacy path: strip @odata.type,
+  // flatten allOf/anyOf/oneOf, cap nested property depth, prune unused schemas.
+  if (openApiSpec.components && openApiSpec.components.schemas) {
+    removeODataTypeRecursively(openApiSpec.components.schemas);
+    flattenComplexSchemasRecursively(openApiSpec.components.schemas, maxDepth);
+  }
+
+  if (openApiSpec.paths) {
+    removeODataTypeRecursively(openApiSpec.paths);
+    simplifyAnyOfInPaths(openApiSpec.paths);
+  }
+
+  console.log('🧹 Pruning unused schemas (full-surface pass)...');
+  const usedSchemas = findUsedSchemas(openApiSpec);
+  pruneUnusedSchemas(openApiSpec, usedSchemas);
+
+  fs.writeFileSync(outputFilePath, yaml.dump(openApiSpec, { lineWidth: -1 }));
+}
+
 export function createAndSaveSimplifiedOpenAPI(endpointsFile, openapiFile, openapiTrimmedFile) {
   const allEndpoints = JSON.parse(fs.readFileSync(endpointsFile, 'utf8'));
   const endpoints = allEndpoints.filter((endpoint) => !endpoint.disabled);
@@ -152,7 +228,7 @@ function simplifyAnyOfSchema(schema, context) {
   }
 }
 
-function flattenComplexSchemasRecursively(schemas) {
+function flattenComplexSchemasRecursively(schemas, maxDepth = 3) {
   Object.entries(schemas).forEach(([schemaName, schema]) => {
     if (!schema || typeof schema !== 'object') return;
 
@@ -169,7 +245,7 @@ function flattenComplexSchemasRecursively(schemas) {
     }
 
     if (schema.properties) {
-      simplifyNestedPropertiesRecursively(schema.properties);
+      simplifyNestedPropertiesRecursively(schema.properties, 0, maxDepth);
     }
   });
 }

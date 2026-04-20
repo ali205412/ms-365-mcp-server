@@ -165,6 +165,29 @@ paths:
                           type: string
                         name:
                           type: string
+  /sites/{site-id}:
+    get:
+      operationId: sites.get
+      summary: Get SharePoint site
+      description: Retrieve a SharePoint site
+      parameters:
+        - name: site-id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Site
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  displayName:
+                    type: string
 components:
   schemas:
     user:
