@@ -221,7 +221,31 @@ export function mergeBetaFragmentIntoClient(mainPath, fragmentPath) {
     throw new Error('Main client.ts missing makeApi endpoints array anchor');
   }
 
-  const merged = main.replace(
+  // Extract beta schema declarations — everything BEFORE the endpoints array
+  // definition in the fragment. These are `const microsoft_graph_* = z...` and
+  // helper type declarations. Without them the endpoints reference undefined
+  // schema identifiers at runtime. De-duplicate against main's existing const
+  // names so we only ADD symbols that main doesn't already define.
+  const endpointsIdx = fragment.indexOf('const endpoints =');
+  const betaPrelude = endpointsIdx > 0 ? fragment.slice(0, endpointsIdx) : '';
+  const mainDefined = new Set(
+    [...main.matchAll(/^const\s+([a-zA-Z_][\w]*)\s*=/gm)].map((m) => m[1])
+  );
+  // Walk beta const declarations; keep only ones not in main. Import lines are
+  // skipped — main's existing `import { z } from 'zod'` covers the beta ones.
+  const newConsts = [];
+  const constRegex = /^const\s+([a-zA-Z_][\w]*)\s*=\s*([\s\S]*?);$/gm;
+  let cm;
+  while ((cm = constRegex.exec(betaPrelude)) !== null) {
+    if (!mainDefined.has(cm[1])) {
+      newConsts.push(cm[0]);
+    }
+  }
+  const betaSchemaBlock = newConsts.length > 0 ? newConsts.join('\n') + '\n' : '';
+
+  // Inject schemas BEFORE the main endpoints array and append endpoints INTO
+  // the array. Two separate replaces so both payloads land deterministically.
+  let merged = main.replace(
     /(const\s+endpoints\s*=\s*makeApi\(\s*\[)([\s\S]*)(\]\s*\)\s*;)/,
     (_full, open, body, close) => {
       const trimmed = body.replace(/\s+$/, '');
@@ -230,6 +254,12 @@ export function mergeBetaFragmentIntoClient(mainPath, fragmentPath) {
       return `${open}${trimmed}${separator}${betaEntries}\n${close}`;
     }
   );
+  if (betaSchemaBlock.length > 0) {
+    merged = merged.replace(
+      /(const\s+endpoints\s*=\s*makeApi\()/,
+      `${betaSchemaBlock}\n$1`
+    );
+  }
 
   fs.writeFileSync(mainPath, merged);
 }
