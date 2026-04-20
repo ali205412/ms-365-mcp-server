@@ -36,6 +36,7 @@ import {
   verifyEntraAdmin,
   createAdminEntraMiddleware,
   __resetEntraCacheForTesting,
+  __setEntraCacheTtlForTesting,
   type EntraConfig,
 } from '../auth/entra.js';
 
@@ -203,28 +204,35 @@ describe('plan 04-04 Task 1 — verifyEntraAdmin', () => {
   });
 
   it('Test 7: 5m LRU miss after TTL expiry — fetchImpl called again', async () => {
-    vi.useFakeTimers();
-    const token = craftTestToken({
-      upn: 'alice@contoso.com',
-      aud: ADMIN_CLIENT_ID,
-    });
-    const fetchImpl = mockMemberOfResponse([ADMIN_GROUP_ID]);
+    // LRUCache captures ttl at construction and reads time via performance.now()
+    // with 1s debouncing — vi.useFakeTimers cannot reliably expire the default
+    // 300_000ms TTL. We swap in a 100ms-TTL cache and use real-time sleeps at
+    // 1/3000th scale; deterministic, no clock mocking, argon2/jose-safe.
+    __setEntraCacheTtlForTesting(100);
+    try {
+      const token = craftTestToken({
+        upn: 'alice@contoso.com',
+        aud: ADMIN_CLIENT_ID,
+      });
+      const fetchImpl = mockMemberOfResponse([ADMIN_GROUP_ID]);
 
-    await verifyEntraAdmin(token, {
-      entraConfig: DEFAULT_ENTRA_CONFIG,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-    });
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+      await verifyEntraAdmin(token, {
+        entraConfig: DEFAULT_ENTRA_CONFIG,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
 
-    // Advance 5m + 1s (TTL is 300_000ms). LRUCache reads Date.now via its
-    // clock adapter, which respects vi.useFakeTimers.
-    vi.advanceTimersByTime(5 * 60 * 1000 + 1000);
+      // Sleep past TTL (100ms + buffer for debounce resolution).
+      await new Promise((r) => setTimeout(r, 250));
 
-    await verifyEntraAdmin(token, {
-      entraConfig: DEFAULT_ENTRA_CONFIG,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-    });
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+      await verifyEntraAdmin(token, {
+        entraConfig: DEFAULT_ENTRA_CONFIG,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      __setEntraCacheTtlForTesting(null);
+    }
   });
 
   it('Test 8: Graph fetch 401 → null; logger.warn mentions graph_memberOf_failed', async () => {
