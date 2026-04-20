@@ -1195,6 +1195,48 @@ class MicrosoftGraphServer {
     app.post('/t/:tenantId/mcp', authSelector, streamableHttp);
     app.get('/t/:tenantId/mcp', authSelector, streamableHttp);
 
+    // region:phase4-webhook-receiver
+    // Plan 04-07: Microsoft Graph change-notification receiver (WEBHK-01 +
+    // WEBHK-02). Mounted AFTER the /mcp routes but BEFORE the implicit 404.
+    // Body-parser limit 1 MiB per D-16 (rich-notification spec caps at 200 KB,
+    // 5x buffer). loadTenant already applies at the /t/:tenantId level
+    // (line 1096 above) — we re-list it here for explicitness and to match
+    // the plan-04-07 middleware chain exactly. The `app.use('/t/:tenantId',
+    // loadTenant)` pass runs first and short-circuits on a 404 or bad GUID,
+    // so the route-specific pass is a no-op on the happy path.
+    //
+    // DEK sourcing: getDekForTenant is the warm path; handler falls back to
+    // unwrapTenantDek(wrapped_dek, kek) on cold pool so webhook delivery
+    // does NOT force an MSAL acquire (the webhook is a distinct code path
+    // from outbound Graph calls).
+    try {
+      const { createWebhookHandler } = await import('./lib/admin/webhooks.js');
+      const { loadKek: loadKekForWebhook } = await import('./lib/crypto/kek.js');
+      const webhookHandler = createWebhookHandler({
+        pgPool: pg,
+        redis,
+        tenantPool,
+        kek: await loadKekForWebhook(),
+      });
+      app.post(
+        '/t/:tenantId/notifications',
+        express.json({ limit: '1mb' }),
+        loadTenant,
+        webhookHandler
+      );
+      logger.info('Phase 4: /t/:tenantId/notifications webhook receiver mounted');
+    } catch (err) {
+      // Fall through — webhook receiver is optional (no tenant can create a
+      // subscription without the plan-04-08 MCP tools landing). A KEK-load
+      // failure or a webhooks.js import failure logs warn and skips the
+      // mount so the rest of the tenant surface keeps serving.
+      logger.warn(
+        { err: (err as Error).message },
+        'Phase 4: webhook receiver mount failed (webhook deliveries will 404)'
+      );
+    }
+    // endregion:phase4-webhook-receiver
+
     logger.info('Phase 3 tenant routes mounted under /t/:tenantId/*');
   }
 

@@ -15,7 +15,7 @@
  *   Logger mock call history MUST NOT contain the plaintext 'secret-abc'
  *   string in any serialized form. Only 4-char suffix allowed.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { newDb } from 'pg-mem';
 import express from 'express';
 import http from 'node:http';
@@ -148,7 +148,8 @@ async function startServer(
   const app = express();
   app.use(express.json({ limit: '1mb' }));
   app.use((req, _res, next) => {
-    (req as express.Request & { id?: string }).id = `req-${Math.random().toString(36).slice(2, 10)}`;
+    (req as express.Request & { id?: string }).id =
+      `req-${Math.random().toString(36).slice(2, 10)}`;
     next();
   });
   const loadTenant = createLoadTenantMiddleware({ pool });
@@ -315,8 +316,8 @@ describe('plan 04-07 Task 1 — webhook clientState equality + 401 audit', () =>
 
       // D-01 invariant: plaintext NEVER in logger calls.
       const joinedLogs = JSON.stringify(
-        [loggerMock.info, loggerMock.warn, loggerMock.error, loggerMock.debug].flatMap((m) =>
-          m.mock.calls
+        [loggerMock.info, loggerMock.warn, loggerMock.error, loggerMock.debug].flatMap(
+          (m) => m.mock.calls
         )
       );
       expect(joinedLogs).not.toContain('secret-abc');
@@ -598,8 +599,8 @@ describe('plan 04-07 Task 1 — webhook clientState equality + 401 audit', () =>
 
       // Plaintext 'secret-abc' MUST NOT appear in any log call.
       const joinedLogs = JSON.stringify(
-        [loggerMock.info, loggerMock.warn, loggerMock.error, loggerMock.debug].flatMap((m) =>
-          m.mock.calls
+        [loggerMock.info, loggerMock.warn, loggerMock.error, loggerMock.debug].flatMap(
+          (m) => m.mock.calls
         )
       );
       expect(joinedLogs).not.toContain('secret-abc');

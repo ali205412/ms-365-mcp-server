@@ -1,7 +1,13 @@
 /**
  * Microsoft Graph webhook receiver (plan 04-07, WEBHK-01 + WEBHK-02).
  *
- * Three critical paths per D-16:
+ * Four critical paths per D-16:
+ *
+ *   0. Per-IP 401 rate limit (first branch, shed cheap).
+ *      Counter `mcp:webhook:401:<ip>` via Redis INCR + EXPIRE 60s. When the
+ *      counter has already hit MAX_401_PER_MINUTE_PER_IP before this
+ *      request, short-circuit with 429 + Retry-After:60 WITHOUT any DB or
+ *      decrypt work. Attack traffic sheds at the cheapest possible path.
  *
  *   1. Validation-token handshake (sync echo).
  *      Graph POSTs `?validationToken=X` on subscription creation; we echo X
@@ -14,24 +20,25 @@
  *      subscriptionExpirationDateTime, tenantId}]}`. Look up
  *      subscriptions.client_state (jsonb envelope), decrypt with the tenant
  *      DEK, compare EXACT-byte equality (no normalization — PITFALL 3).
- *      Mismatch or unknown subscription → 401 + audit webhook.unauthorized.
- *      Match → SET NX dedup key; first-wins processes; duplicate returns
- *      202 + X-Webhook-Duplicate header. (Task 2 adds dedup + rate limit;
- *      task 1 writes webhook.received for every unique match.)
+ *      Mismatch or unknown subscription → 401 + audit webhook.unauthorized +
+ *      increment per-IP 401 counter.
  *
- *   3. Rate-limited 401 path (task 2).
- *      Per-IP counter `mcp:webhook:401:<ip>` with 60s TTL; >10 → 429 without
- *      attempting validation (short-circuit BEFORE DB/decrypt).
+ *   3. Redis SET NX dedup.
+ *      Key = sha256(subId:resource:changeType:exp:tenantId); stored under
+ *      `mcp:webhook:dedup:<key>` with 24h TTL. First receipt → 202 +
+ *      webhook.received audit; duplicate → 202 + X-Webhook-Duplicate header
+ *      + webhook.duplicate audit. Matches Graph's documented 4h max-retry
+ *      window 6× over per D-16.
  *
  * Redaction (D-01 + D-16):
  *   - clientState plaintext NEVER logged or returned in responses.
  *   - audit meta.received_client_state_suffix = last 4 chars only.
- *   - audit meta.dedup_key_suffix = last 8 chars only (task 2).
+ *   - audit meta.dedup_key_suffix = last 8 chars only.
  *   - Redis keys are opaque sha256 (dedup) or IP-only (rate-limit).
  *
  * Dependencies (DI factory — no import-time globals):
  *   - pgPool for subscriptions lookup + audit INSERT.
- *   - redis for dedup SET NX and per-IP INCR (task 2).
+ *   - redis for dedup SET NX and per-IP INCR/EXPIRE.
  *   - tenantPool.getDekForTenant for warm path; fallback to direct
  *     unwrapTenantDek(wrapped_dek, kek) for cold pool (webhook is a
  *     distinct code path from MSAL acquire — should not force-load MSAL
@@ -161,6 +168,41 @@ function resolveTenantDek(tenant: TenantRow, deps: WebhookDeps): Buffer | null {
   }
 }
 
+// ─── Rate limit ────────────────────────────────────────────────────────────
+
+/**
+ * Per-IP 401 counter key. Plain IP (no PII) — matches D-16 rate-limit key
+ * prefix. Fallback '0.0.0.0' guards against missing req.ip (e.g., unit-
+ * tested harnesses that don't set it).
+ */
+function rateLimitKey(ip: string): string {
+  return `mcp:webhook:401:${ip || '0.0.0.0'}`;
+}
+
+/**
+ * Increment the per-IP 401 counter and set the 60s TTL on first increment.
+ * Fire-and-forget: any Redis failure is logged but never propagates — a
+ * Redis outage MUST NOT block the 401 response. Subsequent over-limit
+ * detection will silently miss during a Redis outage, but that's the
+ * correct trade-off (availability > DoS protection in partition mode per
+ * T-04-17a; attackers gain temporary rate-limit bypass but no credential
+ * advantage).
+ */
+async function incrementUnauthorizedCounter(redis: RedisClient, ip: string): Promise<void> {
+  const key = rateLimitKey(ip);
+  try {
+    const next = await redis.incr(key);
+    if (next === 1) {
+      await redis.expire(key, UNAUTHORIZED_RATE_TTL_SECONDS);
+    }
+  } catch (err) {
+    logger.warn(
+      { ip, err: (err as Error).message },
+      'webhook: rate-limit counter increment failed'
+    );
+  }
+}
+
 // ─── Audit helpers ─────────────────────────────────────────────────────────
 
 interface AuditUnauthorizedArgs {
@@ -174,10 +216,11 @@ interface AuditUnauthorizedArgs {
 }
 
 /**
- * Writes webhook.unauthorized. Fire-and-forget (writeAuditStandalone never
- * throws — falls back to pino shadow log on DB failure, per plan 03-10
- * invariants). Callers do NOT await the write — HTTP response latency should
- * not be coupled to audit durability.
+ * Writes webhook.unauthorized + increments the per-IP 401 counter.
+ * Fire-and-forget (writeAuditStandalone never throws — falls back to pino
+ * shadow log on DB failure, per plan 03-10 invariants). Callers do NOT await
+ * the audit write — HTTP response latency should not be coupled to audit
+ * durability.
  *
  * The received_client_state_suffix is the LAST 4 chars of the received
  * value only. For attackers brute-forcing the token, suffix exposure gives
@@ -206,6 +249,7 @@ function auditUnauthorized(args: AuditUnauthorizedArgs): void {
     result: 'failure',
     meta,
   });
+  void incrementUnauthorizedCounter(deps.redis, req.ip ?? '');
 }
 
 // ─── Request-body validation ───────────────────────────────────────────────
@@ -257,6 +301,35 @@ function parseNotifications(
   return out;
 }
 
+// ─── Dedup helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Atomic first-wins SET NX with 24h TTL for webhook dedup. Returns true
+ * when this receipt is the first (key was set), false when the notification
+ * is a duplicate within the 24h window (SET NX returned null).
+ *
+ * The ioredis variadic .set() signature isn't covered by its TypeScript
+ * overloads when combining EX + NX; we cast via `unknown` (same pattern as
+ * RedisPkceStore) so the facade + real ioredis both accept the call shape.
+ */
+async function setDedupKeyFirstWins(
+  redis: RedisClient,
+  dedupKey: string
+): Promise<boolean> {
+  const result = await (
+    redis as unknown as {
+      set: (
+        key: string,
+        value: string,
+        mode: 'EX',
+        seconds: number,
+        nx: 'NX'
+      ) => Promise<'OK' | null>;
+    }
+  ).set(`mcp:webhook:dedup:${dedupKey}`, '1', 'EX', DEDUP_TTL_SECONDS, 'NX');
+  return result === 'OK';
+}
+
 // ─── Handler factory ───────────────────────────────────────────────────────
 
 /**
@@ -269,17 +342,42 @@ function parseNotifications(
 export function createWebhookHandler(deps: WebhookDeps): RequestHandler {
   return async (req: Request, res: Response): Promise<void> => {
     const requestId = (req as Request & { id?: string }).id ?? 'no-req-id';
+    const ip = req.ip ?? '';
 
-    // Guard 0: loadTenant must have run. Defensive 404 if not.
+    // Guard 0: Per-IP rate limit. Read-only peek so we short-circuit BEFORE
+    // touching the DB or attempting decryption — this is the cheapest shed
+    // path for attack traffic. The counter is incremented on the actual 401
+    // branch (auditUnauthorized → incrementUnauthorizedCounter) so valid
+    // notifications and validationToken handshakes never touch the counter.
+    let current = 0;
+    try {
+      const raw = await deps.redis.get(rateLimitKey(ip));
+      current = raw ? Number.parseInt(raw, 10) || 0 : 0;
+    } catch (err) {
+      // Redis outage: fall through to the validation path rather than
+      // failing closed — matches T-04-17a disposition (availability >
+      // DoS protection during partition).
+      logger.warn(
+        { ip, err: (err as Error).message },
+        'webhook: rate-limit peek failed (bypassing limiter)'
+      );
+    }
+    if (current >= MAX_401_PER_MINUTE_PER_IP) {
+      res.setHeader('Retry-After', String(UNAUTHORIZED_RATE_TTL_SECONDS));
+      res.status(429).json({ error: 'rate_limited' });
+      return;
+    }
+
+    // Guard 1: loadTenant must have run. Defensive 404 if not.
     const tenant = (req as Request & { tenant?: TenantRow }).tenant;
     if (!tenant) {
       res.status(404).json({ error: 'tenant_not_found' });
       return;
     }
 
-    // Branch 1: Validation-token handshake. MUST be the first branch (Graph
-    // expects this on subscription creation). PITFALL 1: no JSON wrapping.
-    // PITFALL 2: explicit decodeURIComponent is defensive against
+    // Branch 1: Validation-token handshake. MUST be ahead of body parsing so
+    // Graph's subscription-creation probe responds fast. PITFALL 1: no JSON
+    // wrapping. PITFALL 2: explicit decodeURIComponent is defensive against
     // proxy-double-encoding even though Express auto-decodes.
     const rawValidation = (req.query as Record<string, unknown>).validationToken;
     if (typeof rawValidation === 'string' && rawValidation.length > 0) {
@@ -288,7 +386,7 @@ export function createWebhookHandler(deps: WebhookDeps): RequestHandler {
       return;
     }
 
-    // Branch 2: Notification receipt. Parse body → authorize → respond 202.
+    // Branch 2: Notification receipt. Parse body → authorize → dedup → 202.
     const parsed = parseNotifications(req.body);
     if ('error' in parsed) {
       res.status(400).json({ error: parsed.error });
@@ -371,10 +469,53 @@ export function createWebhookHandler(deps: WebhookDeps): RequestHandler {
       }
     }
 
-    // All notifications authorized. Task 1 emits webhook.received per
-    // notification; task 2 layers SET NX dedup + X-Webhook-Duplicate header
-    // on top so duplicates emit webhook.duplicate instead.
+    // All notifications authorized. Apply per-notification SET NX dedup.
+    // First-wins items emit webhook.received; duplicates emit webhook.duplicate
+    // and add to the X-Webhook-Duplicate header count for operator
+    // observability (Graph ignores our 2xx response headers per D-16 Pitfall 8).
+    let duplicateCount = 0;
     for (const n of notifications) {
+      const dedupKey = computeDedupKey({
+        subscriptionId: n.subscriptionId,
+        resource: n.resource,
+        changeType: n.changeType,
+        subscriptionExpirationDateTime: n.subscriptionExpirationDateTime,
+        tenantId: tenant.id,
+      });
+
+      let firstReceipt = false;
+      try {
+        firstReceipt = await setDedupKeyFirstWins(deps.redis, dedupKey);
+      } catch (err) {
+        // Redis outage during dedup: emit webhook.received (best-effort
+        // durability via pg + audit shadow log) rather than silently drop.
+        // Matches T-04-15c — no silent drops on Redis partition.
+        logger.warn(
+          { tenantId: tenant.id, subscriptionId: n.subscriptionId, err: (err as Error).message },
+          'webhook: dedup SET NX failed (proceeding as first receipt)'
+        );
+        firstReceipt = true;
+      }
+
+      if (!firstReceipt) {
+        duplicateCount++;
+        void writeAuditStandalone(deps.pgPool, {
+          tenantId: tenant.id,
+          actor: 'graph',
+          action: 'webhook.duplicate',
+          target: n.subscriptionId,
+          ip: req.ip ?? null,
+          requestId,
+          result: 'success',
+          meta: {
+            dedup_key_suffix: dedupKey.slice(-8),
+            subscription_id: n.subscriptionId,
+            change_type: n.changeType,
+          },
+        });
+        continue;
+      }
+
       void writeAuditStandalone(deps.pgPool, {
         tenantId: tenant.id,
         actor: 'graph',
@@ -385,6 +526,13 @@ export function createWebhookHandler(deps: WebhookDeps): RequestHandler {
         result: 'success',
         meta: { subscription_id: n.subscriptionId, change_type: n.changeType },
       });
+      // TODO(04-08): synchronous enqueue to in-process queue for worker
+      // processing — plan 04-08 ships the subscription-lifecycle tools that
+      // populate the subscriptions row this receiver reads.
+    }
+
+    if (duplicateCount > 0) {
+      res.setHeader('X-Webhook-Duplicate', String(duplicateCount));
     }
     res.status(202).send();
   };

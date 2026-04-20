@@ -13,7 +13,7 @@
  *   Test 5: multi-item batch with partial duplicate → X-Webhook-Duplicate: 1
  *   Test 6: TTL expiry — after 24h same notification → new 202, fresh key
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { newDb } from 'pg-mem';
 import express from 'express';
 import http from 'node:http';
@@ -142,7 +142,8 @@ async function startServer(
   const app = express();
   app.use(express.json({ limit: '1mb' }));
   app.use((req, _res, next) => {
-    (req as express.Request & { id?: string }).id = `req-${Math.random().toString(36).slice(2, 10)}`;
+    (req as express.Request & { id?: string }).id =
+      `req-${Math.random().toString(36).slice(2, 10)}`;
     next();
   });
   const loadTenant = createLoadTenantMiddleware({ pool });

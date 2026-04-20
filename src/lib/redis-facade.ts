@@ -15,14 +15,15 @@
  * persistent Node timer would keep the stdio event loop alive forever and
  * prevent the MCP host from cleanly closing the child process.
  *
- * Commands implemented (subset — Phase 3 needs only these):
+ * Commands implemented (subset — Phase 3-4 needs only these):
  *   get / set (EX + PX + NX flags) / getdel / del(...) / keys(glob with * only)
+ *   incr / expire (Phase 4 04-07 — webhook 401 rate limit)
  *   ping / quit / disconnect / publish / subscribe / on('message' | 'error')
  *   status getter.
  *
- * Not implemented (intentional — Phase 3 does not call these):
- *   mget / mset / hget / hset / zadd / expire / ttl / sentinel / cluster ops.
- *   Callers outside Phase 3 who need those commands MUST use real Redis.
+ * Not implemented (intentional — current code does not call these):
+ *   mget / mset / hget / hset / zadd / ttl / sentinel / cluster ops.
+ *   Callers who need those commands MUST use real Redis.
  */
 import { EventEmitter } from 'node:events';
 
@@ -107,6 +108,44 @@ export class MemoryRedisFacade extends EventEmitter {
     }
     this.store.delete(key);
     return e.value;
+  }
+
+  /**
+   * ioredis-compatible INCR (plan 04-07). Creates the key with value 1 if
+   * absent, otherwise parses the current value as an integer and adds 1.
+   * Preserves any existing TTL (parity with real Redis INCR semantics).
+   * Invalid integer content throws per ioredis convention.
+   */
+  async incr(key: string): Promise<number> {
+    this.assertOpen();
+    const existing = this.store.get(key);
+    if (!existing || this.isExpired(existing)) {
+      this.store.set(key, { value: '1', expiresAt: null });
+      return 1;
+    }
+    const current = Number.parseInt(existing.value, 10);
+    if (!Number.isFinite(current)) {
+      throw new Error('ERR value is not an integer or out of range');
+    }
+    const next = current + 1;
+    // Preserve existing TTL; real Redis does not clear it on INCR.
+    this.store.set(key, { value: String(next), expiresAt: existing.expiresAt });
+    return next;
+  }
+
+  /**
+   * ioredis-compatible EXPIRE (plan 04-07). Returns 1 if TTL was set, 0 if
+   * the key does not exist (matching real Redis EXPIRE semantics).
+   */
+  async expire(key: string, seconds: number): Promise<number> {
+    this.assertOpen();
+    const existing = this.store.get(key);
+    if (!existing || this.isExpired(existing)) {
+      this.store.delete(key);
+      return 0;
+    }
+    this.store.set(key, { value: existing.value, expiresAt: Date.now() + seconds * 1000 });
+    return 1;
   }
 
   async del(...keys: string[]): Promise<number> {
