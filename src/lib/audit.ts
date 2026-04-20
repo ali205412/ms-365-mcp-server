@@ -51,8 +51,9 @@ import logger from '../logger.js';
  *   session.delete         { sessionIdSuffix, reason }
  *   admin.tenant.create    { clientId, mode, cloudType }     (Phase 4)
  *   admin.tenant.update    { fields: string[] }              (Phase 4)
- *   admin.api-key.mint     { keyId, displaySuffix }          (Phase 4)
- *   admin.api-key.revoke   { keyId }                         (Phase 4)
+ *   admin.api-key.mint     { keyId, displaySuffix, tenantId }                          (Phase 4)
+ *   admin.api-key.revoke   { keyId, tenantId }                                         (Phase 4)
+ *   admin.api-key.rotate   { oldKeyId, newKeyId, displaySuffixes: {old, new}, tenantId } (Phase 4)
  */
 export type AuditAction =
   | 'oauth.authorize'
@@ -66,7 +67,8 @@ export type AuditAction =
   | 'admin.tenant.create'
   | 'admin.tenant.update'
   | 'admin.api-key.mint'
-  | 'admin.api-key.revoke';
+  | 'admin.api-key.revoke'
+  | 'admin.api-key.rotate';
 
 export interface AuditRow {
   tenantId: string;

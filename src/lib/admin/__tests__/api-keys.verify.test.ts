@@ -64,6 +64,7 @@ import {
   verifyApiKeyPlaintext,
   __resetApiKeyCacheForTesting,
   __evictApiKeyFromCacheByKeyId,
+  __setApiKeyCacheTtlForTesting,
   API_KEY_PREFIX,
 } from '../api-keys.js';
 import { MemoryRedisFacade } from '../../redis-facade.js';
@@ -157,7 +158,10 @@ describe('plan 04-03 Task 1 — verifyApiKeyPlaintext', () => {
     await seedTenant(pool, TENANT_A);
     const { id, displaySuffix } = await seedApiKey(pool, TENANT_A, VALID_PLAINTEXT_1, 'my-bot');
 
-    const identity = await verifyApiKeyPlaintext(VALID_PLAINTEXT_1, makeDeps(pool, new MemoryRedisFacade()));
+    const identity = await verifyApiKeyPlaintext(
+      VALID_PLAINTEXT_1,
+      makeDeps(pool, new MemoryRedisFacade())
+    );
 
     expect(identity).not.toBeNull();
     expect(identity!.keyId).toBe(id);
@@ -223,11 +227,17 @@ describe('plan 04-03 Task 1 — verifyApiKeyPlaintext', () => {
 
     const spy = vi.spyOn(argon2, 'verify');
     try {
-      const first = await verifyApiKeyPlaintext(VALID_PLAINTEXT_1, makeDeps(pool, new MemoryRedisFacade()));
+      const first = await verifyApiKeyPlaintext(
+        VALID_PLAINTEXT_1,
+        makeDeps(pool, new MemoryRedisFacade())
+      );
       expect(first).not.toBeNull();
       expect(spy).toHaveBeenCalledTimes(1);
 
-      const second = await verifyApiKeyPlaintext(VALID_PLAINTEXT_1, makeDeps(pool, new MemoryRedisFacade()));
+      const second = await verifyApiKeyPlaintext(
+        VALID_PLAINTEXT_1,
+        makeDeps(pool, new MemoryRedisFacade())
+      );
       expect(second).not.toBeNull();
       expect(second!.keyId).toBe(first!.keyId);
       // No additional call — served from cache
@@ -237,34 +247,49 @@ describe('plan 04-03 Task 1 — verifyApiKeyPlaintext', () => {
     }
   });
 
-  it('Test 5: LRU cache TTL — 59s cached; 61s re-verified', async () => {
+  it('Test 5: LRU cache TTL — cached within window; re-verified after expiry', async () => {
     const pool = await makePool();
     sharedPool = pool;
     await seedTenant(pool, TENANT_A);
     await seedApiKey(pool, TENANT_A, VALID_PLAINTEXT_1);
 
+    // Substitute a cache with a short TTL so real-time sleeps produce the
+    // 59s/61s semantics at 1000x speed. Mocking LRUCache's internal clock
+    // (performance.now or Date.now) is unreliable because the library
+    // debounces now() reads across tests and holds the ref captured at
+    // construction. Swapping the cache reference is the only clean path.
+    __setApiKeyCacheTtlForTesting(100); // 100ms TTL
+
     const spy = vi.spyOn(argon2, 'verify');
     try {
-      vi.useFakeTimers();
       // Initial verify — 1 call
-      const first = await verifyApiKeyPlaintext(VALID_PLAINTEXT_1, makeDeps(pool, new MemoryRedisFacade()));
+      const first = await verifyApiKeyPlaintext(
+        VALID_PLAINTEXT_1,
+        makeDeps(pool, new MemoryRedisFacade())
+      );
       expect(first).not.toBeNull();
       expect(spy).toHaveBeenCalledTimes(1);
 
-      // Advance 59s — still cached
-      await vi.advanceTimersByTimeAsync(59_000);
-      const cached = await verifyApiKeyPlaintext(VALID_PLAINTEXT_1, makeDeps(pool, new MemoryRedisFacade()));
+      // Within TTL window (< 100ms) — still cached
+      await new Promise((r) => setTimeout(r, 40));
+      const cached = await verifyApiKeyPlaintext(
+        VALID_PLAINTEXT_1,
+        makeDeps(pool, new MemoryRedisFacade())
+      );
       expect(cached).not.toBeNull();
       expect(spy).toHaveBeenCalledTimes(1);
 
-      // Advance 2 more seconds (total 61s) — cache TTL expired
-      await vi.advanceTimersByTimeAsync(2_000);
-      const expired = await verifyApiKeyPlaintext(VALID_PLAINTEXT_1, makeDeps(pool, new MemoryRedisFacade()));
+      // Past TTL (cumulative > 100ms) — cache expired; verify re-runs
+      await new Promise((r) => setTimeout(r, 120));
+      const expired = await verifyApiKeyPlaintext(
+        VALID_PLAINTEXT_1,
+        makeDeps(pool, new MemoryRedisFacade())
+      );
       expect(expired).not.toBeNull();
       expect(spy).toHaveBeenCalledTimes(2);
     } finally {
       spy.mockRestore();
-      vi.useRealTimers();
+      __setApiKeyCacheTtlForTesting(null); // restore default
     }
   });
 
@@ -296,7 +321,10 @@ describe('plan 04-03 Task 1 — verifyApiKeyPlaintext', () => {
     const spy = vi.spyOn(argon2, 'verify');
     try {
       // First verify — cache populated with revokedAt=null
-      const first = await verifyApiKeyPlaintext(VALID_PLAINTEXT_1, makeDeps(pool, new MemoryRedisFacade()));
+      const first = await verifyApiKeyPlaintext(
+        VALID_PLAINTEXT_1,
+        makeDeps(pool, new MemoryRedisFacade())
+      );
       expect(first!.revokedAt).toBeNull();
       expect(spy).toHaveBeenCalledTimes(1);
 
@@ -305,7 +333,10 @@ describe('plan 04-03 Task 1 — verifyApiKeyPlaintext', () => {
 
       // Within TTL — cache STILL returns null revokedAt (staleness window).
       // Caller (04-04 middleware) MUST recheck DB or rely on pub/sub invalidation.
-      const stale = await verifyApiKeyPlaintext(VALID_PLAINTEXT_1, makeDeps(pool, new MemoryRedisFacade()));
+      const stale = await verifyApiKeyPlaintext(
+        VALID_PLAINTEXT_1,
+        makeDeps(pool, new MemoryRedisFacade())
+      );
       expect(stale!.revokedAt).toBeNull();
       expect(spy).toHaveBeenCalledTimes(1);
 
@@ -313,7 +344,10 @@ describe('plan 04-03 Task 1 — verifyApiKeyPlaintext', () => {
       __evictApiKeyFromCacheByKeyId(id);
 
       // After eviction, next verify hits DB and sees revoked_at
-      const fresh = await verifyApiKeyPlaintext(VALID_PLAINTEXT_1, makeDeps(pool, new MemoryRedisFacade()));
+      const fresh = await verifyApiKeyPlaintext(
+        VALID_PLAINTEXT_1,
+        makeDeps(pool, new MemoryRedisFacade())
+      );
       expect(fresh).not.toBeNull();
       expect(fresh!.revokedAt).not.toBeNull();
       expect(spy).toHaveBeenCalledTimes(2);
