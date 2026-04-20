@@ -4,7 +4,9 @@
  *
  * Plan 05-01 extended this orchestrator to support a full-coverage branch
  * alongside the v1 legacy 212-op path. Plan 05-02 appended the beta pipeline
- * step when full-coverage is on. The branch is controlled by environment
+ * step when full-coverage is on. Plan 05-08 appended the coverage verification
+ * step AFTER the beta pipeline so the harness counts aliases emitted by BOTH
+ * v1 and beta pipelines together. The branch is controlled by environment
  * variables that are read at `main()` entry:
  *
  *   MS365_MCP_FULL_COVERAGE (default "0")
@@ -12,9 +14,12 @@
  *            skip the src/endpoints.json filter. The emitted
  *            src/generated/client.ts carries the full tool catalog AND the
  *            Plan 05-02 beta pipeline runs (step 4) -- appending every beta
- *            endpoint with the `__beta__` alias prefix.
+ *            endpoint with the `__beta__` alias prefix. Plan 05-08 coverage
+ *            harness (step 5) then counts ops per workload, diffs against
+ *            bin/.last-coverage-snapshot.json, and writes
+ *            docs/coverage-report.md.
  *     "0" -> legacy behavior (filter against src/endpoints.json => 212 ops).
- *            Beta pipeline is skipped entirely.
+ *            Beta pipeline AND coverage harness are both skipped entirely.
  *
  *   MS365_MCP_USE_SNAPSHOT (default "0")
  *     "1" -> prefer the committed openapi/openapi.yaml snapshot over the
@@ -39,24 +44,27 @@
  *   npm run generate
  *
  * Test harness: tests import `main({ rootDir, simplifiers, generateMcpTools,
- * runBetaPipeline })` from this module. The deps bag lets tests stage a
- * tmpdir and stub out the expensive `openapi-zod-client` invocation while
- * still exercising the real branch selection + simplifier calls.
+ * runBetaPipeline, runCoverageCheck })` from this module. The deps bag lets
+ * tests stage a tmpdir and stub out the expensive `openapi-zod-client`
+ * invocation while still exercising the real branch selection + simplifier
+ * calls.
  *
- * Ordering note: Plan 05-08 (coverage harness) appends a `runCoverageCheck`
- * step AFTER runBetaPipeline. Do not reshuffle the ordering -- the coverage
- * check counts aliases emitted by BOTH v1 and beta pipelines together.
- *
- * Plan 05-03 adds Step 5: compileEssentialsPreset validates src/presets/
- * essentials-v1.json against the generated registry and emits a
- * ReadonlySet<string> TypeScript artifact. The step runs ALWAYS (including
- * under FULL_COVERAGE=0) because the preset is a constant 150-op contract.
- * Legacy mode will throw on preset ops absent from endpoints.json (e.g. the
- * 4 subscription ops); that is acceptable -- surfaces the legacy/preset gap
- * at generate time rather than shipping a broken preset reference.
+ * Ordering contract (DO NOT reshuffle):
+ *   1. downloadGraphOpenAPI
+ *   2. simplify (full-surface or legacy)
+ *   3. generateMcpTools (openapi-zod-client v1 codegen)
+ *   4. runBetaPipeline (FULL_COVERAGE=1 only; merges __beta__-prefixed ops)
+ *   5. runCoverageCheck (FULL_COVERAGE=1 only; diffs vs. snapshot, writes
+ *      docs/coverage-report.md, throws on >10%% workload regression)
+ *   6. compileEssentialsPreset (unconditional — validates 150-op preset
+ *      against generated registry and emits ReadonlySet<string> artifact).
+ *      Under FULL_COVERAGE=0 this throws on preset ops absent from the
+ *      212-op legacy catalog; that is acceptable — surfaces the gap at
+ *      generate time rather than shipping a broken preset.
  */
 
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { downloadGraphOpenAPI } from './modules/download-openapi.mjs';
 import { generateMcpTools as defaultGenerateMcpTools } from './modules/generate-mcp-tools.mjs';
@@ -65,6 +73,10 @@ import {
   createAndSaveSimplifiedOpenAPIFullSurface,
 } from './modules/simplified-openapi.mjs';
 import { runBetaPipeline as defaultRunBetaPipeline } from './modules/beta.mjs';
+import {
+  runCoverageCheck as defaultRunCoverageCheck,
+  renderMarkdownReport,
+} from './modules/coverage-check.mjs';
 import { compileEssentialsPreset as defaultCompileEssentialsPreset } from './modules/compile-preset.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -86,6 +98,10 @@ const DEFAULT_ROOT = path.resolve(__dirname, '..');
  * @param {Function} [deps.runBetaPipeline]  Override the Plan 05-02 beta pipeline.
  *   Only invoked when MS365_MCP_FULL_COVERAGE=1. Tests inject a stub that
  *   records invocation without running the real openapi-zod-client binary.
+ * @param {Function} [deps.runCoverageCheck]  Override the Plan 05-08 coverage
+ *   harness. Only invoked when MS365_MCP_FULL_COVERAGE=1. Receives
+ *   (generatedClientPath, baselinePath, opts) and must return a report shape
+ *   that renderMarkdownReport can consume.
  * @param {Function} [deps.compileEssentialsPreset]  Override the Plan 05-03 preset
  *   compile step. Tests inject a no-op stub when they stage a generated/client.ts
  *   without the 150 preset aliases; production uses the real implementation.
@@ -100,6 +116,7 @@ export async function main(deps = {}) {
   };
   const generateMcpTools = deps.generateMcpTools ?? defaultGenerateMcpTools;
   const runBetaPipeline = deps.runBetaPipeline ?? defaultRunBetaPipeline;
+  const runCoverageCheck = deps.runCoverageCheck ?? defaultRunCoverageCheck;
   const compileEssentialsPreset =
     deps.compileEssentialsPreset ?? defaultCompileEssentialsPreset;
 
@@ -152,6 +169,30 @@ export async function main(deps = {}) {
     const snapshotPath = path.join(__dirname, '.last-beta-snapshot.json');
     await runBetaPipeline(openapiDir, generatedDir, { snapshotPath });
     console.log('✅ Beta pipeline complete');
+
+    console.log('\n📊 Step 5: Running coverage verification harness');
+    const clientPath = path.join(generatedDir, 'client.ts');
+    const coverageBaselinePath = path.join(rootDir, 'bin', '.last-coverage-snapshot.json');
+    const report = runCoverageCheck(clientPath, coverageBaselinePath);
+
+    // Persist the markdown report to docs/coverage-report.md (CI-friendly
+    // rendering of the per-workload table + thresholds). Written regardless
+    // of warnings; regressions would have thrown before this point.
+    const docsDir = path.join(rootDir, 'docs');
+    if (!fs.existsSync(docsDir)) {
+      fs.mkdirSync(docsDir, { recursive: true });
+    }
+    const reportPath = path.join(docsDir, 'coverage-report.md');
+    fs.writeFileSync(reportPath, renderMarkdownReport(report));
+    console.log(`✅ Coverage report written: ${reportPath}`);
+
+    if (report.warnings.length > 0) {
+      console.log(`⚠️  Coverage warnings: ${report.warnings.length}`);
+      for (const w of report.warnings) {
+        console.log(`   - ${w}`);
+      }
+    }
+    console.log(`   Totals: current=${report.totals.current}, baseline=${report.totals.baseline}`);
   }
 
   // Plan 05-03 Step 5: compile essentials-v1 preset -> generated-index.ts.

@@ -19,6 +19,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "verify": "npm run generate && npm run lint && npm run format:check && npm run build && npm run test",
+    "verify:coverage": "MS365_MCP_FULL_COVERAGE=1 MS365_MCP_USE_SNAPSHOT=1 NODE_OPTIONS=--max-old-space-size=8192 node bin/generate-graph-client.mjs",
     "inspector": "npx @modelcontextprotocol/inspector tsx src/index.ts"
   },
   "keywords": [
