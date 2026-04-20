@@ -34,6 +34,7 @@ import type { TenantPool } from '../tenant/tenant-pool.js';
 import { createAdminTlsEnforceMiddleware } from './tls-enforce.js';
 import { createApiKeyRoutes, subscribeToApiKeyRevoke } from './api-keys.js';
 import { createTenantsRoutes } from './tenants.js';
+import { createEnabledToolsRoutes } from './enabled-tools.js';
 import { createAuditRoutes } from './audit.js';
 import { createAdminAuthMiddleware } from './auth/dual-stack.js';
 import logger from '../../logger.js';
@@ -174,6 +175,12 @@ export function createAdminRouter(deps: AdminRouterDeps): Router {
   r.use(createAdminAuthMiddleware(deps));
 
   r.use('/tenants', createTenantsRoutes(deps));
+  // Mount plan 05-07 PATCH /:id/enabled-tools on the SAME /tenants base.
+  // Express composes by pattern+method, so the longer-suffix match here
+  // (PATCH /:id/enabled-tools) wins over the broader PATCH /:id in
+  // createTenantsRoutes. Appending after keeps the existing tenants
+  // sub-router behaviour intact.
+  r.use('/tenants', createEnabledToolsRoutes(deps));
   r.use('/api-keys', createApiKeyRoutes(deps));
   r.use('/audit', createAuditRoutes(deps));
 

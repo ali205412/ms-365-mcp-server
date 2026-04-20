@@ -1,0 +1,332 @@
+/**
+ * Admin PATCH /admin/tenants/:id/enabled-tools (plan 05-07, COVRG-04, D-21).
+ *
+ * Clone of src/lib/admin/tenants.ts PATCH pattern with 05-07-specific
+ * extensions:
+ *   - Zod body: {add?, remove?, set?} with a `.refine` mutual-exclusion
+ *     check (exactly one key per call).
+ *   - Selector validation against the generated tool registry via
+ *     validateSelectors (Plan 05-04) — Levenshtein suggestions on miss.
+ *     Runs BEFORE the transaction opens so invalid input never touches the
+ *     DB.
+ *   - Transactional UPDATE tenants.enabled_tools + writeAudit in one
+ *     Postgres txn (same pattern as tenants.ts PATCH /:id).
+ *   - Post-commit publish on Redis channel `mcp:tool-selection-invalidate`
+ *     via publishToolSelectionInvalidation (Plan 05-06). Redis publish
+ *     failure logs warn + continues — TTL fallback is the safety net.
+ *   - Response 200 with the updated tenant row (read-back through
+ *     deps.pgPool + tenantRowToWire from tenants.ts).
+ *
+ * Auth: reuses the Phase 4 dual-stack middleware (req.admin populated by
+ * createAdminAuthMiddleware at router mount).
+ *
+ * RBAC: reuses the same canActOnTenant decision as tenants.ts — tenant-
+ * scoped admin may only act on their own tenant; cross-tenant access is
+ * denied with 404 (information hiding per D-13).
+ *
+ * Redaction (D-01, T-05-07c / T-05-17): the raw enabled_tools text never
+ * lands in audit_log.meta or in pino info logs. Audit meta carries only
+ * {before_length, after_length, operation} — categorical fields safe for
+ * grep + retention. Operators greping `action = 'admin.tenant.enabled-
+ * tools-change' AND tenant_id = $X` get the full change history without
+ * seeing the selector strings themselves.
+ *
+ * Threat dispositions (plan 05-07 <threat_model>):
+ *   - T-05-15 (PATCH body shape tampering): Zod `.refine` exactly-one gate.
+ *   - T-05-16 (cross-tenant PATCH): canActOnTenant RBAC + 404 on deny.
+ *   - T-05-17 (selector text in audit/logs): meta carries length+operation
+ *     only; pino info log carries {tenantId, actor, operation}.
+ *   - T-05-18 (DoS via huge PATCH): array max=500, selector max=256 chars,
+ *     set max=16384 chars via Zod — Levenshtein cost bounded.
+ */
+import { Router, type Request, type Response } from 'express';
+import { z } from 'zod';
+import { withTransaction } from '../postgres.js';
+import { writeAudit } from '../audit.js';
+import { publishToolSelectionInvalidation } from '../tool-selection/tool-selection-invalidation.js';
+import { validateSelectors } from '../tool-selection/registry-validator.js';
+import { parseSelectorList } from '../tool-selection/selector-ast.js';
+import {
+  problemBadRequest,
+  problemInternal,
+  problemNotFound,
+  problemJson,
+} from './problem-json.js';
+import { tenantRowToWire } from './tenants.js';
+import type { AdminRouterDeps } from './router.js';
+import logger from '../../logger.js';
+
+/**
+ * Same GUID regex as src/lib/admin/tenants.ts — copied verbatim to keep the
+ * tenant-id validation surface consistent across /admin/tenants endpoints.
+ */
+const TENANT_GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Admin identity attached by the dual-stack middleware (plan 04-04). Local
+ * shape mirrors the one in tenants.ts to avoid a cross-module import of an
+ * internal interface.
+ */
+interface AdminContext {
+  actor: string;
+  source: 'entra' | 'api-key';
+  tenantScoped: string | null;
+}
+
+type RequestWithAdmin = Request & { admin?: AdminContext; id?: string };
+
+/**
+ * RBAC decision: true iff `admin` is allowed to act on `tenantId`. Global
+ * admin (tenantScoped=null) always allowed; tenant-scoped admin matches on
+ * its scope id. Keeps the Phase 4 cross-tenant denial semantics intact.
+ */
+function canActOnTenant(admin: AdminContext, tenantId: string): boolean {
+  if (admin.tenantScoped === null) return true;
+  return admin.tenantScoped === tenantId;
+}
+
+/**
+ * Wire schema for PATCH body. Exactly one of `add` / `remove` / `set`
+ * must be present per call — enforced via `.refine`.
+ *
+ * Bounds (T-05-18 DoS defense):
+ *   - Array max 500 entries × max 256 chars per selector.
+ *   - `set` string max 16384 chars (matches registry-validator Zod guard
+ *     scaled by typical operator-authored selector string length).
+ * `set` may be null to explicitly reset to NULL (preset default); empty
+ * string is treated identically for operator ergonomics.
+ */
+const EnabledToolsPatchZod = z
+  .object({
+    add: z.array(z.string().min(1).max(256)).max(500).optional(),
+    remove: z.array(z.string().min(1).max(256)).max(500).optional(),
+    set: z.string().max(16384).optional().nullable(),
+  })
+  .refine(
+    (v) =>
+      [v.add !== undefined, v.remove !== undefined, v.set !== undefined].filter(Boolean).length ===
+      1,
+    { message: 'Exactly one of add, remove, set must be provided' }
+  );
+
+type PatchBody = z.infer<typeof EnabledToolsPatchZod>;
+
+/**
+ * Compute the new enabled_tools text from the existing value + the patch
+ * operation. Pure function — easy to unit-test; used inside the txn after
+ * the SELECT FOR UPDATE returns the current row.
+ *
+ * Semantics:
+ *   - `set`: explicit replacement. Empty string or null → NULL (reverts to
+ *     preset default per D-19 / D-20). Any other string → verbatim.
+ *   - `add`: append to existing CSV; dedup while preserving insertion order.
+ *     Empty final result → NULL (consistent with `set: ''` semantics).
+ *   - `remove`: drop listed selectors from existing CSV. Empty result → NULL.
+ *
+ * Returning NULL on empty intentionally — a tenant with no enabled_tools
+ * row resolves via the preset path (loadTenant + enabled-tools-parser).
+ * An explicit empty-string row would disable ALL tools, which is never the
+ * intent of a patch that emptied the list.
+ */
+function computeNewEnabledTools(before: string | null, patch: PatchBody): string | null {
+  if (patch.set !== undefined) {
+    return patch.set === '' || patch.set === null ? null : patch.set;
+  }
+  const existing = (before ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (patch.add !== undefined) {
+    const merged = [...new Set([...existing, ...patch.add])];
+    return merged.length === 0 ? null : merged.join(',');
+  }
+  if (patch.remove !== undefined) {
+    const removeSet = new Set(patch.remove);
+    const filtered = existing.filter((s) => !removeSet.has(s));
+    return filtered.length === 0 ? null : filtered.join(',');
+  }
+  return before;
+}
+
+/**
+ * Extract the flat list of selector strings to validate against the
+ * registry. For `set` mode we run the full `parseSelectorList` grammar
+ * first so grammar violations (`;` separator, illegal chars) surface as
+ * 400 before we bother with Levenshtein + DB work. For `add` / `remove`
+ * the caller already supplies a flat array, and validateSelectors's
+ * internal join+re-parse is cheap.
+ *
+ * Returns null + writes a 400 response when the AST rejects the input.
+ */
+function extractSelectorsForValidation(
+  patch: PatchBody,
+  res: Response,
+  instance: string | undefined
+): string[] | null {
+  try {
+    if (patch.add !== undefined) return patch.add;
+    if (patch.remove !== undefined) return patch.remove;
+    const setStr = patch.set ?? '';
+    if (setStr === '') return [];
+    return parseSelectorList(setStr).map((s) => s.raw);
+  } catch (err) {
+    problemBadRequest(res, `Selector parse error: ${(err as Error).message}`, instance);
+    return null;
+  }
+}
+
+/**
+ * Build the /admin/tenants/:id/enabled-tools sub-router. Mounted on the
+ * SAME `/tenants` base as createTenantsRoutes — Express composes routers
+ * by path+method pattern, so the longer-suffix match (`/:id/enabled-tools`)
+ * is picked over the `/:id` PATCH handler in tenants.ts. Verified with
+ * integration tests.
+ */
+export function createEnabledToolsRoutes(deps: AdminRouterDeps): Router {
+  const r = Router();
+
+  r.patch('/:id/enabled-tools', async (req: RequestWithAdmin, res: Response) => {
+    const admin = req.admin;
+    if (!admin) {
+      problemInternal(res, req.id);
+      return;
+    }
+
+    const id = req.params.id;
+    if (!TENANT_GUID.test(id)) {
+      problemNotFound(res, 'tenant', req.id);
+      return;
+    }
+    if (!canActOnTenant(admin, id)) {
+      // Cross-tenant access: 404 (information hiding per D-13) rather than 403.
+      problemNotFound(res, 'tenant', req.id);
+      return;
+    }
+
+    const parsed = EnabledToolsPatchZod.safeParse(req.body);
+    if (!parsed.success) {
+      problemBadRequest(res, parsed.error.issues.map((e) => e.message).join('; '), req.id);
+      return;
+    }
+    const patch = parsed.data;
+
+    const selectorsToValidate = extractSelectorsForValidation(patch, res, req.id);
+    if (selectorsToValidate === null) return; // 400 already written
+
+    // Registry validation runs BEFORE the transaction opens so invalid input
+    // never locks a row or wastes a COMMIT. Empty set skips validation for
+    // the `{set: ''}` → NULL path; set of selectors is checked against the
+    // registry with Levenshtein-ranked suggestions on miss.
+    if (selectorsToValidate.length > 0) {
+      const validation = validateSelectors(selectorsToValidate);
+      if (!validation.ok) {
+        problemJson(res, 400, 'unknown_selector', {
+          title: 'Unknown selector',
+          detail: 'one or more selectors do not match the registry',
+          instance: req.id,
+          extensions: {
+            invalid: validation.invalid,
+            suggestions: validation.suggestions,
+          },
+        });
+        return;
+      }
+    }
+
+    const operation: 'add' | 'remove' | 'set' =
+      patch.add !== undefined ? 'add' : patch.remove !== undefined ? 'remove' : 'set';
+
+    let existed = true;
+    let beforeText: string | null = null;
+    let afterText: string | null = null;
+
+    try {
+      await withTransaction(async (client) => {
+        const sel = await client.query<{ id: string; enabled_tools: string | null }>(
+          `SELECT id, enabled_tools FROM tenants WHERE id = $1 FOR UPDATE`,
+          [id]
+        );
+        if (sel.rows.length === 0) {
+          existed = false;
+          return;
+        }
+        beforeText = sel.rows[0].enabled_tools;
+        afterText = computeNewEnabledTools(beforeText, patch);
+
+        await client.query(
+          `UPDATE tenants SET enabled_tools = $1, updated_at = NOW() WHERE id = $2`,
+          [afterText, id]
+        );
+
+        await writeAudit(client, {
+          tenantId: id,
+          actor: admin.actor,
+          action: 'admin.tenant.enabled-tools-change',
+          target: id,
+          ip: req.ip ?? null,
+          requestId: req.id ?? 'unknown',
+          result: 'success',
+          meta: {
+            before_length: beforeText?.length ?? 0,
+            after_length: afterText?.length ?? 0,
+            operation,
+          },
+        });
+      });
+    } catch (err) {
+      logger.error(
+        { err: (err as Error).message, tenantId: id },
+        'admin-enabled-tools: patch transaction failed'
+      );
+      problemInternal(res, req.id);
+      return;
+    }
+
+    if (!existed) {
+      problemNotFound(res, 'tenant', req.id);
+      return;
+    }
+
+    // Post-commit invalidation publish. NEVER run inside the txn — pub/sub
+    // is side-effectful and we want the COMMIT to be the durable anchor.
+    // Redis transient unavailability is tolerated: pub/sub is the fast path,
+    // per-tenant BM25 TTL (Plan 05-06) is the correctness fallback.
+    try {
+      await publishToolSelectionInvalidation(deps.redis, id, 'enabled-tools-change');
+    } catch (err) {
+      logger.warn(
+        { tenantId: id, err: (err as Error).message },
+        'admin-enabled-tools: publishToolSelectionInvalidation failed; TTL fallback'
+      );
+    }
+
+    // Read the updated row back through the pool (fresh snapshot, not the
+    // txn connection which is now released) and shape to the public wire.
+    try {
+      const { rows } = await deps.pgPool.query(
+        `SELECT id, mode, client_id, client_secret_ref, tenant_id, cloud_type,
+                redirect_uri_allowlist, cors_origins, allowed_scopes, enabled_tools,
+                preset_version, slug, disabled_at, created_at, updated_at
+         FROM tenants WHERE id = $1`,
+        [id]
+      );
+      if (rows.length === 0) {
+        problemNotFound(res, 'tenant', req.id);
+        return;
+      }
+      logger.info(
+        { tenantId: id, actor: admin.actor, operation },
+        'admin-enabled-tools: updated'
+      );
+      res.status(200).json(tenantRowToWire(rows[0]));
+    } catch (err) {
+      logger.error(
+        { err: (err as Error).message, tenantId: id },
+        'admin-enabled-tools: read-back after patch failed'
+      );
+      problemInternal(res, req.id);
+    }
+  });
+
+  return r;
+}
