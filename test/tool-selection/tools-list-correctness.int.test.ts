@@ -69,20 +69,12 @@ function buildServerWithFixtures(): McpServer {
   const server = new McpServer({ name: 'test', version: '0.0.0' });
   // Registration order matters for Test 2 (ordering preservation): the SDK
   // walks `_registeredTools` (Object.entries) in insertion order.
-  server.tool(
-    'alpha',
-    'First tool',
-    {},
-    { title: 'alpha', readOnlyHint: true },
-    async () => ({ content: [{ type: 'text', text: 'ok' }] })
-  );
-  server.tool(
-    'bravo',
-    'Second tool',
-    {},
-    { title: 'bravo', readOnlyHint: true },
-    async () => ({ content: [{ type: 'text', text: 'ok' }] })
-  );
+  server.tool('alpha', 'First tool', {}, { title: 'alpha', readOnlyHint: true }, async () => ({
+    content: [{ type: 'text', text: 'ok' }],
+  }));
+  server.tool('bravo', 'Second tool', {}, { title: 'bravo', readOnlyHint: true }, async () => ({
+    content: [{ type: 'text', text: 'ok' }],
+  }));
   server.tool(
     'charlie',
     'Third tool',
@@ -90,13 +82,9 @@ function buildServerWithFixtures(): McpServer {
     { title: 'charlie', readOnlyHint: false },
     async () => ({ content: [{ type: 'text', text: 'ok' }] })
   );
-  server.tool(
-    'delta',
-    'Fourth tool',
-    {},
-    { title: 'delta', readOnlyHint: true },
-    async () => ({ content: [{ type: 'text', text: 'ok' }] })
-  );
+  server.tool('delta', 'Fourth tool', {}, { title: 'delta', readOnlyHint: true }, async () => ({
+    content: [{ type: 'text', text: 'ok' }],
+  }));
   return server;
 }
 
@@ -163,9 +151,8 @@ describe('plan 05-05 Task 1 — tools/list filter correctness edge cases', () =>
   // ── SDK handler wrap edge cases ───────────────────────────────────────
 
   it('Test 5: undefined enabledToolsSet (no ALS seed) → response passes through unfiltered', async () => {
-    const { wrapToolsListHandler } = await import(
-      '../../src/lib/tool-selection/tools-list-filter.js'
-    );
+    const { wrapToolsListHandler } =
+      await import('../../src/lib/tool-selection/tools-list-filter.js');
     const { requestContext } = await import('../../src/request-context.js');
 
     const server = buildServerWithFixtures();
@@ -173,9 +160,8 @@ describe('plan 05-05 Task 1 — tools/list filter correctness edge cases', () =>
 
     // Seed ALS with tenantId but NO enabledToolsSet (edge: loadTenant bug,
     // or a non-tenant route that somehow reached the wrapped handler).
-    const response = await requestContext.run(
-      { tenantId: TENANT_A },
-      async () => invokeToolsList(server)
+    const response = await requestContext.run({ tenantId: TENANT_A }, async () =>
+      invokeToolsList(server)
     );
 
     // Pass-through: all four tools remain.
@@ -184,9 +170,8 @@ describe('plan 05-05 Task 1 — tools/list filter correctness edge cases', () =>
   });
 
   it('Test 6: ordering preservation — filter emits tools in the same order as SDK default', async () => {
-    const { wrapToolsListHandler } = await import(
-      '../../src/lib/tool-selection/tools-list-filter.js'
-    );
+    const { wrapToolsListHandler } =
+      await import('../../src/lib/tool-selection/tools-list-filter.js');
     const { requestContext } = await import('../../src/request-context.js');
 
     const server = buildServerWithFixtures();
@@ -205,9 +190,8 @@ describe('plan 05-05 Task 1 — tools/list filter correctness edge cases', () =>
   });
 
   it('Test 7: undefined ALS (no requestContext.run) → pass-through; no crash', async () => {
-    const { wrapToolsListHandler } = await import(
-      '../../src/lib/tool-selection/tools-list-filter.js'
-    );
+    const { wrapToolsListHandler } =
+      await import('../../src/lib/tool-selection/tools-list-filter.js');
 
     const server = buildServerWithFixtures();
     wrapToolsListHandler(server);
@@ -219,9 +203,8 @@ describe('plan 05-05 Task 1 — tools/list filter correctness edge cases', () =>
   });
 
   it('Test 8: empty enabledToolsSet → zero tools returned (explicit no-tools)', async () => {
-    const { wrapToolsListHandler } = await import(
-      '../../src/lib/tool-selection/tools-list-filter.js'
-    );
+    const { wrapToolsListHandler } =
+      await import('../../src/lib/tool-selection/tools-list-filter.js');
     const { requestContext } = await import('../../src/request-context.js');
 
     const server = buildServerWithFixtures();
@@ -239,9 +222,8 @@ describe('plan 05-05 Task 1 — tools/list filter correctness edge cases', () =>
   });
 
   it('Test 9: wrapping is idempotent — calling twice does not double-filter', async () => {
-    const { wrapToolsListHandler } = await import(
-      '../../src/lib/tool-selection/tools-list-filter.js'
-    );
+    const { wrapToolsListHandler } =
+      await import('../../src/lib/tool-selection/tools-list-filter.js');
     const { requestContext } = await import('../../src/request-context.js');
 
     const server = buildServerWithFixtures();
@@ -262,9 +244,8 @@ describe('plan 05-05 Task 1 — tools/list filter correctness edge cases', () =>
   // ── Express middleware edge cases ─────────────────────────────────────
 
   it('Test 10: GET request → middleware passes through to next()', async () => {
-    const { createToolsListFilterMiddleware } = await import(
-      '../../src/lib/tool-selection/tools-list-filter.js'
-    );
+    const { createToolsListFilterMiddleware } =
+      await import('../../src/lib/tool-selection/tools-list-filter.js');
     const mw = createToolsListFilterMiddleware();
 
     const req = { method: 'GET', body: undefined } as unknown as Request;
@@ -276,9 +257,8 @@ describe('plan 05-05 Task 1 — tools/list filter correctness edge cases', () =>
   });
 
   it('Test 11: POST with non-tools/list method (prompts/list) → no res.json override installed', async () => {
-    const { createToolsListFilterMiddleware } = await import(
-      '../../src/lib/tool-selection/tools-list-filter.js'
-    );
+    const { createToolsListFilterMiddleware } =
+      await import('../../src/lib/tool-selection/tools-list-filter.js');
     const mw = createToolsListFilterMiddleware();
 
     const req = {
@@ -297,9 +277,8 @@ describe('plan 05-05 Task 1 — tools/list filter correctness edge cases', () =>
   });
 
   it('Test 12: POST with tools/call method → no res.json override installed', async () => {
-    const { createToolsListFilterMiddleware } = await import(
-      '../../src/lib/tool-selection/tools-list-filter.js'
-    );
+    const { createToolsListFilterMiddleware } =
+      await import('../../src/lib/tool-selection/tools-list-filter.js');
     const mw = createToolsListFilterMiddleware();
 
     const req = {
@@ -321,9 +300,8 @@ describe('plan 05-05 Task 1 — tools/list filter correctness edge cases', () =>
   });
 
   it('Test 13: POST with malformed body (no method field) → passes through', async () => {
-    const { createToolsListFilterMiddleware } = await import(
-      '../../src/lib/tool-selection/tools-list-filter.js'
-    );
+    const { createToolsListFilterMiddleware } =
+      await import('../../src/lib/tool-selection/tools-list-filter.js');
     const mw = createToolsListFilterMiddleware();
 
     const req = {
@@ -340,9 +318,8 @@ describe('plan 05-05 Task 1 — tools/list filter correctness edge cases', () =>
   });
 
   it('Test 14: POST with tools/list method → res.json replaced; filter applied on call', async () => {
-    const { createToolsListFilterMiddleware } = await import(
-      '../../src/lib/tool-selection/tools-list-filter.js'
-    );
+    const { createToolsListFilterMiddleware } =
+      await import('../../src/lib/tool-selection/tools-list-filter.js');
     const { requestContext } = await import('../../src/request-context.js');
     const mw = createToolsListFilterMiddleware();
 
@@ -383,9 +360,8 @@ describe('plan 05-05 Task 1 — tools/list filter correctness edge cases', () =>
   });
 
   it('Test 15: POST tools/list with string body to res.send → filter parses + re-serializes', async () => {
-    const { createToolsListFilterMiddleware } = await import(
-      '../../src/lib/tool-selection/tools-list-filter.js'
-    );
+    const { createToolsListFilterMiddleware } =
+      await import('../../src/lib/tool-selection/tools-list-filter.js');
     const { requestContext } = await import('../../src/request-context.js');
     const mw = createToolsListFilterMiddleware();
 
@@ -407,12 +383,7 @@ describe('plan 05-05 Task 1 — tools/list filter correctness edge cases', () =>
             jsonrpc: '2.0',
             id: 4,
             result: {
-              tools: [
-                { name: 'alpha' },
-                { name: 'bravo' },
-                { name: 'charlie' },
-                { name: 'delta' },
-              ],
+              tools: [{ name: 'alpha' }, { name: 'bravo' }, { name: 'charlie' }, { name: 'delta' }],
             },
           })
         );
@@ -428,9 +399,8 @@ describe('plan 05-05 Task 1 — tools/list filter correctness edge cases', () =>
   });
 
   it('Test 16: non-JSON string to res.send (e.g. SSE event) → passes through untouched', async () => {
-    const { createToolsListFilterMiddleware } = await import(
-      '../../src/lib/tool-selection/tools-list-filter.js'
-    );
+    const { createToolsListFilterMiddleware } =
+      await import('../../src/lib/tool-selection/tools-list-filter.js');
     const { requestContext } = await import('../../src/request-context.js');
     const mw = createToolsListFilterMiddleware();
 
@@ -456,9 +426,8 @@ describe('plan 05-05 Task 1 — tools/list filter correctness edge cases', () =>
   });
 
   it('Test 17: Buffer body to res.send → passes through untouched', async () => {
-    const { createToolsListFilterMiddleware } = await import(
-      '../../src/lib/tool-selection/tools-list-filter.js'
-    );
+    const { createToolsListFilterMiddleware } =
+      await import('../../src/lib/tool-selection/tools-list-filter.js');
     const { requestContext } = await import('../../src/request-context.js');
     const mw = createToolsListFilterMiddleware();
 

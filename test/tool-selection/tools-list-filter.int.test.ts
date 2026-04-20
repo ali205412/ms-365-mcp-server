@@ -62,10 +62,7 @@ interface ListToolsResponse {
   nextCursor?: string;
 }
 
-async function invokeToolsList(
-  server: McpServer,
-  cursor?: string
-): Promise<ListToolsResponse> {
+async function invokeToolsList(server: McpServer, cursor?: string): Promise<ListToolsResponse> {
   // Reach into the SDK's internal request-handler map. The key is the method
   // literal "tools/list" — see @modelcontextprotocol/sdk/server/
   // zod-json-schema-compat.js getMethodLiteral. This is an intentional seam
@@ -99,13 +96,9 @@ function buildServerWithFixtures(): McpServer {
     { title: 'users-list', readOnlyHint: true },
     async () => ({ content: [{ type: 'text', text: 'ok' }] })
   );
-  server.tool(
-    'other-op',
-    'Other op',
-    {},
-    { title: 'other-op', readOnlyHint: true },
-    async () => ({ content: [{ type: 'text', text: 'ok' }] })
-  );
+  server.tool('other-op', 'Other op', {}, { title: 'other-op', readOnlyHint: true }, async () => ({
+    content: [{ type: 'text', text: 'ok' }],
+  }));
   return server;
 }
 
@@ -115,9 +108,8 @@ describe('plan 05-05 Task 1 — tools/list per-tenant filter (SDK handler wrap)'
   });
 
   it('Test 1: tenant A (preset-only enabled set) sees exactly [mail-send]', async () => {
-    const { wrapToolsListHandler } = await import(
-      '../../src/lib/tool-selection/tools-list-filter.js'
-    );
+    const { wrapToolsListHandler } =
+      await import('../../src/lib/tool-selection/tools-list-filter.js');
     const { requestContext } = await import('../../src/request-context.js');
 
     const server = buildServerWithFixtures();
@@ -144,9 +136,8 @@ describe('plan 05-05 Task 1 — tools/list per-tenant filter (SDK handler wrap)'
   });
 
   it('Test 2: tenant B (explicit "users-list,mail-send") sees exactly those two tools', async () => {
-    const { wrapToolsListHandler } = await import(
-      '../../src/lib/tool-selection/tools-list-filter.js'
-    );
+    const { wrapToolsListHandler } =
+      await import('../../src/lib/tool-selection/tools-list-filter.js');
     const { requestContext } = await import('../../src/request-context.js');
 
     const server = buildServerWithFixtures();
@@ -170,9 +161,8 @@ describe('plan 05-05 Task 1 — tools/list per-tenant filter (SDK handler wrap)'
   });
 
   it('Test 3: concurrent tenant A + tenant B calls never leak sets across ALS frames', async () => {
-    const { wrapToolsListHandler } = await import(
-      '../../src/lib/tool-selection/tools-list-filter.js'
-    );
+    const { wrapToolsListHandler } =
+      await import('../../src/lib/tool-selection/tools-list-filter.js');
     const { requestContext } = await import('../../src/request-context.js');
 
     const server = buildServerWithFixtures();
@@ -239,9 +229,8 @@ describe('plan 05-05 Task 1 — tools/list per-tenant filter (SDK handler wrap)'
     };
     loggerMod.__mocks.info.mockClear();
 
-    const { wrapToolsListHandler } = await import(
-      '../../src/lib/tool-selection/tools-list-filter.js'
-    );
+    const { wrapToolsListHandler } =
+      await import('../../src/lib/tool-selection/tools-list-filter.js');
     const { requestContext } = await import('../../src/request-context.js');
 
     const server = buildServerWithFixtures();
