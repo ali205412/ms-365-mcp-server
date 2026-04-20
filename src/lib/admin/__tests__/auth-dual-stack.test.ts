@@ -65,10 +65,7 @@ vi.mock('../../postgres.js', async () => {
 import { createAdminAuthMiddleware, type AdminIdentity } from '../auth/dual-stack.js';
 import { verifyApiKeyHeader, createAdminApiKeyMiddleware } from '../auth/api-key.js';
 import { __resetEntraCacheForTesting } from '../auth/entra.js';
-import {
-  __resetApiKeyCacheForTesting,
-  API_KEY_PREFIX,
-} from '../api-keys.js';
+import { __resetApiKeyCacheForTesting, API_KEY_PREFIX } from '../api-keys.js';
 import { MemoryRedisFacade } from '../../redis-facade.js';
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
@@ -177,26 +174,33 @@ function makeReqRes(headers: Record<string, string> = {}): {
     headers,
     id: 'test-req-id',
   } as unknown as Request;
-  const res = {
+  // The mock emulates the parts of Express's Response that the auth layer
+  // consumes: status(), type(), json()/send(), and the headersSent flag
+  // (dual-stack middleware reads it to detect sub-middleware short-circuits).
+  const resImpl: Record<string, unknown> & { headersSent: boolean } = {
+    headersSent: false,
     status(code: number) {
       captured.status = code;
-      return this;
+      return resImpl;
     },
     type(t: string) {
       captured.type = t;
-      return this;
+      return resImpl;
     },
     json(body: unknown) {
       captured.body = body;
       captured.ended = true;
-      return this;
+      resImpl.headersSent = true;
+      return resImpl;
     },
     send(body: unknown) {
       captured.body = body;
       captured.ended = true;
-      return this;
+      resImpl.headersSent = true;
+      return resImpl;
     },
-  } as unknown as Response;
+  };
+  const res = resImpl as unknown as Response;
   return { req, res, next, captured };
 }
 
@@ -533,12 +537,20 @@ describe('plan 04-04 Task 2 — createAdminAuthMiddleware (dual-stack)', () => {
     });
 
     // Exercise both paths
-    const { req: req1, res: res1, next: next1 } = makeReqRes({
+    const {
+      req: req1,
+      res: res1,
+      next: next1,
+    } = makeReqRes({
       'x-admin-api-key': VALID_PLAINTEXT,
     });
     await mw(req1, res1, next1 as unknown as NextFunction);
 
-    const { req: req2, res: res2, next: next2 } = makeReqRes({
+    const {
+      req: req2,
+      res: res2,
+      next: next2,
+    } = makeReqRes({
       authorization: `Bearer ${token}`,
     });
     await mw(req2, res2, next2 as unknown as NextFunction);
@@ -562,11 +574,12 @@ describe('plan 04-04 Task 2 — router.ts mount order', () => {
     const routerPath = path.resolve(__dirname, '..', 'router.ts');
     const src = readFileSync(routerPath, 'utf8');
 
-    // /health must be declared before auth middleware
+    // Match the actual call-site `r.use(createAdminAuthMiddleware(deps))`
+    // rather than the JSDoc comment references at the top of the file.
     const healthIdx = src.indexOf("r.get('/health'");
-    const authIdx = src.indexOf('createAdminAuthMiddleware');
+    const authIdx = src.indexOf('r.use(createAdminAuthMiddleware(');
     const apiKeysIdx = src.indexOf("r.use('/api-keys'");
-    const corsIdx = src.indexOf('createAdminCorsMiddleware');
+    const corsIdx = src.indexOf('r.use(createAdminCorsMiddleware(');
 
     expect(healthIdx).toBeGreaterThan(-1);
     expect(authIdx).toBeGreaterThan(-1);

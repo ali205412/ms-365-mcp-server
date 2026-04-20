@@ -62,10 +62,7 @@ vi.mock('../../postgres.js', async () => {
 
 import { createAdminAuthMiddleware, type AdminIdentity } from '../auth/dual-stack.js';
 import { __resetEntraCacheForTesting } from '../auth/entra.js';
-import {
-  __resetApiKeyCacheForTesting,
-  API_KEY_PREFIX,
-} from '../api-keys.js';
+import { __resetApiKeyCacheForTesting, API_KEY_PREFIX } from '../api-keys.js';
 import { MemoryRedisFacade } from '../../redis-facade.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -159,10 +156,7 @@ interface TestServer {
   close: () => Promise<void>;
 }
 
-async function startTestServer(
-  pool: Pool,
-  fetchImpl: typeof fetch
-): Promise<TestServer> {
+async function startTestServer(pool: Pool, fetchImpl: typeof fetch): Promise<TestServer> {
   const app = express();
   app.use(express.json());
 
