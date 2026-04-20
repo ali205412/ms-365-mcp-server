@@ -32,6 +32,8 @@ import type { Pool } from 'pg';
 import type { RedisClient } from '../redis.js';
 import type { TenantPool } from '../tenant/tenant-pool.js';
 import { createAdminTlsEnforceMiddleware } from './tls-enforce.js';
+import { createApiKeyRoutes, subscribeToApiKeyRevoke } from './api-keys.js';
+import logger from '../../logger.js';
 
 /**
  * Dependency bag. Factory-with-DI shape matches src/lib/tenant/load-tenant.ts:
@@ -163,8 +165,16 @@ export function createAdminRouter(deps: AdminRouterDeps): Router {
 
   // TODO(04-04): r.use(createAdminAuthMiddleware(deps));
   // TODO(04-02): r.use('/tenants', createTenantRoutes(deps));
-  // TODO(04-03): r.use('/api-keys', createApiKeyRoutes(deps));
+  r.use('/api-keys', createApiKeyRoutes(deps));
   // TODO(04-05): r.use('/audit', createAuditRoutes(deps));
+
+  // Kick off the pub/sub subscriber for cross-replica API-key revocation
+  // propagation (04-03, D-15). Fire-and-forget: subscription failure does not
+  // block router mount — the 60s in-process LRU TTL is the fallback. Any
+  // failure is logged so operators catch a misconfigured Redis connection.
+  void subscribeToApiKeyRevoke(deps.redis).catch((err) => {
+    logger.error({ err: (err as Error).message }, 'admin: api-key revoke subscription failed');
+  });
 
   return r;
 }
