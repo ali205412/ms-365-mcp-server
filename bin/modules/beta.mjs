@@ -229,7 +229,7 @@ export function mergeBetaFragmentIntoClient(mainPath, fragmentPath) {
   const endpointsIdx = fragment.indexOf('const endpoints =');
   const betaPrelude = endpointsIdx > 0 ? fragment.slice(0, endpointsIdx) : '';
   const mainDefined = new Set(
-    [...main.matchAll(/^const\s+([a-zA-Z_][\w]*)\s*=/gm)].map((m) => m[1])
+    [...main.matchAll(/^(?:let|const)\s+([a-zA-Z_][\w]*)\s*[=:;]/gm)].map((m) => m[1])
   );
   // Walk beta const declarations; keep only ones not in main. Import lines are
   // skipped — main's existing `import { z } from 'zod'` covers the beta ones.
