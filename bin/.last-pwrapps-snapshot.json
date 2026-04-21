@@ -1,5 +1,25 @@
 {
-  "generated_at": null,
-  "count": 0,
-  "ops": []
+  "generated_at": "2026-04-21T11:11:36.413Z",
+  "count": 19,
+  "ops": [
+    "__pwrapps__create-app",
+    "__pwrapps__delete-app",
+    "__pwrapps__delete-connection",
+    "__pwrapps__get-app",
+    "__pwrapps__get-app-versions",
+    "__pwrapps__get-connection",
+    "__pwrapps__get-environment",
+    "__pwrapps__list-app-environments",
+    "__pwrapps__list-app-roles",
+    "__pwrapps__list-apps",
+    "__pwrapps__list-connections",
+    "__pwrapps__list-connectors",
+    "__pwrapps__list-environments",
+    "__pwrapps__list-licenses",
+    "__pwrapps__list-users",
+    "__pwrapps__publish-app",
+    "__pwrapps__restore-app",
+    "__pwrapps__share-app",
+    "__pwrapps__unshare-app"
+  ]
 }

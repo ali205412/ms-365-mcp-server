@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-04-20T17:58:38.937Z",
-  "totals": 42335,
+  "generated_at": "2026-04-21T11:11:41.553Z",
+  "totals": 42684,
   "byWorkload": {
     "Applications": 727,
     "Calendars": 704,
@@ -23,6 +23,11 @@
     "Subscriptions": 13,
     "Teams": 2782,
     "ToDo": 232,
-    "Users": 4120
+    "Users": 4120,
+    "exo": 10,
+    "powerbi": 285,
+    "pwrapps": 19,
+    "pwrauto": 20,
+    "sp-admin": 15
   }
 }

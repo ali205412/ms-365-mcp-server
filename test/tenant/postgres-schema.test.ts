@@ -120,6 +120,10 @@ describe('plan 03-01 — Postgres schema round-trip', () => {
       '20260601000000_subscriptions.sql',
       // Plan 05-03 (D-19): tenants.preset_version column.
       '20260702000000_preset_version.sql',
+      // Plan 05.1-06 (D-01): tenants.sharepoint_domain column for
+      // __spadmin__-prefixed tool dispatch — routes admin requests to
+      // the correct {slug}-admin.sharepoint.com tenant.
+      '20260801000000_sharepoint_domain.sql',
     ]);
   });
 

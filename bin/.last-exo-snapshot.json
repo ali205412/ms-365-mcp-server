@@ -1,5 +1,16 @@
 {
-  "generated_at": null,
-  "count": 0,
-  "ops": []
+  "generated_at": "2026-04-21T11:11:39.647Z",
+  "count": 10,
+  "ops": [
+    "__exo__add-mailbox-folder-permission",
+    "__exo__get-accepted-domain",
+    "__exo__get-distribution-group-member",
+    "__exo__get-dynamic-distribution-group-member",
+    "__exo__get-mailbox",
+    "__exo__get-mailbox-folder-permission",
+    "__exo__get-organization-config",
+    "__exo__remove-mailbox-folder-permission",
+    "__exo__set-mailbox",
+    "__exo__set-mailbox-folder-permission"
+  ]
 }

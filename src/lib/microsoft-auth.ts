@@ -75,8 +75,9 @@ export function createBearerMiddleware(): (
       return;
     }
 
-    const urlTenantId = req.params?.tenantId;
-    if (!urlTenantId) {
+    const urlTenantIdRaw = req.params?.tenantId;
+    const urlTenantId = Array.isArray(urlTenantIdRaw) ? urlTenantIdRaw[0] : urlTenantIdRaw;
+    if (!urlTenantId || typeof urlTenantId !== 'string') {
       // Bearer flows in Phase 3 are always per-tenant — refuse a bearer
       // request that arrived outside a tenant-scoped route.
       res.status(400).json({ error: 'bearer_requires_tenant_context' });

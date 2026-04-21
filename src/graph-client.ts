@@ -160,12 +160,20 @@ class GraphClient {
         new ODataErrorHandler(),
         new TokenRefreshMiddleware(this.authManager, this.secrets),
       ],
-      (req) =>
-        fetch(req.url, {
+      (req) => {
+        // Node 18+ fetch (undici) accepts Buffer at runtime via the
+        // TypedArray branch of BodyInit, but the DOM-lib's BodyInit union
+        // doesn't include Buffer directly. Cast through `unknown` to keep
+        // the single fetch-call site typed without widening GraphRequest
+        // or referencing DOM-only global types (which the lint's no-undef
+        // rule would flag).
+        const init = {
           method: req.method,
           headers: req.headers,
-          body: req.body,
-        })
+          body: req.body as unknown,
+        } as Parameters<typeof fetch>[1];
+        return fetch(req.url, init);
+      }
     );
   }
 
@@ -572,7 +580,12 @@ export async function refreshSessionAndRetry(args: {
   //    rotated) refresh token; old key is deleted. When MSAL did NOT rotate
   //    the refresh token, we carry the existing one forward — the session
   //    contents stay valid, only the key changes.
-  const newRefreshToken = fresh.refreshToken ?? record.refreshToken;
+  // MSAL's AuthenticationResult type doesn't expose refreshToken (by design —
+  // refresh tokens live in the MSAL cache). The runtime value can still be
+  // present when the authority echoes a rotated token; narrow via a local
+  // read-through cast rather than pollute the public AuthManager signature.
+  const freshRefreshToken = (fresh as { refreshToken?: string }).refreshToken;
+  const newRefreshToken = freshRefreshToken ?? record.refreshToken;
   await sessionStore.put(tenant.id, fresh.accessToken, {
     ...record,
     refreshToken: newRefreshToken,
@@ -582,13 +595,13 @@ export async function refreshSessionAndRetry(args: {
   await sessionStore.delete(tenant.id, oldAccessToken);
 
   logger.info(
-    { tenantId: tenant.id, rotated: Boolean(fresh.refreshToken) },
+    { tenantId: tenant.id, rotated: Boolean(freshRefreshToken) },
     'session refresh: rotated access token via SessionStore'
   );
 
   return {
     accessToken: fresh.accessToken,
-    refreshToken: fresh.refreshToken ?? undefined,
+    refreshToken: freshRefreshToken ?? undefined,
     expiresOn: fresh.expiresOn ?? undefined,
   };
 }

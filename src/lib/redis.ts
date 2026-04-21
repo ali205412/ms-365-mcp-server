@@ -28,8 +28,7 @@
  *   - T-03-02-05 (reconnect-cryptoshred): .status exposed on both real and
  *     facade clients so 03-05 can enforce the ready-check.
  */
-import IORedis from 'ioredis';
-import type { Redis } from 'ioredis';
+import { Redis as IORedis, type Redis } from 'ioredis';
 import logger from '../logger.js';
 import { MemoryRedisFacade } from './redis-facade.js';
 

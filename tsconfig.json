@@ -5,7 +5,8 @@
     "outDir": "dist",
     "rootDir": "src",
     "strict": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "skipLibCheck": true
   },
   "include": ["src/**/*"],
   "exclude": ["test/**/*"]
