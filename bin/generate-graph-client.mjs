@@ -100,7 +100,8 @@ import { PRODUCT_PIPELINES } from './modules/product-registry.mjs';
 // each add exactly one import line below — no other orchestrator change
 // per D-01's parallel-executable-plans constraint.
 import './modules/power-bi.mjs';
-// plans 5.1-03..06 append further import statements here
+import './modules/power-apps.mjs';
+// plans 5.1-04..06 append further import statements here
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
