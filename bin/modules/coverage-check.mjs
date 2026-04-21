@@ -1,8 +1,9 @@
 /**
  * Plan 05-08 — Coverage verification harness.
  *
- * Counts emitted aliases in src/generated/client.ts by workload (via path-
- * prefix regex) and diffs against a committed baseline at
+ * Counts emitted aliases in src/generated/client.ts by workload (via alias-
+ * prefix match for Phase 5.1 products, falling back to path-prefix regex
+ * for Graph workloads) and diffs against a committed baseline at
  * bin/.last-coverage-snapshot.json. Classifies per-workload deltas into:
  *
  *   >= 0                        -> silent (no warning, no error)
@@ -14,6 +15,19 @@
  * drops against a zero baseline are treated as growth (no regression
  * possible). The updated snapshot is always written on success (sorted
  * byWorkload keys for deterministic git diffs).
+ *
+ * Phase 5.1 extension (plan 05.1-08, D-04):
+ *   - PRODUCT_POLICIES applies STRICT thresholds to 'exo' and 'sp-admin'
+ *     (any drop is an error; matches the strict codegen churn policy in
+ *     plans 5.1-05 + 5.1-06). Permissive products (powerbi/pwrapps/
+ *     pwrauto) and Graph workloads retain the existing -10%/-5% defaults.
+ *   - classifyByAlias(alias) returns the product name for aliases carrying
+ *     one of the 5 Phase 5.1 prefixes; countByWorkload prefers this
+ *     classifier over path-based classification so product ops never spill
+ *     into Graph buckets (e.g., `/workspaces` should NOT be classified
+ *     as 'Other' when it carries a `__powerbi__` alias).
+ *   - classifyDelta accepts a workload parameter and consults
+ *     PRODUCT_POLICIES before falling back to the ERROR/WARN defaults.
  *
  * Plan 05-02 contract: invoked AFTER runBetaPipeline so the alias set
  * includes both v1 and __beta__-prefixed beta ops. The workload taxonomy
@@ -106,6 +120,32 @@ const WORKLOAD_RULES = [
 ];
 
 /**
+ * Classify a product alias by its `__<product>__` prefix. Phase 5.1 aliases
+ * carry a stable prefix literal owned by bin/modules/<product>.mjs + the
+ * PRODUCT_AUDIENCES table in src/lib/auth/products.ts. Prefixes are
+ * alpha-unique (pwrapps/pwrauto share no initial substring once you pass
+ * the first underscore pair).
+ *
+ * Returns the product workload name, or null if the alias is not a product
+ * alias (caller falls through to classifyPath). Never throws.
+ *
+ * Note on `sp-admin` vs `__spadmin__`: the alias prefix is dash-less (per
+ * bin/modules/run-product-pipeline.mjs VALID_PREFIX_RE, which forbids
+ * dashes in prefix literals) but the workload name is dashed (mirrors the
+ * Product enum in src/lib/auth/products.ts). This is the documented
+ * mapping; tests C2 + coverage harness integration pin it.
+ */
+export function classifyByAlias(alias) {
+  if (typeof alias !== 'string' || alias.length === 0) return null;
+  if (alias.startsWith('__powerbi__')) return 'powerbi';
+  if (alias.startsWith('__pwrapps__')) return 'pwrapps';
+  if (alias.startsWith('__pwrauto__')) return 'pwrauto';
+  if (alias.startsWith('__exo__')) return 'exo';
+  if (alias.startsWith('__spadmin__')) return 'sp-admin';
+  return null;
+}
+
+/**
  * Extract `{method, path, alias}` triples from an openapi-zod-client-emitted
  * client.ts. The regex matches the three properties that appear adjacent in
  * every endpoint entry. `(path:\s*["']([^"']+)["'])` and
@@ -151,13 +191,17 @@ export function classifyPath(path) {
  * with at least one op are included (no zero-keys pollution). Counts every
  * alias — v1 and __beta__-prefixed — because the prefix is orthogonal to
  * the workload taxonomy.
+ *
+ * Phase 5.1: product aliases (via classifyByAlias) take precedence over
+ * path-based classification. This ensures `/workspaces` carrying a
+ * `__powerbi__` alias lands in the 'powerbi' bucket, not 'Other'.
  */
 export function countByWorkload(clientPath) {
   const code = fs.readFileSync(clientPath, 'utf-8');
   const endpoints = extractEndpoints(code);
   const counts = {};
   for (const ep of endpoints) {
-    const workload = classifyPath(ep.path);
+    const workload = classifyByAlias(ep.alias) ?? classifyPath(ep.path);
     counts[workload] = (counts[workload] ?? 0) + 1;
   }
   return counts;
@@ -172,18 +216,58 @@ const WARN_THRESHOLD_PCT = -5;
 const ERROR_THRESHOLD_PCT = -10;
 
 /**
+ * Per-product coverage policies (Phase 5.1, plan 05.1-08, D-04).
+ *
+ * Mirrors the codegen-time churn policy: Exchange Admin and SharePoint
+ * Admin ship hand-authored OpenAPI specs (plans 5.1-05 + 5.1-06) with
+ * STRICT churn guards — ANY alias delta requires operator acceptance via
+ * MS365_MCP_ACCEPT_EXO_CHURN / MS365_MCP_ACCEPT_SPADMIN_CHURN. Those
+ * products therefore can't silently lose coverage at regen time; the
+ * coverage harness enforces the same posture at verify time so CI catches
+ * any path where the codegen guard was bypassed (e.g. via a stale
+ * snapshot) or where a hand-authored op was removed without a matching
+ * gap-file update.
+ *
+ * Permissive products (Power BI, Power Apps, Power Automate) track
+ * upstream Microsoft REST surfaces with broader churn — the codegen
+ * accepts additions/removals without operator opt-in; coverage harness
+ * retains the default -10%/-5% thresholds.
+ *
+ * Absence from this map = permissive (default thresholds). Graph
+ * workloads are not in this map — they use the defaults too.
+ *
+ * @type {Record<string, {policy: 'strict', errorThresholdPct: number, warnThresholdPct: number}>}
+ */
+export const PRODUCT_POLICIES = {
+  exo: { policy: 'strict', errorThresholdPct: 0, warnThresholdPct: 0 },
+  'sp-admin': { policy: 'strict', errorThresholdPct: 0, warnThresholdPct: 0 },
+};
+
+/**
  * Classify a per-workload delta into silent / warning / error.
+ *
+ * Phase 5.1: consults PRODUCT_POLICIES[workload] before falling back to
+ * the default ERROR_THRESHOLD_PCT / WARN_THRESHOLD_PCT. Strict products
+ * (exo, sp-admin) treat ANY drop as an error — the `errorThresholdPct: 0`
+ * + `warnThresholdPct: 0` pair means ANY negative percent lands in the
+ * 'error' band. Growth and flat values remain silent regardless of policy.
  *
  * @param {number} current   Current op count (>= 0).
  * @param {number} baseline  Baseline op count (>= 0).
+ * @param {string} [workload] Workload name for policy lookup.
  * @returns {'silent'|'warn'|'error'}
  */
-export function classifyDelta(current, baseline) {
+export function classifyDelta(current, baseline, workload) {
   if (baseline === 0) return 'silent'; // Cannot regress against zero — any value is growth.
   if (current >= baseline) return 'silent'; // Growth or flat.
   const pct = ((current - baseline) / baseline) * 100;
-  if (pct <= ERROR_THRESHOLD_PCT) return 'error';
-  if (pct <= WARN_THRESHOLD_PCT) return 'warn';
+  const policy = workload ? PRODUCT_POLICIES[workload] : undefined;
+  const errThreshold = policy ? policy.errorThresholdPct : ERROR_THRESHOLD_PCT;
+  const warnThreshold = policy ? policy.warnThresholdPct : WARN_THRESHOLD_PCT;
+  // Strict policies use errorThresholdPct=0, warnThresholdPct=0 — any
+  // negative pct satisfies `pct <= 0` and returns 'error'.
+  if (pct <= errThreshold) return 'error';
+  if (pct <= warnThreshold) return 'warn';
   return 'silent';
 }
 
@@ -243,16 +327,20 @@ export function runCoverageCheck(clientPath, baselinePath, opts = {}) {
     const base = baselineCounts[workload] ?? 0;
     deltas[workload] = cur - base;
 
-    const classification = classifyDelta(cur, base);
+    const classification = classifyDelta(cur, base, workload);
+    const policy = PRODUCT_POLICIES[workload];
+    const errThreshold = policy ? policy.errorThresholdPct : ERROR_THRESHOLD_PCT;
+    const warnThreshold = policy ? policy.warnThresholdPct : WARN_THRESHOLD_PCT;
     if (classification === 'error') {
       const pct = ((cur - base) / base) * 100;
+      const policyTag = policy ? ` [strict:${policy.policy}]` : '';
       errors.push(
-        `${workload}: regressed from ${base} to ${cur} (${pct.toFixed(1)}% drop, threshold ${ERROR_THRESHOLD_PCT}%)`
+        `${workload}: regressed from ${base} to ${cur} (${pct.toFixed(1)}% drop, threshold ${errThreshold}%)${policyTag}`
       );
     } else if (classification === 'warn') {
       const pct = ((cur - base) / base) * 100;
       warnings.push(
-        `${workload}: dropped from ${base} to ${cur} (${pct.toFixed(1)}%, below warn threshold ${WARN_THRESHOLD_PCT}%)`
+        `${workload}: dropped from ${base} to ${cur} (${pct.toFixed(1)}%, below warn threshold ${warnThreshold}%)`
       );
     }
   }
@@ -267,10 +355,13 @@ export function runCoverageCheck(clientPath, baselinePath, opts = {}) {
 
   if (errors.length > 0) {
     // Bounded preview (up to 10 lines) — parallels runChurnGuard (T-05-04 style).
+    // Phase 5.1: per-workload error strings already carry their policy
+    // (default ${ERROR_THRESHOLD_PCT}% vs strict 0%); header describes the
+    // surface generically.
     const preview = errors.slice(0, 10).join('\n  - ');
     const tail = errors.length > 10 ? `\n  ... and ${errors.length - 10} more` : '';
     throw new Error(
-      `Coverage regression: ${errors.length} workload(s) exceeded the ${ERROR_THRESHOLD_PCT}% regression threshold.\n` +
+      `Coverage regression: ${errors.length} workload(s) exceeded their regression threshold.\n` +
         `  - ${preview}${tail}`
     );
   }
@@ -355,7 +446,9 @@ export function renderMarkdownReport(report, meta = {}) {
     const cur = report.byWorkload[workload] ?? 0;
     const wDelta = report.deltas[workload] ?? 0;
     const baseline = cur - wDelta;
-    const classification = classifyDelta(cur, baseline);
+    // Phase 5.1: consult PRODUCT_POLICIES via workload-aware classifyDelta
+    // so strict products (exo/sp-admin) render ERROR on ANY drop.
+    const classification = classifyDelta(cur, baseline, workload);
     const status = classification === 'error' ? 'ERROR' : classification === 'warn' ? 'WARN' : 'OK';
     const deltaStr = (wDelta >= 0 ? '+' : '') + wDelta;
     lines.push(`| ${workload} | ${cur} | ${baseline} | ${deltaStr} | ${status} |`);
@@ -379,11 +472,12 @@ export function renderMarkdownReport(report, meta = {}) {
   }
   lines.push(`## Thresholds`);
   lines.push('');
-  lines.push(`- Drops within **${WARN_THRESHOLD_PCT}%** of baseline are tolerated (noise).`);
   lines.push(
-    `- Drops between **${WARN_THRESHOLD_PCT}%** and **${ERROR_THRESHOLD_PCT}%** emit a warning.`
+    `- Default (Graph + Power BI / Power Apps / Power Automate): drops within **${WARN_THRESHOLD_PCT}%** of baseline tolerated; between **${WARN_THRESHOLD_PCT}%** and **${ERROR_THRESHOLD_PCT}%** emit a warning; at or below **${ERROR_THRESHOLD_PCT}%** fail the build.`
   );
-  lines.push(`- Drops at or below **${ERROR_THRESHOLD_PCT}%** fail the build.`);
+  lines.push(
+    `- Strict (Exchange Admin, SharePoint Admin): **ANY drop** fails the build — mirrors the hand-authored-spec churn policy from plans 5.1-05 / 5.1-06.`
+  );
   lines.push('');
   return lines.join('\n');
 }
