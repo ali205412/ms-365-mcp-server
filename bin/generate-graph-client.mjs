@@ -89,6 +89,18 @@ import {
 } from './modules/coverage-check.mjs';
 import { compileEssentialsPreset as defaultCompileEssentialsPreset } from './modules/compile-preset.mjs';
 import { stubMissingSchemas as defaultStubMissingSchemas } from './modules/stub-missing-schemas.mjs';
+// Phase 5.1: `PRODUCT_PIPELINES` lives in its own leaf module so the
+// per-product modules below can import it WITHOUT triggering an ESM cycle.
+// The orchestrator re-exports it for backwards compatibility with any caller
+// that already imports from `./generate-graph-client.mjs`.
+import { PRODUCT_PIPELINES } from './modules/product-registry.mjs';
+
+// Phase 5.1 product-pipeline registrations (import-order-registered into
+// PRODUCT_PIPELINES via each module's side-effect `push`). Plans 5.1-02..06
+// each add exactly one import line below — no other orchestrator change
+// per D-01's parallel-executable-plans constraint.
+import './modules/power-bi.mjs';
+// plans 5.1-03..06 append further import statements here
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -111,14 +123,18 @@ const DEFAULT_ROOT = path.resolve(__dirname, '..');
  *   }
  *
  * Plans 5.1-02..06 append via:
- *   import { PRODUCT_PIPELINES } from './generate-graph-client.mjs';
+ *   import { PRODUCT_PIPELINES } from './modules/product-registry.mjs';
  *   PRODUCT_PIPELINES.push({
  *     name: 'powerbi',
  *     run: async ({openapiDir, generatedDir, rootDir}) =>
  *       runProductPipeline({ prefix: '__powerbi__', ... })
  *   });
+ *
+ * Re-exported here for backwards compatibility with any caller that already
+ * imports from `./generate-graph-client.mjs`. New code SHOULD import directly
+ * from `./modules/product-registry.mjs` to avoid ESM circular-import surprises.
  */
-export const PRODUCT_PIPELINES = [];
+export { PRODUCT_PIPELINES };
 
 /**
  * Orchestrate the codegen pipeline. When called with no arguments the

@@ -141,6 +141,10 @@ describe('plan 05-01 task 2 — generate-graph-client.mjs main() orchestrator', 
       // the real stubber reads client.ts which this test never writes, so
       // inject a no-op.
       stubMissingSchemas: () => ({ stubbed: [] }),
+      // Plan 05.1-02+ populate PRODUCT_PIPELINES at module load. Stub here
+      // so the real per-product pipelines (which require staged specs +
+      // openapi-zod-client) don't run during this simplifier-branch test.
+      runProductPipelines: async () => {},
       // Plan 05-08 wired runCoverageCheck into FULL_COVERAGE=1 flow; stub to
       // prevent this test from requiring a real emitted client.ts.
       runCoverageCheck: () => ({
@@ -189,6 +193,9 @@ describe('plan 05-01 task 2 — generate-graph-client.mjs main() orchestrator', 
       runBetaPipeline: async () => ({ betaCount: 0, aliases: [] }),
       // Post-Phase-5: stubMissingSchemas requires a real client.ts; no-op here.
       stubMissingSchemas: () => ({ stubbed: [] }),
+      // Plan 05.1-02+ populate PRODUCT_PIPELINES at module load. Stub here
+      // so the real per-product pipelines don't try to stage real specs.
+      runProductPipelines: async () => {},
       // Plan 05-08 wired runCoverageCheck into FULL_COVERAGE=1 flow; stub.
       runCoverageCheck: () => ({
         totals: { current: 0, baseline: 0 },
@@ -386,11 +393,22 @@ describe('plan 05.1-01 task 2 — PRODUCT_PIPELINES orchestrator wiring', () => 
     ]);
   });
 
-  it('Test D: PRODUCT_PIPELINES is exported as an empty array', async () => {
-    // Import the orchestrator module directly to inspect the exported registry.
+  it('Test D: PRODUCT_PIPELINES is an array whose entries all match {name, run} shape', async () => {
+    // Plan 05.1-01 shipped the registry empty; plans 5.1-02..06 each side-
+    // effect-push a {name, run} entry on first import. Post-05.1-02 the
+    // registry contains at least the 'powerbi' entry. Assert shape invariants
+    // rather than a fixed length so this test stays stable across 5.1-02..06
+    // landings without churn.
     const mod = await import('../../bin/generate-graph-client.mjs');
     expect(Array.isArray(mod.PRODUCT_PIPELINES)).toBe(true);
-    expect(mod.PRODUCT_PIPELINES).toHaveLength(0);
+    for (const entry of mod.PRODUCT_PIPELINES) {
+      expect(typeof entry.name).toBe('string');
+      expect(entry.name.length).toBeGreaterThan(0);
+      expect(typeof entry.run).toBe('function');
+    }
+    // Plan 05.1-02 guarantee: a 'powerbi' entry exists exactly once.
+    const powerbiEntries = mod.PRODUCT_PIPELINES.filter((e) => e.name === 'powerbi');
+    expect(powerbiEntries).toHaveLength(1);
   });
 
   it('Test E: .env.example declares all 5 per-product churn env vars with default 0', async () => {
