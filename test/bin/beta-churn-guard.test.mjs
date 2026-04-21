@@ -200,6 +200,11 @@ export const api = new Zodios(endpoints);
         callLog.push('runBetaPipeline');
         return { betaCount: 0, aliases: [] };
       },
+      // Plan 05.1-02+ populate PRODUCT_PIPELINES at module load. Stub the
+      // iterator so the real per-product pipelines (which require staged
+      // hand-authored specs — e.g. openapi/openapi-pwrapps.yaml from
+      // plan 05.1-03) don't run during this beta-ordering test.
+      runProductPipelines: async () => {},
       // Plan 05-03 wired compileEssentialsPreset at tail of main(); stub so
       // this test focuses on the beta pipeline ordering invariant.
       compileEssentialsPreset: () => {

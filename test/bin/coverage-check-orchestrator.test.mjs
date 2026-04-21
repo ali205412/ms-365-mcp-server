@@ -105,6 +105,11 @@ describe('plan 05-08 task 2 — generate-graph-client.mjs coverage wiring', () =
         callLog.push('runBetaPipeline');
         return { betaCount: 0, aliases: [] };
       },
+      // Plan 05.1-02+ populate PRODUCT_PIPELINES at module load. Stub the
+      // iterator so the real per-product pipelines (which require staged
+      // hand-authored specs — e.g. openapi/openapi-pwrapps.yaml from
+      // plan 05.1-03) don't run during this ordering-invariant test.
+      runProductPipelines: async () => {},
       compileEssentialsPreset: () => ({ count: 0, presetTsPath: '', missing: [] }),
       runCoverageCheck: () => {
         callLog.push('runCoverageCheck');
@@ -184,6 +189,7 @@ describe('plan 05-08 task 2 — generate-graph-client.mjs coverage wiring', () =
         ]);
       },
       runBetaPipeline: async () => ({ betaCount: 0, aliases: [] }),
+      runProductPipelines: async () => {},
       compileEssentialsPreset: () => ({ count: 0, presetTsPath: '', missing: [] }),
     });
 
@@ -237,6 +243,7 @@ describe('plan 05-08 task 2 — generate-graph-client.mjs coverage wiring', () =
           ]);
         },
         runBetaPipeline: async () => ({ betaCount: 0, aliases: [] }),
+        runProductPipelines: async () => {},
         compileEssentialsPreset: () => ({ count: 0, presetTsPath: '', missing: [] }),
       })
     ).rejects.toThrow(/Coverage regression|regress/i);
