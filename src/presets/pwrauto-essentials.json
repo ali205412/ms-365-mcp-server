@@ -1,0 +1,42 @@
+{
+  "version": "pwrauto-essentials",
+  "generated_at": "2026-04-21T00:00:00Z",
+  "_comment": "Plan 05.1-07. Flagship Power Automate (Flow) read-first admin ops. 12 aliases selected from the 20-op __pwrauto__ catalog produced by plan 05.1-04.",
+  "product": "pwrauto",
+  "prefix": "__pwrauto__",
+  "sections": {
+    "flows": 2,
+    "flow_runs": 3,
+    "environments": 2,
+    "connections": 2,
+    "owners_approvals": 3
+  },
+  "rationale": {
+    "__pwrauto__list-flows": "Per-environment flow inventory; entry point for every Flow admin workflow.",
+    "__pwrauto__get-flow": "Single-flow read (definition + state + references) for audit / diff flows.",
+    "__pwrauto__list-flow-runs": "Execution history enumeration; required for SLA / failure-rate reporting.",
+    "__pwrauto__get-flow-run": "Single-run detail read; pairs with list-flow-runs for drill-down diagnostics.",
+    "__pwrauto__cancel-flow-run": "In-flight run cancellation; occasionally needed by admins to stop a runaway flow. Write op kept because it is a frequent admin safety-valve.",
+    "__pwrauto__list-environments": "Tenant-wide environment enumeration; prerequisite for all environment-scoped flow reads.",
+    "__pwrauto__get-environment": "Single-environment read; paired with list-environments for grounding.",
+    "__pwrauto__list-connections": "Per-environment connection inventory; surfaces integration footprint referenced by flows.",
+    "__pwrauto__get-connection": "Single-connection read for audit of credentials / scopes.",
+    "__pwrauto__list-flow-owners": "Per-flow owner enumeration; identity surface for RBAC and audit flows.",
+    "__pwrauto__list-approvals": "Pending approval-request enumeration; surfaces human-gated steps without manual triage.",
+    "__pwrauto__get-approval": "Single-approval read for detailed audit / status inspection."
+  },
+  "ops": [
+    "__pwrauto__list-flows",
+    "__pwrauto__get-flow",
+    "__pwrauto__list-flow-runs",
+    "__pwrauto__get-flow-run",
+    "__pwrauto__cancel-flow-run",
+    "__pwrauto__list-environments",
+    "__pwrauto__get-environment",
+    "__pwrauto__list-connections",
+    "__pwrauto__get-connection",
+    "__pwrauto__list-flow-owners",
+    "__pwrauto__list-approvals",
+    "__pwrauto__get-approval"
+  ]
+}
