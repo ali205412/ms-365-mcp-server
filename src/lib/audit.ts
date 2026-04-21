@@ -65,6 +65,9 @@ import logger from '../logger.js';
  *   Phase 5 admin.tenant.enabled-tools (plan 05-07, D-21):
  *   admin.tenant.enabled-tools-change       { before_length, after_length,
  *                                              operation: 'add'|'remove'|'set',
+ *                                              product?: 'powerbi'|'pwrapps'|
+ *                                                'pwrauto'|'exo'|'sp-admin'|
+ *                                                'mixed'|null,
  *                                              invalid_count? }
  *   admin.tenant.enabled-tools-parse-error  { raw_selector_summary?,
  *                                              parse_error_category:
@@ -72,8 +75,16 @@ import logger from '../logger.js';
  *                                              invalid_count? }
  *   CRITICAL (T-05-17, 05-RESEARCH.md:467): NEVER place the raw
  *   enabled_tools string in meta — only categorical length counts +
- *   operation name are safe. Operators grep audit_log by action + tenantId,
- *   not by selector string content.
+ *   operation name + product discriminator are safe. Operators grep
+ *   audit_log by action + tenantId + optional meta->>'product', not by
+ *   selector string content.
+ *
+ *   Phase 5.1 extension (plan 05.1-08, T-5.1-08-e): meta.product is the
+ *   product discriminator for mutations that target a Phase 5.1 product
+ *   (Power BI / Power Apps / Power Automate / Exchange Admin / SharePoint
+ *   Admin). Null when the mutation targets Graph only; 'mixed' when two
+ *   or more products appear in the same PATCH. Set by
+ *   `inferProductFromSelectors` in src/lib/admin/enabled-tools.ts.
  *
  *   Phase 4 webhook.* (WEBHK-01..03, plans 04-07 + 04-08 — staged here so
  *   downstream plans extend handlers only, not the union):

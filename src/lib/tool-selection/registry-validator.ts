@@ -1,6 +1,16 @@
 /**
  * Registry validator (plan 05-04, D-21).
  *
+ * Phase 5.1 extension (plan 05.1-08, D-03, D-04):
+ *   - extractWorkloadPrefix now recognizes the 5 product prefixes
+ *     (__powerbi__, __pwrapps__, __pwrauto__, __exo__, __spadmin__)
+ *     and returns the product name as the workload. WORKLOAD_PREFIXES
+ *     auto-grows to include {'powerbi', 'pwrapps', 'pwrauto', 'exo',
+ *     'sp-admin'} once plans 5.1-02..06 populate client.ts.
+ *   - PRESET_NAMES auto-grows with plan 5.1-07's generated product
+ *     presets (powerbi-essentials, pwrapps-essentials, etc.) — no code
+ *     change needed here; the Set derives from PRESET_VERSIONS.keys().
+ *
  * Validates every selector against the compiled tool registry. Unknown
  * selectors surface up to 3 Levenshtein-ranked (distance ≤ 3) suggestions so
  * operators recover from typos fast. Primary caller is the admin PATCH
@@ -10,6 +20,7 @@
  * Registry is built ONCE at module load from:
  *   - src/generated/client.ts (api.endpoints aliases)
  *   - src/presets/generated-index.ts (PRESET_VERSIONS keys)
+ *   - src/lib/auth/products.ts (PRODUCT_AUDIENCES — product → prefix map)
  * No runtime mutation. Both Sets are frozen.
  *
  * Threat refs:
@@ -22,26 +33,51 @@
  *     PATCH (Plan 05-07) caps array size at 500. Suggestion pool size is
  *     bounded by the registry (~14k aliases worst-case). fastest-levenshtein
  *     is O(n*m/32) — well under the cost ceiling.
+ *   - T-5.1-08-b (Levenshtein DoS on expanded prefix set): pool grew from
+ *     ~30 to ~35 entries with the 5 product prefixes — cost impact
+ *     negligible under the same O(n*m/32) scaling.
  */
 import { z } from 'zod';
 import { distance } from 'fastest-levenshtein';
 import { api } from '../../generated/client.js';
 import { PRESET_VERSIONS } from '../../presets/generated-index.js';
+import { PRODUCT_AUDIENCES } from '../auth/products.js';
 import type { Selector } from './selector-ast.js';
 import { parseSelectorList } from './selector-ast.js';
 
 /**
- * Extract the "workload" prefix from an alias. Strips a leading `__beta__`
- * (beta ops belong to their underlying workload), then takes everything
- * before the first `-` or `.` — whichever comes first. Returns the original
- * alias if neither delimiter is present.
+ * Extract the "workload" prefix from an alias.
+ *
+ * Phase 5.1 extension: aliases that carry one of the 5 product prefixes
+ * (`__powerbi__`, `__pwrapps__`, `__pwrauto__`, `__exo__`, `__spadmin__`)
+ * map to the product name as the workload. This is the admin-selector
+ * contract — operators write `powerbi:*` / `exo:*` and expect those
+ * workloads to exist in WORKLOAD_PREFIXES. The `sp-admin` product enum
+ * member uses a dash while the `__spadmin__` alias prefix does not — the
+ * mapping is owned by PRODUCT_AUDIENCES (single source of truth per D-05).
+ *
+ * For non-product aliases the classic behavior applies: strips a leading
+ * `__beta__` (beta ops belong to their underlying workload), then takes
+ * everything before the first `-` or `.` — whichever comes first. Returns
+ * the original alias if neither delimiter is present.
  *
  * Examples:
- *   "list-mail-messages"        → "list"
- *   "__beta__security-alerts"    → "security"
- *   "mail.messages.send"         → "mail"
+ *   "list-mail-messages"           → "list"
+ *   "__beta__security-alerts"       → "security"
+ *   "mail.messages.send"            → "mail"
+ *   "__powerbi__GroupsGetGroups"    → "powerbi"
+ *   "__spadmin__list-sites"         → "sp-admin"
  */
 function extractWorkloadPrefix(alias: string): string {
+  // Phase 5.1: product prefix → product name is the workload.
+  // The 5-entry iteration is O(1) in practice; the alias-building pass runs
+  // once at module load so this is never on a hot path.
+  for (const audience of PRODUCT_AUDIENCES.values()) {
+    if (alias.startsWith(audience.prefix)) {
+      return audience.product;
+    }
+  }
+  // Existing Graph behavior unchanged:
   const stripped = alias.startsWith('__beta__') ? alias.slice('__beta__'.length) : alias;
   const dash = stripped.indexOf('-');
   const dot = stripped.indexOf('.');
