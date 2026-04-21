@@ -32,6 +32,35 @@ export interface RequestContext {
   // of executeGraphTool (src/graph-tools.ts). TENANT-08 isolation.
   enabledToolsSet?: ReadonlySet<string>;
   presetVersion?: string;
+  // Phase 5.1 plan 05.1-06 additions — populated by loadTenant middleware
+  // (src/lib/tenant/load-tenant.ts) from the tenants row. Consumed by
+  // src/lib/dispatch/product-routing.ts when the tool alias carries a
+  // known product prefix (__powerbi__ / __pwrapps__ / __pwrauto__ /
+  // __exo__ / __spadmin__). Both fields are optional — only the `exo`
+  // and `sp-admin` products consume them; other products tolerate absent.
+  /**
+   * Tenant's Azure AD tenant ID (GUID). Required for Exchange Admin
+   * (`__exo__*`) dispatch — substituted into
+   * `https://outlook.office365.com/adminapi/beta/{tenantId}`. Validated
+   * against UUID regex before substitution (T-5.1-05-f).
+   *
+   * Sourced from `tenants.tenant_id` (DB column — existing). In HTTP mode,
+   * loadTenant middleware populates this from the loaded row.
+   */
+  tenantAzureId?: string;
+  /**
+   * Tenant's single-label SharePoint hostname. Required for SharePoint
+   * Admin (`__spadmin__*`) dispatch — substituted into the tenant-scoped
+   * base URL and audience scope. Validated against Zod
+   * `/^[a-z0-9-]{1,63}$/` before URL / scope construction (T-5.1-06-c).
+   *
+   * Sourced from `tenants.sharepoint_domain` (Task 3 migration
+   * 20260801000000). `null` when the tenant hasn't configured SharePoint
+   * admin access; dispatch returns a structured MCP tool error with
+   * `code: sp_admin_not_configured` directing operators to PATCH the
+   * tenant row.
+   */
+  sharepointDomain?: string | null;
 }
 
 export const requestContext = new AsyncLocalStorage<RequestContext>();

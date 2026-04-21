@@ -8,10 +8,12 @@ import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { TOOL_CATEGORIES } from './tool-categories.js';
-import { getRequestTokens, getRequestTenant } from './request-context.js';
+import { getRequestTokens, getRequestTenant, requestContext } from './request-context.js';
 import { checkDispatch, _getStdioFallbackForTest } from './lib/tool-selection/dispatch-guard.js';
 import { parseTeamsUrl } from './lib/teams-url-parser.js';
 import { buildBM25Index, scoreQuery, tokenize, type BM25Index } from './lib/bm25.js';
+import { isProductPrefix } from './lib/auth/products.js';
+import { executeProductTool } from './lib/dispatch/product-routing.js';
 import {
   createTenantBm25Cache,
   type ToolRegistry,
@@ -185,6 +187,48 @@ async function executeGraphTool(
       'dispatch-guard: tool not enabled for tenant'
     );
     return rejection as CallToolResult;
+  }
+
+  // ── PRODUCT PREFIX ROUTING (plan 5.1-06 Task 2) ───────────────────────
+  // When the tool alias carries a known product prefix (__powerbi__ /
+  // __pwrapps__ / __pwrauto__ / __exo__ / __spadmin__), delegate to
+  // executeProductTool — it strips the prefix, resolves the per-product
+  // scope + baseUrl from PRODUCT_AUDIENCES (src/lib/auth/products.ts),
+  // acquires a product-specific access token via
+  // AuthManager.getTokenForProduct (composite cache key ${tenantId}:${product}
+  // per D-05), and delegates the HTTP call to the same GraphClient
+  // machinery with the product baseUrl override.
+  //
+  // Runs BEFORE the existing Graph path so the Graph v1.0 code is
+  // unchanged for unprefixed aliases. Fail-closed when AuthManager is
+  // unavailable (stdio mode bootstrap hiccup) — returns a structured MCP
+  // tool error envelope rather than throwing through the MCP transport.
+  //
+  // T-5.1-06-a: product scope pins audience.
+  // T-5.1-06-b: composite cache key prevents cross-tenant leak.
+  // T-5.1-06-c: sharepoint_domain re-validated inside the audience
+  //             resolvers before URL / scope construction (defense-in-depth
+  //             against compromised admin controls or SQL injection).
+  // T-5.1-06-e: structured MCP error on missing sharepoint_domain.
+  if (isProductPrefix(tool.alias)) {
+    if (!authManager) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({ error: 'auth_manager_unavailable_for_product_dispatch' }),
+          },
+        ],
+        isError: true,
+      };
+    }
+    const ctx = requestContext.getStore();
+    const productResult = await executeProductTool(tool.alias, params, authManager, graphClient, {
+      tenantId: ctx?.tenantId ?? 'unknown',
+      tenantAzureId: ctx?.tenantAzureId,
+      sharepointDomain: ctx?.sharepointDomain,
+    });
+    return productResult as CallToolResult;
   }
 
   // ── BETA LOG (plan 05-04, D-18) ────────────────────────────────────────

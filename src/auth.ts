@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import { getSecrets, type AppSecrets } from './secrets.js';
 import { getCloudEndpoints, getDefaultClientId } from './cloud-config.js';
+import { PRODUCT_AUDIENCES, type Product, type ProductAudienceCtx } from './lib/auth/products.js';
 
 // Token cache storage is file-based only (v2, SECUR-07 / D-04).
 // v1 users should run `npx ms-365-mcp-server migrate-tokens` once to copy
@@ -234,6 +235,24 @@ class AuthManager {
   private isOAuthMode: boolean;
   private selectedAccountId: string | null;
   private useInteractiveAuth: boolean;
+  /**
+   * Plan 5.1-06 Task 2 (D-05) — per-product access-token cache keyed by
+   * composite `${tenantId}:${product}` so refresh tokens never collide
+   * across product audiences or tenants. Entries carry the MSAL
+   * `accessToken` + `expiry` (epoch ms); a 60-second safety buffer is
+   * applied before the hit check in `getTokenForProduct`.
+   *
+   * T-5.1-06-b mitigation: the composite key prevents a cache entry for
+   * `tenantA:powerbi` from satisfying a request for `tenantB:powerbi`.
+   * T-5.1-06-f mitigation: `evictProductTokensForTenant(tenantId)` drops
+   * every matching entry on tenant-disable (Phase 3 TenantPool hook).
+   *
+   * Bounded by active-tenant × 5-products. For the reference Docker
+   * Compose single-VM deploy (Phase 6 rate limiting + tenant LRU) this
+   * is deterministic and small — Phase 6 can wrap with an explicit LRU
+   * layer if the registered-tenant count exceeds operational thresholds.
+   */
+  private productTokenCache: Map<string, { token: string; expiry: number }> = new Map();
 
   constructor(config: Configuration, scopes: string[] = buildScopesFromEndpoints()) {
     logger.info(`And scopes are ${scopes.join(', ')}`, scopes);
@@ -733,6 +752,111 @@ class AuthManager {
         `Failed to acquire token for account '${targetAccount.username || targetAccount.name || 'unknown'}'. ` +
           `The token may have expired. Please re-login with: --login`
       );
+    }
+  }
+
+  /**
+   * Plan 5.1-06 Task 2 — acquire a product-specific access token via MSAL
+   * against the product's `.default` scope (per 05.1-CONTEXT D-05 audience
+   * table) and cache under composite key `${tenantId}:${product}`.
+   *
+   * Cache policy:
+   *   - Hit with expiry > now + 60s safety buffer → return cached token.
+   *   - Hit with expiry within the 60s buffer → call MSAL again (refresh).
+   *   - Miss → call MSAL, populate cache on success. MSAL failure does NOT
+   *     populate the cache (error propagates through logger.error + throw).
+   *
+   * Product scope resolution:
+   *   - Static products (powerbi, pwrapps, pwrauto, exo): literal string.
+   *   - Dynamic (sp-admin): computed from `opts.sharepointDomain` via the
+   *     PRODUCT_AUDIENCES table's function-style scope resolver, which
+   *     re-validates the value against Zod `/^[a-z0-9-]{1,63}$/` BEFORE
+   *     calling MSAL (T-5.1-06-c defense-in-depth — invalid values never
+   *     reach MSAL's `.acquireTokenSilent`).
+   *
+   * Pitfall 11 (product-token cache staleness on tenant disable): closed by
+   * `evictProductTokensForTenant(tenantId)` — callers MUST invoke the
+   * eviction API from the TenantPool eviction hook on tenant-disable.
+   *
+   * @param tenantId Tenant GUID — becomes the first half of the cache key.
+   * @param product  Product identifier (Product enum — 5 members per D-05).
+   * @param opts     Optional context for dynamic scope/baseUrl resolvers.
+   *   - `sharepointDomain` required for `sp-admin`; throws if absent/malformed.
+   *   - `tenantAzureId` used by dispatch for `exo` baseUrl (not for scope).
+   * @returns The product-specific access token (string).
+   * @throws   Error when no MSAL account is available, when the product
+   *           scope can't be computed (malformed context), or when
+   *           `acquireTokenSilent` fails.
+   */
+  async getTokenForProduct(
+    tenantId: string,
+    product: Product,
+    opts: ProductAudienceCtx = {}
+  ): Promise<string> {
+    const cacheKey = `${tenantId}:${product}`;
+    const cached = this.productTokenCache.get(cacheKey);
+    // 60-second safety buffer — return the cached token only if it will
+    // still be valid 60 seconds from now. This matches research §Pattern 3
+    // reference and prevents mid-request 401s when an expiring token is
+    // handed to a downstream request whose round-trip exceeds the remaining
+    // lifetime. The cache entry is evicted on refresh via the `set()` call
+    // below regardless.
+    if (cached && cached.expiry > Date.now() + 60_000) {
+      return cached.token;
+    }
+
+    const audience = PRODUCT_AUDIENCES.get(product);
+    if (!audience) {
+      throw new Error(`Unknown product: ${product}`);
+    }
+
+    // Function-style scope resolvers validate their context and throw BEFORE
+    // reaching MSAL — invalid sharepoint_domain / absent values never
+    // produce an MSAL call.
+    const scope = typeof audience.scope === 'function' ? audience.scope(opts) : audience.scope;
+
+    const currentAccount = await this.getCurrentAccount();
+    if (!currentAccount) {
+      throw new Error('No account available for product token acquisition');
+    }
+
+    try {
+      const response = await this.msalApp.acquireTokenSilent({
+        account: currentAccount,
+        scopes: [scope],
+      });
+      // MSAL reports absolute expiry; default to a conservative 30min if
+      // absent (should never happen — documented for defensive completeness).
+      const expiry = response.expiresOn
+        ? new Date(response.expiresOn).getTime()
+        : Date.now() + 30 * 60_000;
+      this.productTokenCache.set(cacheKey, { token: response.accessToken, expiry });
+      return response.accessToken;
+    } catch (err) {
+      logger.error(`getTokenForProduct failed for ${cacheKey}: ${(err as Error).message}`);
+      throw err;
+    }
+  }
+
+  /**
+   * Plan 5.1-06 Task 2 — evict every per-product cache entry for the given
+   * tenant. Called from TenantPool eviction hook on tenant-disable
+   * (T-5.1-06-f + Phase 3 TENANT-07 extension) — closes research Pitfall
+   * 11's race window where a disabled tenant's cached product tokens keep
+   * resolving after the MSAL cache itself was cryptoshredded.
+   *
+   * Implementation iterates the Map keys and drops entries whose key starts
+   * with `${tenantId}:`. The 5-products-per-tenant ceiling makes this O(5)
+   * per call regardless of process-wide tenant count.
+   *
+   * @param tenantId Tenant GUID.
+   */
+  evictProductTokensForTenant(tenantId: string): void {
+    const prefix = `${tenantId}:`;
+    for (const key of this.productTokenCache.keys()) {
+      if (key.startsWith(prefix)) {
+        this.productTokenCache.delete(key);
+      }
     }
   }
 }
