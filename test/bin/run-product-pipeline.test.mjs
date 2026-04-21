@@ -218,7 +218,12 @@ describe('plan 05.1-01 task 1 — runProductPipeline', () => {
     vi.stubEnv('MS365_MCP_ACCEPT_XTEST_CHURN', '0');
 
     expect(() =>
-      runProductChurnGuard(['__xtest__a'], snapshotPath, 'permissive', 'MS365_MCP_ACCEPT_XTEST_CHURN')
+      runProductChurnGuard(
+        ['__xtest__a'],
+        snapshotPath,
+        'permissive',
+        'MS365_MCP_ACCEPT_XTEST_CHURN'
+      )
     ).toThrow(/removed|disappeared/i);
 
     // Snapshot untouched on failure.
@@ -239,7 +244,12 @@ describe('plan 05.1-01 task 1 — runProductPipeline', () => {
     vi.stubEnv('MS365_MCP_ACCEPT_XTEST_CHURN', '1');
 
     expect(() =>
-      runProductChurnGuard(['__xtest__a'], snapshotPath, 'permissive', 'MS365_MCP_ACCEPT_XTEST_CHURN')
+      runProductChurnGuard(
+        ['__xtest__a'],
+        snapshotPath,
+        'permissive',
+        'MS365_MCP_ACCEPT_XTEST_CHURN'
+      )
     ).not.toThrow();
 
     const snap = JSON.parse(fs.readFileSync(snapshotPath, 'utf-8'));
