@@ -1,0 +1,65 @@
+openapi: '3.0.0'
+info:
+  title: Mini SharePoint Admin test fixture
+  version: '1.0.0'
+  description: >-
+    Minimal 3-operation OpenAPI 3.0 spec used by Phase 5.1-06 SharePoint
+    Tenant Admin pipeline tests. Exercises the hand-authored-spec code path
+    (specUrl=null), sharepoint_domain URL templating at the spec level
+    (NOT runtime-authoritative — plan 5.1-06 dispatch resolves from
+    PRODUCT_AUDIENCES), and the sha1-8 truncation for a 60-char operationId
+    under the __spadmin__ prefix.
+servers:
+  - url: https://{sharepoint_domain}-admin.sharepoint.com/_api
+    description: >-
+      Single-label SharePoint hostname (e.g. contoso for contoso.sharepoint.com).
+      Documentation-only — dispatch reads baseUrl from PRODUCT_AUDIENCES.
+    variables:
+      sharepoint_domain:
+        default: contoso
+        description: >-
+          Zod-validated /^[a-z0-9-]{1,63}$/ at dispatch (plan 5.1-06). Rejects
+          dots / slashes / special chars so attacker-supplied values cannot
+          redirect token minting (T-5.1-06-c).
+paths:
+  /Sites:
+    get:
+      operationId: list-sites
+      summary: >-
+        Global GET — list site collections. OData default headers;
+        no body.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+  /Sites/GetPropertiesByUrl:
+    get:
+      operationId: get-site
+      summary: >-
+        Get site properties by URL. Query parameter carries the site URL.
+      parameters:
+        - name: url
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+  /Very/Long/Path/For/Truncation/Testing/aaaaaaa:
+    post:
+      operationId: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      summary: >-
+        60-char operationId; with __spadmin__ prefix (11 chars) the raw alias
+        would be 71 chars — the pipeline MUST truncate to 64 with an
+        sha1-8 suffix.
+      responses:
+        '201':
+          description: Created

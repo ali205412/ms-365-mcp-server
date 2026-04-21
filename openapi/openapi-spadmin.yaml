@@ -1,0 +1,419 @@
+# Plan 5.1-06 — SharePoint Tenant Admin hand-authored OpenAPI fragment.
+# Source of truth: learn.microsoft.com/en-us/sharepoint/dev/sp-add-ins/ +
+#   PnP.PowerShell SPO cmdlets (VERIFIED 2026-04-20).
+# Note: SharePoint admin is historically CSOM (XML); REST endpoints exist but
+#   Microsoft docs them narratively — no publicly-downloadable OpenAPI spec.
+# Prefix at codegen: __spadmin__
+# Churn policy: STRICT — MS365_MCP_ACCEPT_SPADMIN_CHURN=1 required for ANY
+#   delta (add or remove). Matches Exchange Admin REST v2 stance per D-04.
+# Base URL template: https://{sharepoint_domain}-admin.sharepoint.com/_api/SPO.TenantAdministrationOffice365Tenant
+#   sharepoint_domain is Zod-validated /^[a-z0-9-]{1,63}$/ at dispatch
+#   (plan 5.1-06 dispatch layer owns). This prevents URL / scope injection
+#   via attacker-planted tenant column values (T-5.1-06-c mitigation).
+# Absent sharepoint_domain on tenant row → structured MCP tool error
+#   'sp_admin_not_configured' directing operator to set the column via
+#   PATCH /admin/tenants/{id}.
+# CSOM ProcessQuery (XML POST to /_vti_bin/client.svc/ProcessQuery) is
+#   OUT OF SCOPE for Phase 5.1 — REST-only.
+# Admin consent + RBAC: Sites.FullControl.All (or equivalent) + Global Admin
+#   or SharePoint Admin role. App-only flows require Client ID + Certificate
+#   (NOT secret) per Microsoft docs — documented operator pre-flight.
+# Audience scope (plan 5.1-06 runtime dispatch):
+#   https://{sharepoint_domain}-admin.sharepoint.com/.default
+#   (per-tenant — MSAL mints a fresh token for the computed scope at request
+#   time; composite cache key {tenantId,sp-admin} prevents cross-tenant leak.)
+#
+# Change review policy: every edit to this file is reviewed via git diff.
+# STRICT churn — adding OR removing any operationId will fail the next codegen
+# unless MS365_MCP_ACCEPT_SPADMIN_CHURN=1. Rationale: SharePoint admin REST
+# endpoints are undocumented at the OpenAPI level — Microsoft ships updates
+# via docs pages and PnP.PowerShell releases without spec changelogs. Silent
+# additions could introduce new scope requirements or body shapes that break
+# existing tools.
+
+openapi: '3.0.0'
+info:
+  title: Microsoft SharePoint Tenant Administration REST API
+  version: 2024-preview
+  description: >-
+    Hand-authored OpenAPI 3.0 fragment covering 15 flagship SharePoint Tenant
+    Admin REST operations across site-collection, external-sharing, and
+    tenant-settings workflows. No upstream OpenAPI spec exists for this
+    surface as of 2026-04-20; changes are reviewed via git diff and gated by
+    STRICT churn policy (MS365_MCP_ACCEPT_SPADMIN_CHURN=1 required for any
+    alias delta).
+
+servers:
+  - url: https://{sharepoint_domain}-admin.sharepoint.com/_api/SPO.TenantAdministrationOffice365Tenant
+    description: >-
+      SharePoint tenant admin base URL. sharepoint_domain is a single-label
+      hostname (e.g. contoso for contoso.sharepoint.com) stored on the
+      tenants.sharepoint_domain column (migration 20260801000000). Plan 5.1-06
+      dispatch reads the value from the loaded tenant row, validates against
+      Zod /^[a-z0-9-]{1,63}$/, and substitutes into both baseUrl and scope
+      before calling MSAL. This spec's servers: field is documentation-only —
+      runtime dispatch reads the base URL from the product-audiences table in
+      plan 5.1-06, NOT from here.
+    variables:
+      sharepoint_domain:
+        default: contoso
+        description: >-
+          Single-label SharePoint hostname. Substituted at dispatch (plan
+          5.1-06). Must match Zod /^[a-z0-9-]{1,63}$/ — lowercase alphanumeric
+          and dashes only, 1-63 chars. Rejects dots / slashes / uppercase /
+          special chars that would allow attacker-planted values to redirect
+          the token audience (T-5.1-06-c mitigation, defense-in-depth against
+          compromised admin API key or SQL injection at the admin PATCH layer).
+
+paths:
+  /GetSiteProperties:
+    get:
+      operationId: list-sites
+      summary: List site collections in the tenant (Get-SPOSite equivalent).
+      description: >-
+        Returns the tenant's site-collection inventory. Admin role required
+        (SharePoint Admin or Global Admin). Large tenants paginate — respect
+        @odata.nextLink. Scope: Sites.FullControl.All (app-only) or delegated
+        with admin role.
+      parameters:
+        - $ref: '#/components/parameters/OdataSelect'
+        - $ref: '#/components/parameters/OdataFilter'
+        - $ref: '#/components/parameters/OdataTop'
+        - $ref: '#/components/parameters/OdataSkip'
+      responses:
+        '200':
+          description: OK — list of site properties
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpAdminResponse'
+
+  /Sites/GetPropertiesByUrl:
+    get:
+      operationId: get-site
+      summary: Get site properties by site URL (Get-SPOSite -Identity <url>).
+      description: >-
+        Returns a single site collection's properties. siteUrl query param
+        is a fully-qualified SharePoint URL (e.g.,
+        https://contoso.sharepoint.com/sites/team-alpha).
+      parameters:
+        - name: siteUrl
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Fully-qualified SharePoint site URL.
+      responses:
+        '200':
+          description: OK — site properties
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpAdminResponse'
+
+  /Sites/SetSiteProperties:
+    post:
+      operationId: set-site
+      summary: Update site properties (Set-SPOSite -Identity <url> ...).
+      description: >-
+        Updates site-collection properties such as owner, storage quota,
+        resource quota, lock state, and sharing capability. Body is
+        tenant-admin-specific; defer Zod narrowing to preset layer
+        (plan 5.1-07).
+      requestBody:
+        $ref: '#/components/requestBodies/SpAdminBody'
+      responses:
+        '200':
+          description: OK — updated site properties
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpAdminResponse'
+
+  /RemoveDeletedSite:
+    post:
+      operationId: remove-deleted-site
+      summary: Permanently remove a deleted site from the recycle bin.
+      description: >-
+        Permanently deletes a soft-deleted site collection (Remove-SPODeletedSite).
+        Destructive — site cannot be restored after this call succeeds.
+      requestBody:
+        $ref: '#/components/requestBodies/SpAdminBody'
+      responses:
+        '200':
+          description: OK — site permanently removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpAdminResponse'
+
+  /GetTenantInfo:
+    get:
+      operationId: get-tenant-info
+      summary: Get tenant-level identity information (Get-SPOTenant).
+      description: >-
+        Returns tenant GUID, domain, admin URL, and basic info. Read-only;
+        no body.
+      responses:
+        '200':
+          description: OK — tenant info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpAdminResponse'
+
+  /:
+    get:
+      operationId: get-tenant-settings
+      summary: Get current tenant administrative settings (Get-SPOTenant).
+      description: >-
+        Returns the full tenant admin configuration object
+        (ExternalSharingCapability, SharingCapability, DefaultLinkPermission,
+        etc.). Response shape is deep; narrow selectively via $select.
+      parameters:
+        - $ref: '#/components/parameters/OdataSelect'
+      responses:
+        '200':
+          description: OK — tenant settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpAdminResponse'
+
+  /SetTenantSettings:
+    post:
+      operationId: set-tenant-settings
+      summary: Update tenant-level administrative settings (Set-SPOTenant).
+      description: >-
+        Updates tenant admin configuration. Body is a partial settings object
+        — only supplied properties are mutated. Some fields require specific
+        license tiers (E5 for advanced DLP settings).
+      requestBody:
+        $ref: '#/components/requestBodies/SpAdminBody'
+      responses:
+        '200':
+          description: OK — updated tenant settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpAdminResponse'
+
+  /GetExternalUsers:
+    get:
+      operationId: list-external-users
+      summary: List external users who have been granted access (Get-SPOExternalUser).
+      description: >-
+        Returns external (guest) users across the tenant. Pagination via
+        position + pageSize; respect the returned TotalUserCount for planning.
+      parameters:
+        - name: position
+          in: query
+          required: false
+          schema:
+            type: integer
+          description: Starting index for pagination.
+        - name: pageSize
+          in: query
+          required: false
+          schema:
+            type: integer
+          description: Number of entries to return (max 50 per SharePoint docs).
+        - name: filter
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Name / email filter.
+      responses:
+        '200':
+          description: OK — list of external users with TotalUserCount
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpAdminResponse'
+
+  /RemoveExternalUser:
+    post:
+      operationId: remove-external-user
+      summary: Remove one or more external users (Remove-SPOExternalUser).
+      description: >-
+        Revokes guest-user access across the tenant. Body carries uniqueIds
+        array of external user object IDs.
+      requestBody:
+        $ref: '#/components/requestBodies/SpAdminBody'
+      responses:
+        '200':
+          description: OK — external users removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpAdminResponse'
+
+  /SetSharingCapability:
+    post:
+      operationId: set-sharing-capability
+      summary: Update the tenant external-sharing capability.
+      description: >-
+        Sets tenant-wide external sharing policy. Valid values: Disabled,
+        ExistingExternalUserSharingOnly, ExternalUserSharingOnly,
+        ExternalUserAndGuestSharing. Applies uniformly unless per-site
+        overrides exist.
+      requestBody:
+        $ref: '#/components/requestBodies/SpAdminBody'
+      responses:
+        '200':
+          description: OK — sharing capability updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpAdminResponse'
+
+  /GetSiteAdministrators:
+    get:
+      operationId: list-site-collection-admins
+      summary: List site-collection administrators for a site (Get-SPOUser).
+      description: >-
+        Returns site-collection administrators for a given site URL.
+      parameters:
+        - name: siteUrl
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Fully-qualified SharePoint site URL.
+      responses:
+        '200':
+          description: OK — list of SC admins
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpAdminResponse'
+
+  /SetSiteAdmin:
+    post:
+      operationId: add-site-collection-admin
+      summary: Add a user as a site-collection administrator (Set-SPOUser -IsSiteCollectionAdmin).
+      description: >-
+        Grants site-collection admin privileges to a user on a given site.
+        Body carries siteUrl + loginName (UPN or email).
+      requestBody:
+        $ref: '#/components/requestBodies/SpAdminBody'
+      responses:
+        '200':
+          description: OK — site admin added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpAdminResponse'
+
+  /RemoveSiteAdmin:
+    post:
+      operationId: remove-site-collection-admin
+      summary: Remove site-collection admin privileges from a user.
+      description: >-
+        Revokes site-collection admin privileges. Body carries siteUrl +
+        loginName.
+      requestBody:
+        $ref: '#/components/requestBodies/SpAdminBody'
+      responses:
+        '200':
+          description: OK — site admin removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpAdminResponse'
+
+  /Sites/GetSiteStorageUsed:
+    get:
+      operationId: get-site-storage-used
+      summary: Get storage-used metrics for a site collection.
+      description: >-
+        Returns storage consumption (in MB) for a given site collection.
+      parameters:
+        - name: siteUrl
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK — storage metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpAdminResponse'
+
+  /Sites/SetStorageQuota:
+    post:
+      operationId: set-site-storage-quota
+      summary: Update storage-quota and warning thresholds for a site.
+      description: >-
+        Sets storage quota (in MB) and warning threshold for a site
+        collection.
+      requestBody:
+        $ref: '#/components/requestBodies/SpAdminBody'
+      responses:
+        '200':
+          description: OK — storage quota updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpAdminResponse'
+
+components:
+  parameters:
+    OdataSelect:
+      name: $select
+      in: query
+      required: false
+      schema:
+        type: string
+      description: OData $select — comma-separated property list.
+    OdataFilter:
+      name: $filter
+      in: query
+      required: false
+      schema:
+        type: string
+      description: OData $filter expression.
+    OdataTop:
+      name: $top
+      in: query
+      required: false
+      schema:
+        type: integer
+      description: OData $top — maximum entries to return.
+    OdataSkip:
+      name: $skip
+      in: query
+      required: false
+      schema:
+        type: integer
+      description: OData $skip — paginate by skipping leading entries.
+
+  requestBodies:
+    SpAdminBody:
+      required: true
+      description: >-
+        SharePoint Admin request body. Each operation's expected shape is
+        documented in its `description` field. Zod narrowing deferred to
+        the preset layer (plan 5.1-07) — every SharePoint admin endpoint has
+        its own shape; modelling all variants would triple the spec size
+        without runtime safety benefit. Microsoft validates server-side and
+        returns structured errors on malformed input.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: true
+
+  schemas:
+    SpAdminResponse:
+      type: object
+      description: >-
+        Generic SharePoint admin response envelope. Deep nesting and dynamic
+        property names depending on the operation — modelling each response
+        precisely would require regenerating the spec as Microsoft ships new
+        fields. Callers should inspect the response shape at runtime.
+        @odata.nextLink preserved by the client layer for pagination.
+      additionalProperties: true

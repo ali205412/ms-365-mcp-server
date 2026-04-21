@@ -155,6 +155,7 @@ openapi/*
 !openapi/openapi-pwrapps.yaml
 !openapi/openapi-pwrauto.yaml
 !openapi/openapi-exo.yaml
+!openapi/openapi-spadmin.yaml
 
 src/generated/client.ts
 **/.claude/settings.local.json
