@@ -1,0 +1,569 @@
+# Plan 5.1-03 — Power Apps hand-authored OpenAPI fragment.
+# No publicly-downloadable upstream spec exists (verified 2026-04-20).
+# Source of op selection: learn.microsoft.com/en-us/rest/api/power-platform/
+# Prefix at codegen: __pwrapps__
+# Churn policy: permissive (MS365_MCP_ACCEPT_PWRAPPS_CHURN=1 accepts removals).
+# Geography routing: platform-auto-route; NO x-ms-region header at codegen or dispatch (research Open Question #1).
+#
+# Base URL note: the `servers:` entry is documentation-only. Runtime dispatch
+# (plan 5.1-06) reads the base URL from PRODUCT_AUDIENCES.get('pwrapps').baseUrl,
+# NOT from this spec's servers: field — so a rogue edit to `servers:` cannot
+# redirect live traffic (T-5.1-03-d mitigation).
+#
+# Change review policy: every edit to this file is reviewed via git diff.
+# Removing a previously-emitted operationId will fail the next codegen unless
+# MS365_MCP_ACCEPT_PWRAPPS_CHURN=1 (T-5.1-03-c mitigation via run-product-pipeline.mjs).
+
+openapi: '3.0.0'
+info:
+  title: Microsoft Power Apps Management API (hand-authored subset)
+  version: 2022-03-01-preview
+  description: >-
+    Hand-authored OpenAPI 3.0 fragment for Microsoft Power Apps management
+    operations. Covers 18 flagship ops drawn from learn.microsoft.com's
+    Power Platform REST API narrative docs. No publicly-downloadable upstream
+    spec exists as of 2026-04-20. Changes require manual edit plus
+    MS365_MCP_ACCEPT_PWRAPPS_CHURN=1 on first run when operations are removed.
+
+servers:
+  - url: https://api.powerapps.com/providers/Microsoft.PowerApps
+    description: >-
+      Documentation-only; runtime dispatch reads the base URL from the
+      product-audiences table in plan 5.1-06. Spec edits here CANNOT redirect
+      live traffic (T-5.1-03-d).
+
+paths:
+  /apps:
+    get:
+      operationId: list-apps
+      summary: List Power Apps available in the tenant.
+      description: Returns the set of Power Apps the caller has access to.
+      parameters:
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2022-03-01-preview'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  value:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/App'
+    post:
+      operationId: create-app
+      summary: Create a new Power App.
+      description: Registers a new app manifest in the tenant's app catalog.
+      parameters:
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2022-03-01-preview'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/App'
+
+  /apps/{appName}:
+    get:
+      operationId: get-app
+      summary: Get a Power App by name.
+      description: Returns the full manifest of the named app.
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2022-03-01-preview'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/App'
+    delete:
+      operationId: delete-app
+      summary: Delete a Power App.
+      description: Permanently removes an app from the tenant's app catalog.
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2022-03-01-preview'
+      responses:
+        '204':
+          description: No Content
+
+  /apps/{appName}/versions:
+    get:
+      operationId: get-app-versions
+      summary: List versions of a Power App.
+      description: Returns the version history for the named app.
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2022-03-01-preview'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /apps/{appName}/restore:
+    post:
+      operationId: restore-app
+      summary: Restore a previous version of a Power App.
+      description: Rolls back the app manifest to a supplied prior version.
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2022-03-01-preview'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /apps/{appName}/publish:
+    post:
+      operationId: publish-app
+      summary: Publish the latest version of a Power App.
+      description: Makes the current app manifest the live version served to users.
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2022-03-01-preview'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /apps/{appName}/modifyPermissions:
+    post:
+      operationId: share-app
+      summary: Share a Power App with users or groups.
+      description: Grants permissions on the named app per the request body's assignments array.
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2022-03-01-preview'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /apps/{appName}/removePermissions:
+    post:
+      operationId: unshare-app
+      summary: Remove shared permissions from a Power App.
+      description: Revokes previously-granted permissions per the request body.
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2022-03-01-preview'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /apps/{appName}/permissions:
+    get:
+      operationId: list-app-roles
+      summary: List the role assignments for a Power App.
+      description: Returns the set of users, groups, and tenants that have roles on the named app.
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2022-03-01-preview'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /apps/{appName}/environments:
+    get:
+      operationId: list-app-environments
+      summary: List environments associated with a Power App.
+      description: Returns the environments in which the named app is installed.
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2022-03-01-preview'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /environments:
+    get:
+      operationId: list-environments
+      summary: List Power Platform environments in the tenant.
+      description: Returns the environments the caller has access to.
+      parameters:
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2022-03-01-preview'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  value:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Environment'
+
+  /environments/{envId}:
+    get:
+      operationId: get-environment
+      summary: Get a Power Platform environment by ID.
+      description: Returns details about the named environment.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2022-03-01-preview'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Environment'
+
+  /environments/{envId}/connections:
+    get:
+      operationId: list-connections
+      summary: List connections in an environment.
+      description: Returns the set of connections configured in the named environment.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2022-03-01-preview'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /environments/{envId}/connections/{connectionName}:
+    get:
+      operationId: get-connection
+      summary: Get a connection by name in an environment.
+      description: Returns metadata about the named connection.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: connectionName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2022-03-01-preview'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+    delete:
+      operationId: delete-connection
+      summary: Delete a connection in an environment.
+      description: Removes the named connection from the environment.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: connectionName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2022-03-01-preview'
+      responses:
+        '204':
+          description: No Content
+
+  /environments/{envId}/apis:
+    get:
+      operationId: list-connectors
+      summary: List connectors available in an environment.
+      description: Returns the set of connector APIs registered in the named environment.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2022-03-01-preview'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /environments/{envId}/licenses:
+    get:
+      operationId: list-licenses
+      summary: List licenses in an environment.
+      description: Returns Power Apps license information for the named environment.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2022-03-01-preview'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /environments/{envId}/users:
+    get:
+      operationId: list-users
+      summary: List users in an environment.
+      description: Returns the users with access to the named environment.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2022-03-01-preview'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+components:
+  schemas:
+    App:
+      type: object
+      description: >-
+        Power Apps app manifest. Schemas are loosely typed because Microsoft's
+        app manifest is a deeply nested JSON blob that openapi-zod-client would
+        collapse to `z.record(z.any())` regardless of strictness. Keeping the
+        schema shallow avoids generator surprises.
+      additionalProperties: true
+      properties:
+        name:
+          type: string
+        id:
+          type: string
+        type:
+          type: string
+        tags:
+          type: object
+          additionalProperties: true
+        properties:
+          type: object
+          additionalProperties: true
+    Environment:
+      type: object
+      description: >-
+        Power Platform environment descriptor. Same looseness rationale as App.
+      additionalProperties: true
+      properties:
+        name:
+          type: string
+        id:
+          type: string
+        type:
+          type: string
+        location:
+          type: string
+        properties:
+          type: object
+          additionalProperties: true

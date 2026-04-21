@@ -1,0 +1,50 @@
+openapi: '3.0.0'
+info:
+  title: Mini Power Apps test fixture
+  version: '1.0.0'
+  description: >-
+    Minimal 3-operation OpenAPI 3.0 spec used by Phase 5.1-03 Power Apps
+    pipeline tests. Exercises the hand-authored-spec code path (specUrl=null),
+    the short-alias round-trip, and the sha1-8 truncation for a 60-char
+    operationId under the __pwrapps__ prefix.
+servers:
+  - url: https://api.powerapps.com/providers/Microsoft.PowerApps
+paths:
+  /apps:
+    get:
+      operationId: list-apps
+      summary: List Power Apps (fixture op for prefix-invariant tests).
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+  /apps/{appName}:
+    get:
+      operationId: get-app
+      summary: Get a Power App (fixture op; under the 64-char cap with prefix).
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+  /very-long-path-for-pwrapps-truncation-test-exercising-sha1-suffix:
+    post:
+      operationId: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      summary: >-
+        60-char operationId; with __pwrapps__ prefix (11 chars) the raw alias
+        would be 71 chars — the pipeline MUST truncate to 64 with an sha1-8
+        suffix.
+      responses:
+        '201':
+          description: Created
