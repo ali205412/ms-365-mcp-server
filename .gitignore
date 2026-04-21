@@ -154,6 +154,7 @@ openapi/*
 !openapi/openapi-powerbi.yaml
 !openapi/openapi-pwrapps.yaml
 !openapi/openapi-pwrauto.yaml
+!openapi/openapi-exo.yaml
 
 src/generated/client.ts
 **/.claude/settings.local.json

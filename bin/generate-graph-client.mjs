@@ -102,7 +102,8 @@ import { PRODUCT_PIPELINES } from './modules/product-registry.mjs';
 import './modules/power-bi.mjs';
 import './modules/power-apps.mjs';
 import './modules/power-automate.mjs';
-// plans 5.1-05, 5.1-06 append further import statements here
+import './modules/exo-admin.mjs';
+// plan 5.1-06 appends the sp-admin import line here
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

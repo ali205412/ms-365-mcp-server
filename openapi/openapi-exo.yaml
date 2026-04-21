@@ -1,0 +1,406 @@
+# Plan 5.1-05 — Exchange Admin REST v2 hand-authored OpenAPI fragment.
+# Source of truth: learn.microsoft.com/en-us/exchange/reference/admin-api-endpoints-reference (VERIFIED 2026-04-20).
+# Surface: 6 endpoints × 10 supported cmdlets (public preview as of 2026-04-20).
+# Prefix at codegen: __exo__
+# Churn policy: STRICT — MS365_MCP_ACCEPT_EXO_CHURN=1 required for ANY delta (add or remove).
+# Body shape: {"CmdletInput":{"CmdletName":"<cmd>","Parameters":{...}}} (NOT native OData).
+# Required header: X-AnchorMailbox on every call (plan 5.1-06 dispatch injects).
+# Base URL varies by cloud (commercial / GCC / GCC High / DoD / China);
+#   spec commits the commercial URL. Plan 5.1-06 extends cloud-config.ts with
+#   exchangeAdminBaseUrl for remaining clouds.
+# Cmdlets NOT in REST v2 are catalogued in .planning/research/GAP-EXCHANGE-ADMIN.md
+#   (~240 cmdlets — future-backlog).
+# Tenant URL substitution: {tenantId} is Zod-validated /^[0-9a-f-]{1,36}$/i at dispatch
+#   (plan 5.1-06). This prevents path-traversal and header injection via tenantId.
+#
+# Change review policy: every edit to this file is reviewed via git diff.
+# STRICT churn — adding OR removing any operationId will fail the next codegen
+# unless MS365_MCP_ACCEPT_EXO_CHURN=1. Rationale: the REST v2 surface is
+# public preview and silent upstream additions can introduce new auth scopes,
+# X-AnchorMailbox rules, or CmdletInput shapes that break existing tools.
+# (T-5.1-05-c mitigation via run-product-pipeline.mjs.)
+
+openapi: '3.0.0'
+info:
+  title: Microsoft Exchange Online Admin REST API (v2)
+  version: beta-2026-04-20
+  description: >-
+    Hand-authored OpenAPI 3.0 fragment covering the 6 publicly-documented
+    Exchange Online REST v2 endpoints supporting 10 cmdlets. No upstream
+    OpenAPI spec exists for this surface as of 2026-04-20; changes are
+    reviewed via git diff and gated by STRICT churn policy
+    (MS365_MCP_ACCEPT_EXO_CHURN=1 required for any alias delta).
+
+servers:
+  - url: https://outlook.office365.com/adminapi/beta/{tenantId}
+    description: >-
+      Commercial / GCC base URL. Tenant ID is Zod-validated
+      /^[0-9a-f-]{1,36}$/i (UUID shape) at dispatch (plan 5.1-06) before
+      substitution. Other cloud-specific base URLs (GCC High, DoD, China)
+      are resolved at dispatch time via cloud-config.ts extension
+      (deferred to plan 5.1-06). This spec's servers: field is
+      documentation-only — runtime dispatch reads the base URL from the
+      product-audiences table in plan 5.1-06, NOT from here.
+    variables:
+      tenantId:
+        default: common
+        description: >-
+          Tenant UUID. Substituted at dispatch (plan 5.1-06). Must match
+          Zod /^[0-9a-f-]{1,36}$/i (UUID shape — rejects path-traversal,
+          header injection, and non-UUID strings).
+
+paths:
+  /OrganizationConfig:
+    get:
+      operationId: get-organization-config
+      summary: Get the Exchange organization configuration.
+      description: >-
+        Returns tenant-wide Exchange Online configuration (Get-OrganizationConfig).
+        Global endpoint — X-AnchorMailbox defaults to system-mailbox constant
+        (APP:SystemMailbox{bb558c35-97f1-4cb9-8ff7-d53741dc928c}@<tenantDomain>)
+        at dispatch. Read-only; no CmdletInput body.
+      parameters:
+        - $ref: '#/components/parameters/XAnchorMailbox'
+        - $ref: '#/components/parameters/Select'
+        - $ref: '#/components/parameters/Filter'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExchangeResponse'
+
+  /AcceptedDomain:
+    get:
+      operationId: get-accepted-domain
+      summary: List or get accepted domains.
+      description: >-
+        Returns accepted domains configured for the tenant (Get-AcceptedDomain).
+        Global endpoint — X-AnchorMailbox defaults to system-mailbox at dispatch.
+        Read-only.
+      parameters:
+        - $ref: '#/components/parameters/XAnchorMailbox'
+        - $ref: '#/components/parameters/Select'
+        - $ref: '#/components/parameters/Filter'
+        - $ref: '#/components/parameters/Top'
+        - $ref: '#/components/parameters/Skip'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExchangeResponse'
+
+  /Mailbox:
+    get:
+      operationId: get-mailbox
+      summary: Get a mailbox or list mailboxes.
+      description: >-
+        Returns mailbox metadata (Get-Mailbox). Mailbox-scoped —
+        X-AnchorMailbox MUST be set to the target mailbox UPN. Supports
+        $select, $filter, $top, $skip for server-side pagination.
+      parameters:
+        - $ref: '#/components/parameters/XAnchorMailbox'
+        - $ref: '#/components/parameters/MailboxIdentifier'
+        - $ref: '#/components/parameters/Select'
+        - $ref: '#/components/parameters/Filter'
+        - $ref: '#/components/parameters/Top'
+        - $ref: '#/components/parameters/Skip'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExchangeResponse'
+    post:
+      operationId: set-mailbox
+      summary: Update a mailbox configuration.
+      description: >-
+        Updates mailbox properties (Set-Mailbox). Mailbox-scoped —
+        X-AnchorMailbox MUST be set to the target mailbox UPN. Body is the
+        CmdletInput envelope with CmdletName=Set-Mailbox; Parameters
+        contains the cmdlet arguments.
+      parameters:
+        - $ref: '#/components/parameters/XAnchorMailbox'
+        - $ref: '#/components/parameters/MailboxIdentifier'
+      requestBody:
+        $ref: '#/components/requestBodies/CmdletInputBody'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExchangeResponse'
+
+  /MailboxFolderPermission:
+    get:
+      operationId: get-mailbox-folder-permission
+      summary: List mailbox folder permissions.
+      description: >-
+        Returns the permission assignments on a mailbox folder
+        (Get-MailboxFolderPermission). Mailbox-scoped — X-AnchorMailbox
+        MUST be set to the target mailbox UPN.
+      parameters:
+        - $ref: '#/components/parameters/XAnchorMailbox'
+        - $ref: '#/components/parameters/MailboxIdentifier'
+        - name: FolderIdentifier
+          in: query
+          required: true
+          schema:
+            type: string
+          description: >-
+            Folder identifier path, e.g., `alice@contoso.com:\Inbox`. The
+            colon-delimited mailbox-prefix is part of the identity shape.
+        - $ref: '#/components/parameters/Select'
+        - $ref: '#/components/parameters/Filter'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExchangeResponse'
+    post:
+      operationId: add-mailbox-folder-permission
+      summary: Add a mailbox folder permission.
+      description: >-
+        Grants a new permission on a mailbox folder
+        (Add-MailboxFolderPermission). Mailbox-scoped — X-AnchorMailbox
+        MUST be set to the target mailbox UPN. Body is the CmdletInput
+        envelope with CmdletName=Add-MailboxFolderPermission.
+      parameters:
+        - $ref: '#/components/parameters/XAnchorMailbox'
+        - $ref: '#/components/parameters/MailboxIdentifier'
+      requestBody:
+        $ref: '#/components/requestBodies/CmdletInputBody'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExchangeResponse'
+    put:
+      operationId: set-mailbox-folder-permission
+      summary: Update a mailbox folder permission.
+      description: >-
+        Changes an existing permission's access level on a mailbox folder
+        (Set-MailboxFolderPermission). Mailbox-scoped — X-AnchorMailbox
+        MUST be set to the target mailbox UPN. Body is the CmdletInput
+        envelope with CmdletName=Set-MailboxFolderPermission.
+      parameters:
+        - $ref: '#/components/parameters/XAnchorMailbox'
+        - $ref: '#/components/parameters/MailboxIdentifier'
+      requestBody:
+        $ref: '#/components/requestBodies/CmdletInputBody'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExchangeResponse'
+    delete:
+      operationId: remove-mailbox-folder-permission
+      summary: Remove a mailbox folder permission.
+      description: >-
+        Revokes a permission on a mailbox folder
+        (Remove-MailboxFolderPermission). Mailbox-scoped — X-AnchorMailbox
+        MUST be set to the target mailbox UPN.
+      parameters:
+        - $ref: '#/components/parameters/XAnchorMailbox'
+        - $ref: '#/components/parameters/MailboxIdentifier'
+        - name: FolderIdentifier
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: User
+          in: query
+          required: true
+          schema:
+            type: string
+          description: UPN of the principal whose permission is being removed.
+      responses:
+        '200':
+          description: OK
+
+  /DistributionGroupMember:
+    get:
+      operationId: get-distribution-group-member
+      summary: List distribution group members.
+      description: >-
+        Returns the members of a distribution group
+        (Get-DistributionGroupMember). Global endpoint —
+        X-AnchorMailbox defaults to system-mailbox at dispatch.
+      parameters:
+        - $ref: '#/components/parameters/XAnchorMailbox'
+        - name: Identity
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Distribution group name, UPN, or GUID.
+        - $ref: '#/components/parameters/Select'
+        - $ref: '#/components/parameters/Filter'
+        - $ref: '#/components/parameters/Top'
+        - $ref: '#/components/parameters/Skip'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExchangeResponse'
+
+  /DynamicDistributionGroupMember:
+    get:
+      operationId: get-dynamic-distribution-group-member
+      summary: List dynamic distribution group members.
+      description: >-
+        Returns the materialised membership of a dynamic distribution
+        group (Get-DynamicDistributionGroupMember). Global endpoint —
+        X-AnchorMailbox defaults to system-mailbox at dispatch. Membership
+        is evaluated server-side at call time.
+      parameters:
+        - $ref: '#/components/parameters/XAnchorMailbox'
+        - name: Identity
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Dynamic distribution group name, UPN, or GUID.
+        - $ref: '#/components/parameters/Select'
+        - $ref: '#/components/parameters/Filter'
+        - $ref: '#/components/parameters/Top'
+        - $ref: '#/components/parameters/Skip'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExchangeResponse'
+
+components:
+  parameters:
+    XAnchorMailbox:
+      name: X-AnchorMailbox
+      in: header
+      required: true
+      schema:
+        type: string
+        pattern: "^(AAD-UPN:.+|APP:SystemMailbox\\{[a-f0-9\\-]+\\}@.+)$"
+      description: >-
+        Mandatory routing header per Microsoft docs. Delegated flows:
+        `AAD-UPN:<caller UPN>`. App-only global endpoints:
+        `APP:SystemMailbox{bb558c35-97f1-4cb9-8ff7-d53741dc928c}@<tenantDomain>`
+        (constant GUID per Microsoft). Dispatch layer (plan 5.1-06)
+        injects based on auth context; tools surface it only for
+        mailbox-scoped overrides.
+
+    MailboxIdentifier:
+      name: mailbox_identifier
+      in: query
+      required: true
+      schema:
+        type: string
+      description: >-
+        Target mailbox UPN (e.g., alice@contoso.com). Also written to the
+        X-AnchorMailbox header at dispatch (plan 5.1-06) as `AAD-UPN:<upn>`.
+
+    Select:
+      name: $select
+      in: query
+      required: false
+      schema:
+        type: string
+      description: OData $select — comma-separated list of properties to return.
+
+    Filter:
+      name: $filter
+      in: query
+      required: false
+      schema:
+        type: string
+      description: OData $filter expression.
+
+    Top:
+      name: $top
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+      description: Max entities per page (Exchange v2 cap 1000).
+
+    Skip:
+      name: $skip
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+      description: OData $skip — number of entities to skip for pagination.
+
+  requestBodies:
+    CmdletInputBody:
+      required: true
+      description: >-
+        Exchange Admin REST v2 envelope. Wraps every POST / PUT body in
+        `{CmdletInput: {CmdletName, Parameters}}`. The CmdletName MUST
+        match the operation's expected cmdlet — plan 5.1-06 dispatch
+        validates this at request time to prevent cmdlet-smuggling
+        (T-5.1-05-e mitigation). The Parameters object is a flat map of
+        cmdlet arguments; per-cmdlet narrowing is deferred to plan 5.1-07
+        preset layer.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [CmdletInput]
+            properties:
+              CmdletInput:
+                type: object
+                required: [CmdletName, Parameters]
+                properties:
+                  CmdletName:
+                    type: string
+                    description: >-
+                      Exchange cmdlet name (e.g., Set-Mailbox). Validated
+                      at dispatch against the operation's expected cmdlet.
+                  Parameters:
+                    type: object
+                    additionalProperties: true
+                    description: >-
+                      Cmdlet parameters as JSON object. Per-cmdlet Zod
+                      narrowing deferred to plan 5.1-07 preset layer.
+
+  schemas:
+    ExchangeResponse:
+      type: object
+      description: >-
+        Exchange REST v2 responses return OData-shaped payloads with a
+        `value` array and `@odata.nextLink` for pagination. The payload
+        shape is cmdlet-specific and deeply nested; schemas are kept
+        loosely typed at codegen and narrowed at the preset layer (plan
+        5.1-07). Note: `@odata.nextLink` has a 5-10min expiry per Pitfall
+        10 — PageIterator (MWARE-04) must eagerly fetch.
+      additionalProperties: true
+      properties:
+        value:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        '@odata.nextLink':
+          type: string
+          description: >-
+            Continuation URL with short (5-10min) expiry. Eagerly
+            consumed by the Phase-2 PageIterator; dispatch layer
+            (plan 5.1-06) carries opaque.

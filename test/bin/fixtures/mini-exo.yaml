@@ -1,0 +1,87 @@
+openapi: '3.0.0'
+info:
+  title: Mini Exchange Admin test fixture
+  version: '1.0.0'
+  description: >-
+    Minimal 3-operation OpenAPI 3.0 spec used by Phase 5.1-05 Exchange
+    Admin pipeline tests. Exercises the hand-authored-spec code path
+    (specUrl=null), the CmdletInput envelope wiring, the X-AnchorMailbox
+    required header, and the sha1-8 truncation for a 60-char operationId
+    under the __exo__ prefix.
+servers:
+  - url: https://outlook.office365.com/adminapi/beta/{tenantId}
+    variables:
+      tenantId:
+        default: common
+paths:
+  /OrganizationConfig:
+    get:
+      operationId: get-organization-config
+      summary: >-
+        Global GET — exercises X-AnchorMailbox required header emission
+        in client.ts.
+      parameters:
+        - $ref: '#/components/parameters/XAnchorMailbox'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+  /Mailbox:
+    post:
+      operationId: set-mailbox
+      summary: >-
+        POST with CmdletInput envelope — exercises the envelope body
+        emission in the generated fragment.
+      parameters:
+        - $ref: '#/components/parameters/XAnchorMailbox'
+      requestBody:
+        $ref: '#/components/requestBodies/CmdletInputBody'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+  /VeryLongPathForExoTruncationTestExercisingSha1Suffix:
+    post:
+      operationId: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      summary: >-
+        60-char operationId; with __exo__ prefix (7 chars) the raw alias
+        would be 67 chars — the pipeline MUST truncate to 64 with an
+        sha1-8 suffix.
+      parameters:
+        - $ref: '#/components/parameters/XAnchorMailbox'
+      responses:
+        '201':
+          description: Created
+components:
+  parameters:
+    XAnchorMailbox:
+      name: X-AnchorMailbox
+      in: header
+      required: true
+      schema:
+        type: string
+        pattern: "^(AAD-UPN:.+|APP:SystemMailbox\\{[a-f0-9\\-]+\\}@.+)$"
+  requestBodies:
+    CmdletInputBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [CmdletInput]
+            properties:
+              CmdletInput:
+                type: object
+                required: [CmdletName, Parameters]
+                properties:
+                  CmdletName:
+                    type: string
+                  Parameters:
+                    type: object
+                    additionalProperties: true
