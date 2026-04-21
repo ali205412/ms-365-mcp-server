@@ -151,9 +151,9 @@ async function startServer(
   reqIp = '10.11.12.13'
 ): Promise<Harness> {
   const app = express();
-  app.use(express.json());
+  app.use(express.json() as unknown as express.RequestHandler);
   app.use((req, _res, next) => {
-    (req as express.Request & { admin?: AdminContext }).admin = admin;
+    (req as unknown as { admin?: AdminContext }).admin = admin;
     (req as express.Request & { id?: string }).id = reqId;
     // Override the read-only `ip` getter for deterministic test coverage
     // without relying on loopback resolution.

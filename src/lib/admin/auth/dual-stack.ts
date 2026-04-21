@@ -52,6 +52,13 @@ export type AdminIdentity = EntraAdminIdentity | ApiKeyAdminIdentity;
 declare module 'express-serve-static-core' {
   interface Request {
     admin?: AdminIdentity;
+    /**
+     * Request correlation id, set by a fronting middleware (pino-http or a
+     * request-id middleware). Admin audit rows include it for cross-service
+     * trace correlation. Optional so handlers fall back to `'unknown'` when
+     * the fronting middleware is absent (stdio mode, test harnesses).
+     */
+    id?: string;
   }
 }
 

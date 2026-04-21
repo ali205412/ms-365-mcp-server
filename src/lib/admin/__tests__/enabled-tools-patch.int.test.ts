@@ -147,7 +147,7 @@ async function startServer(
   tenantPool: TenantPoolStub
 ): Promise<{ url: string; close: () => Promise<void> }> {
   const app = express();
-  app.use(express.json({ limit: '20kb' }));
+  app.use(express.json({ limit: '20kb' }) as unknown as express.RequestHandler);
   app.use(
     (
       err: Error & { type?: string; status?: number },
@@ -168,7 +168,7 @@ async function startServer(
     }
   );
   app.use((req, _res, next) => {
-    (req as express.Request & { admin?: AdminContext }).admin = admin;
+    (req as unknown as { admin?: AdminContext }).admin = admin;
     (req as express.Request & { id?: string }).id = `req-${Math.random()
       .toString(36)
       .slice(2, 10)}`;

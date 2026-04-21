@@ -158,7 +158,7 @@ interface TestServer {
 
 async function startTestServer(pool: Pool, fetchImpl: typeof fetch): Promise<TestServer> {
   const app = express();
-  app.use(express.json());
+  app.use(express.json() as unknown as express.RequestHandler);
 
   // /health BEFORE auth — auth bypass.
   app.get('/admin/health', (_req, res) => {

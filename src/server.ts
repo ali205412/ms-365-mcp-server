@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
-import express, { Request, Response } from 'express';
+import express, { type Request, type Response, type RequestHandler } from 'express';
 import logger, { enableConsoleLogging, rawPinoLogger } from './logger.js';
 import { registerAuthTools } from './auth-tools.js';
 import { registerGraphTools, registerDiscoveryTools } from './graph-tools.js';
@@ -36,7 +36,7 @@ import {
   wrapToolsListHandler,
 } from './lib/tool-selection/tools-list-filter.js';
 import crypto from 'node:crypto';
-import pinoHttp from 'pino-http';
+import { pinoHttp } from 'pino-http';
 import { nanoid } from 'nanoid';
 
 /**
@@ -780,14 +780,19 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
       // Plan 03-07 SECUR-02: persist the refresh token server-side, wrapped
       // with the per-tenant DEK. The response body below carries ONLY the
       // access token + token_type + expires_in — never refresh_token.
-      if (result.refreshToken) {
+      // MSAL's AuthenticationResult type doesn't expose refreshToken (by
+      // design — refresh tokens live in MSAL's cache). At runtime the
+      // authority echoes it back on the acquire call; we narrow via a
+      // local cast rather than pollute the callsite with `as any`.
+      const refreshTokenFromAuthority = (result as { refreshToken?: string }).refreshToken;
+      if (refreshTokenFromAuthority) {
         try {
           const dek = tenantPool.getDekForTenant(tenant.id);
           const { SessionStore } = await import('./lib/session-store.js');
           const sessionStore = new SessionStore(redis, dek);
           await sessionStore.put(tenant.id, result.accessToken, {
             tenantId: tenant.id,
-            refreshToken: result.refreshToken,
+            refreshToken: refreshTokenFromAuthority,
             accountHomeId: result.account?.homeAccountId,
             clientId: tenant.client_id,
             scopes,
@@ -1287,7 +1292,11 @@ class MicrosoftGraphServer {
       });
       app.post(
         '/t/:tenantId/notifications',
-        express.json({ limit: '1mb' }),
+        // body-parser's NextHandleFunction signature predates Express 5's
+        // RequestHandler (IncomingMessage vs. Request). At runtime both
+        // accept the same req/res so the cast is safe; the type mismatch
+        // is a known @types/body-parser gap against @types/express 5.x.
+        express.json({ limit: '1mb' }) as unknown as RequestHandler,
         loadTenant,
         webhookHandler
       );
@@ -1412,8 +1421,13 @@ class MicrosoftGraphServer {
       // below the 60 MiB upload ceiling, so without this raise large-file
       // uploads over HTTP transport would 413 before reaching the tool.
       const bodyParserLimit = process.env.MS365_MCP_BODY_PARSER_LIMIT || '60mb';
-      app.use(express.json({ limit: bodyParserLimit }));
-      app.use(express.urlencoded({ extended: true, limit: bodyParserLimit }));
+      // body-parser's NextHandleFunction predates Express 5's RequestHandler;
+      // the cast bridges the @types gap. See the webhook-receiver mount for
+      // the matching discussion.
+      app.use(express.json({ limit: bodyParserLimit }) as unknown as RequestHandler);
+      app.use(
+        express.urlencoded({ extended: true, limit: bodyParserLimit }) as unknown as RequestHandler
+      );
 
       // Public URL resolution for browser-facing OAuth endpoints.
       //

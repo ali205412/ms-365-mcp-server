@@ -137,9 +137,9 @@ async function startServer(
   admin: AdminContext
 ): Promise<{ url: string; close: () => Promise<void> }> {
   const app = express();
-  app.use(express.json({ limit: '20kb' }));
+  app.use(express.json({ limit: '20kb' }) as unknown as express.RequestHandler);
   app.use((req, _res, next) => {
-    (req as express.Request & { admin?: AdminContext }).admin = admin;
+    (req as unknown as { admin?: AdminContext }).admin = admin;
     (req as express.Request & { id?: string }).id = `req-${Math.random()
       .toString(36)
       .slice(2, 10)}`;
@@ -230,9 +230,9 @@ describe('plan 05-07 Task 2 — invalidation round-trip', () => {
 
     // Track publishes on the tool-selection channel
     const receivedTenantIds: string[] = [];
-    redis.on('message', (channel: string, message: string) => {
+    redis.on('message', ((channel: string, message: string) => {
       if (channel === TOOL_SELECTION_INVALIDATE_CHANNEL) receivedTenantIds.push(message);
-    });
+    }) as (...args: unknown[]) => void);
     await redis.subscribe(TOOL_SELECTION_INVALIDATE_CHANNEL);
 
     const { url, close } = await startServer(pool, redis, {
@@ -310,9 +310,9 @@ describe('plan 05-07 Task 2 — invalidation round-trip', () => {
     const redis = new MemoryRedisFacade();
 
     const receivedTenantIds: string[] = [];
-    redis.on('message', (channel: string, message: string) => {
+    redis.on('message', ((channel: string, message: string) => {
       if (channel === TOOL_SELECTION_INVALIDATE_CHANNEL) receivedTenantIds.push(message);
-    });
+    }) as (...args: unknown[]) => void);
     await redis.subscribe(TOOL_SELECTION_INVALIDATE_CHANNEL);
 
     const { url, close } = await startServer(pool, redis, {
@@ -347,8 +347,8 @@ describe('plan 05-07 Task 2 — invalidation round-trip', () => {
 
   it('I4: publishToolSelectionInvalidation rejects non-GUID sender input', async () => {
     const redis = new MemoryRedisFacade();
-    await expect(
-      publishToolSelectionInvalidation(redis, 'not-a-guid')
-    ).rejects.toThrow(/invalid GUID/);
+    await expect(publishToolSelectionInvalidation(redis, 'not-a-guid')).rejects.toThrow(
+      /invalid GUID/
+    );
   });
 });

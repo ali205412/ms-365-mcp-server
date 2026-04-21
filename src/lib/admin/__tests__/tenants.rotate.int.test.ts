@@ -147,9 +147,9 @@ async function startServer(
   tenantPool: TenantPoolStub
 ): Promise<{ url: string; close: () => Promise<void> }> {
   const app = express();
-  app.use(express.json());
+  app.use(express.json() as unknown as express.RequestHandler);
   app.use((req, _res, next) => {
-    (req as express.Request & { admin?: AdminContext }).admin = admin;
+    (req as unknown as { admin?: AdminContext }).admin = admin;
     (req as express.Request & { id?: string }).id = `req-${Math.random()
       .toString(36)
       .slice(2, 10)}`;
@@ -258,7 +258,7 @@ describe('plan 04-02 Task 2 — /admin/tenants rotate-secret + disable + delete'
     // seed publishes so we can verify invalidation is broadcast
     const publishedTenantIds: string[] = [];
     redis.on('message', (channel, msg) => {
-      if (channel === 'mcp:tenant-invalidate') publishedTenantIds.push(msg);
+      if (channel === 'mcp:tenant-invalidate') publishedTenantIds.push(msg as string);
     });
     await redis.subscribe('mcp:tenant-invalidate');
 
@@ -415,7 +415,7 @@ describe('plan 04-02 Task 2 — /admin/tenants rotate-secret + disable + delete'
 
     const publishedTenantIds: string[] = [];
     redis.on('message', (channel, msg) => {
-      if (channel === 'mcp:tenant-invalidate') publishedTenantIds.push(msg);
+      if (channel === 'mcp:tenant-invalidate') publishedTenantIds.push(msg as string);
     });
     await redis.subscribe('mcp:tenant-invalidate');
 

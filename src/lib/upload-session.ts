@@ -233,15 +233,20 @@ export class UploadSessionHelper {
       const startOffset = offset;
 
       while (true) {
-        const res = await fetch(uploadUrl, {
+        // Node 18+ fetch (undici) accepts Buffer at runtime via the
+        // TypedArray branch of BodyInit; the DOM lib's BodyInit type
+        // doesn't include Buffer directly. Route through an opaque fetch
+        // init to satisfy the compiler without referencing DOM globals.
+        const init = {
           method: 'PUT',
           headers: {
             'Content-Length': String(slice.byteLength),
             'Content-Range': formatContentRange(offset, chunkEnd, totalBytes),
             // NO Authorization header — T-02-06d (uploadUrl is pre-authenticated).
           },
-          body: slice,
-        });
+          body: slice as unknown,
+        } as Parameters<typeof fetch>[1];
+        const res = await fetch(uploadUrl, init);
 
         if (res.status === 201 || res.status === 200) {
           // Final chunk — response is the DriveItem body.

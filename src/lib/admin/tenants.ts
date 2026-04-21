@@ -125,15 +125,11 @@ interface AdminContext {
   tenantScoped: string | null;
 }
 
-// Express 5's IRouterMatcher infers P from the path literal, so a handler
-// typed against `Request` with the default ParamsDictionary mismatches the
-// inferred `{ id: string }` at route-level. `Request<any, any, any, any>`
-// makes the handler match any overload — admin routes do their own Zod
-// validation on params + body + query before use.
-type RequestWithAdmin = Request<any, any, any, any> & {
-  admin?: AdminContext;
-  id?: string;
-};
+// Express 5's IRouterMatcher infers P from the path literal. Using
+// `Request<any, any, any, any>` sidesteps the overload mismatch for custom
+// handler signatures; admin.* and req.id are declaration-merged globally in
+// src/lib/admin/auth/dual-stack.ts, so RequestWithAdmin stays a thin alias.
+type RequestWithAdmin = Request<any, any, any, any>;
 
 // ── Constants ───────────────────────────────────────────────────────────────
 

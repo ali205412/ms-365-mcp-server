@@ -135,9 +135,9 @@ async function startServer(
   admin: AdminContext
 ): Promise<{ url: string; close: () => Promise<void> }> {
   const app = express();
-  app.use(express.json({ limit: '20kb' }));
+  app.use(express.json({ limit: '20kb' }) as unknown as express.RequestHandler);
   app.use((req, _res, next) => {
-    (req as express.Request & { admin?: AdminContext }).admin = admin;
+    (req as unknown as { admin?: AdminContext }).admin = admin;
     (req as express.Request & { id?: string }).id = `req-${Math.random()
       .toString(36)
       .slice(2, 10)}`;

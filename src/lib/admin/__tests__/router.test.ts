@@ -21,7 +21,7 @@
  */
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import type { Pool } from 'pg';
-import type { Request, Response, NextFunction } from 'express';
+import type { Request, Response, NextFunction, RequestHandler } from 'express';
 
 const { loggerMock } = vi.hoisted(() => ({
   loggerMock: {
@@ -60,7 +60,12 @@ interface CapturedResponse {
 }
 
 function runMiddleware(
-  middleware: (req: Request, res: Response, next: NextFunction) => void | Promise<void>,
+  // Accept both the narrow test-local signature (returns void|Promise<void>)
+  // and Express 5's RequestHandler (returns unknown). At runtime both resolve
+  // to the same call, but the types diverged with @types/express 5.x.
+  middleware:
+    | ((req: Request, res: Response, next: NextFunction) => void | Promise<void>)
+    | RequestHandler,
   opts: {
     method?: string;
     secure?: boolean;
@@ -79,13 +84,14 @@ function runMiddleware(
     headers: {},
   };
 
+  const headers: Record<string, string> = opts.headers ?? {};
   const req = {
     method: opts.method ?? 'GET',
     secure: opts.secure ?? false,
-    headers: opts.headers ?? {},
+    headers,
     path: opts.path ?? '/tenants',
-    get(name: string) {
-      return this.headers[name.toLowerCase()];
+    get(name: string): string | undefined {
+      return headers[name.toLowerCase()];
     },
   } as unknown as Request;
 

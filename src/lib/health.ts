@@ -76,19 +76,19 @@ export type ReadinessCheck = () => boolean | Promise<boolean>;
  *   pushes a Postgres/Redis check; Phase 6 pushes tenantLoaded.
  */
 export function mountHealth(
-  app: Application | Router,
+  app: Pick<Router, 'get'>,
   readinessChecks: ReadinessCheck[] = []
 ): void {
   // Liveness — always 200 while the process is alive and the event loop can
   // dispatch. Orchestrator restart decisions are made off this response.
-  app.get('/healthz', (_req: Request, res: Response): void => {
+  app.get('/healthz', (_req: Request<any, any, any, any>, res: Response): void => {
     res.status(200).json({ status: 'ok' });
   });
 
   // Readiness — 503 while draining OR when any pushed readiness check fails.
   // Load balancers use this to decide whether to route traffic; returning
   // 200 while draining would cause requests to be aborted mid-flight.
-  app.get('/readyz', async (_req: Request, res: Response): Promise<void> => {
+  app.get('/readyz', async (_req: Request<any, any, any, any>, res: Response): Promise<void> => {
     if (draining) {
       res.status(503).json({ status: 'draining' });
       return;

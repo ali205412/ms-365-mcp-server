@@ -32,7 +32,11 @@
  * Test 11 in auth-entra.test.ts asserts this by grepping the captured log
  * frames for the token substring.
  */
-import type { Request, Response, NextFunction, RequestHandler } from 'express';
+import type { Request, Response as ExpressResponse, NextFunction, RequestHandler } from 'express';
+
+// Alias for the fetch-API Response (whatwg-fetch / undici). Distinct from
+// Express's Response to avoid name collision inside this file's Graph probe.
+type FetchResponse = Awaited<ReturnType<typeof fetch>>;
 import { decodeJwt, type JWTPayload } from 'jose';
 import { LRUCache } from 'lru-cache';
 import { problemUnauthorized, problemForbidden } from '../problem-json.js';
@@ -217,7 +221,7 @@ export async function verifyEntraAdmin(
   const graphBase = deps.entraConfig.graphBase ?? DEFAULT_GRAPH_BASE;
   const fetchImpl = deps.fetchImpl ?? fetch;
 
-  let response: Response;
+  let response: FetchResponse;
   try {
     response = (await fetchImpl(`${graphBase}/me/memberOf`, {
       method: 'GET',
@@ -225,7 +229,7 @@ export async function verifyEntraAdmin(
         Authorization: `Bearer ${token}`,
         Accept: 'application/json',
       },
-    })) as unknown as Response;
+    })) as FetchResponse;
   } catch (err) {
     // Network failure — fail-closed.
     logger.warn(
@@ -289,7 +293,7 @@ export async function verifyEntraAdmin(
  * RFC 7231 semantics and the dual-stack plan's D-14 specification.
  */
 export function createAdminEntraMiddleware(deps: EntraMiddlewareDeps): RequestHandler {
-  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  return async (req: Request, res: ExpressResponse, next: NextFunction): Promise<void> => {
     const authz = req.headers.authorization;
     if (!authz?.startsWith('Bearer ')) {
       // No Bearer — not our strategy. Chain to the next middleware (api-key).

@@ -35,10 +35,7 @@ vi.mock('../../../logger.js', () => ({
   enableConsoleLogging: vi.fn(),
 }));
 
-import {
-  startRenewalCron,
-  stopRenewalCron,
-} from '../subscriptions.js';
+import { startRenewalCron, stopRenewalCron } from '../subscriptions.js';
 import { encryptWithKey, generateDek } from '../../crypto/envelope.js';
 import { GraphAuthError, GraphServerError } from '../../graph-errors.js';
 
@@ -74,11 +71,7 @@ async function makePool(): Promise<Pool> {
   return pool;
 }
 
-async function seedTenant(
-  pool: Pool,
-  id: string,
-  opts: { disabledAt?: Date } = {}
-): Promise<void> {
+async function seedTenant(pool: Pool, id: string, opts: { disabledAt?: Date } = {}): Promise<void> {
   const placeholderEnvelope = {
     v: 1,
     iv: 'aaaaaaaaaaaaaaaa',
@@ -141,9 +134,7 @@ function makeGraphClientStub(
   handler: (endpoint: string, options: unknown) => unknown
 ): GraphClientStub {
   return {
-    makeRequest: vi.fn(async (endpoint: string, options: unknown) =>
-      handler(endpoint, options)
-    ),
+    makeRequest: vi.fn(async (endpoint: string, options: unknown) => handler(endpoint, options)),
   };
 }
 
@@ -475,9 +466,12 @@ describe('plan 04-08 Task 3 — renewal cron', () => {
     const expSoon = new Date(Date.now() + 30 * 60_000);
     await seedSubscriptionWithExpiry(pool, TENANT_A, dek, 'cron-lock', expSoon);
 
-    let resolveHang: (() => void) | null = null;
+    // Typed through a wrapping object so TS preserves the function-value
+    // narrowing across the Promise closure boundary. Without the wrapper,
+    // strict mode narrows `resolveHang` to `never` after the closure write.
+    const resolver: { fn: (() => void) | null } = { fn: null };
     const hangPromise = new Promise<void>((r) => {
-      resolveHang = r;
+      resolver.fn = r;
     });
     let callCount = 0;
 
@@ -512,7 +506,7 @@ describe('plan 04-08 Task 3 — renewal cron', () => {
     // the next tick from re-entering the loop until the first finishes.
     expect(callCount).toBe(1);
 
-    resolveHang?.();
+    resolver.fn?.();
     await stopRenewalCron(handle);
   });
 
@@ -521,13 +515,7 @@ describe('plan 04-08 Task 3 — renewal cron', () => {
     await seedTenant(pool, TENANT_A);
     const dek = generateDek();
     const expSoon = new Date(Date.now() + 30 * 60_000);
-    const localId = await seedSubscriptionWithExpiry(
-      pool,
-      TENANT_A,
-      dek,
-      'cron-meta',
-      expSoon
-    );
+    const localId = await seedSubscriptionWithExpiry(pool, TENANT_A, dek, 'cron-meta', expSoon);
 
     const graphClient = makeGraphClientStub((endpoint, options) => {
       const opts = options as { method: string };

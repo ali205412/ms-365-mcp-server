@@ -86,7 +86,11 @@ interface AdminContext {
   tenantScoped: string | null;
 }
 
-type RequestWithAdmin = Request & { admin?: AdminContext; id?: string };
+// Express 5's IRouterMatcher infers P from the path literal. Using
+// `Request<any, any, any, any>` sidesteps the overload mismatch for custom
+// handler signatures; admin.* and req.id are declaration-merged globally in
+// src/lib/admin/auth/dual-stack.ts, so RequestWithAdmin stays a thin alias.
+type RequestWithAdmin = Request<any, any, any, any>;
 
 /**
  * RBAC decision: true iff `admin` is allowed to act on `tenantId`. Global

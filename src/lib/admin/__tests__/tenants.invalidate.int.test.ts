@@ -137,9 +137,9 @@ async function startReplicaA(
   tenantPool: TenantPoolStub
 ): Promise<{ url: string; close: () => Promise<void> }> {
   const app = express();
-  app.use(express.json());
+  app.use(express.json() as unknown as express.RequestHandler);
   app.use((req, _res, next) => {
-    (req as express.Request & { admin?: AdminContext }).admin = {
+    (req as unknown as { admin?: AdminContext }).admin = {
       actor: 'admin@example.com',
       source: 'entra',
       tenantScoped: null,
@@ -202,7 +202,7 @@ async function startReplicaB(redis: MemoryRedisFacade): Promise<ReplicaB> {
 
   // Also collect raw messages for assertions on publish count.
   redis.on('message', (channel, msg) => {
-    if (channel === TENANT_INVALIDATE_CHANNEL) messages.push(msg);
+    if (channel === TENANT_INVALIDATE_CHANNEL) messages.push(msg as string);
   });
 
   return { lruCache, tenantPool, messages };

@@ -146,7 +146,7 @@ async function startServer(
   ipGetter: (req: express.Request) => string
 ): Promise<{ url: string; close: () => Promise<void> }> {
   const app = express();
-  app.use(express.json({ limit: '1mb' }));
+  app.use(express.json({ limit: '1mb' }) as unknown as express.RequestHandler);
   app.use((req, _res, next) => {
     (req as express.Request & { id?: string }).id = `req-${Math.random().toString(36).slice(2, 10)}`;
     Object.defineProperty(req, 'ip', { value: ipGetter(req), configurable: true });

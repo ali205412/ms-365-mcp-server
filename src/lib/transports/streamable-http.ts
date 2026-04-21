@@ -61,8 +61,15 @@ export function createStreamableHttpHandler(deps: StreamableHttpDeps): RequestHa
     try {
       await server.connect(transport);
       // req.body is pre-parsed by express.json() upstream; pass it through so
-      // the SDK does not re-read the request stream.
-      await transport.handleRequest(req, res, req.body);
+      // the SDK does not re-read the request stream. The SDK types the incoming
+      // request as `IncomingMessage & { auth?: AuthInfo }` (MCP auth extension);
+      // Express's Request extends IncomingMessage, so the cast is structurally
+      // safe — we just don't populate `auth` (this transport is per-tenant).
+      await transport.handleRequest(
+        req as unknown as Parameters<typeof transport.handleRequest>[0],
+        res as unknown as Parameters<typeof transport.handleRequest>[1],
+        req.body
+      );
     } catch (err) {
       logger.error(
         { err: (err as Error).message, tenantId: tenant.id },

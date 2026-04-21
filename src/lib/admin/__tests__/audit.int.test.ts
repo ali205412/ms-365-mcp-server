@@ -140,9 +140,9 @@ async function startServer(
   cursorSecret = createCursorSecret()
 ): Promise<{ url: string; cursorSecret: Buffer; close: () => Promise<void> }> {
   const app = express();
-  app.use(express.json());
+  app.use(express.json() as unknown as express.RequestHandler);
   app.use((req, _res, next) => {
-    (req as express.Request & { admin?: AdminContext }).admin = admin;
+    (req as unknown as { admin?: AdminContext }).admin = admin;
     (req as express.Request & { id?: string }).id = `req-${Math.random()
       .toString(36)
       .slice(2, 10)}`;

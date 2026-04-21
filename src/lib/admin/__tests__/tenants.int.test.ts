@@ -135,9 +135,9 @@ async function startServer(
   tenantPool: TenantPoolStub
 ): Promise<{ url: string; close: () => Promise<void> }> {
   const app = express();
-  app.use(express.json());
+  app.use(express.json() as unknown as express.RequestHandler);
   app.use((req, _res, next) => {
-    (req as express.Request & { admin?: AdminContext }).admin = admin;
+    (req as unknown as { admin?: AdminContext }).admin = admin;
     (req as express.Request & { id?: string }).id = `req-${Math.random()
       .toString(36)
       .slice(2, 10)}`;
@@ -748,9 +748,9 @@ describe('plan 04-02 Task 1 — /admin/tenants CRUD', () => {
 
     // Track invalidation publishes
     const publishedTenantIds: string[] = [];
-    redis.on('message', (channel: string, message: string) => {
+    redis.on('message', ((channel: string, message: string) => {
       if (channel === 'mcp:tenant-invalidate') publishedTenantIds.push(message);
-    });
+    }) as (...args: unknown[]) => void);
     await redis.subscribe('mcp:tenant-invalidate');
 
     const { url, close } = await startServer(

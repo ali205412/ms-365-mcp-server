@@ -243,10 +243,7 @@ export async function subscriptionsCreate(
   if (!dek) {
     throw new Error(`subscriptions-create: tenant DEK unavailable for ${tenantId}`);
   }
-  const clientStateEnvelope: Envelope = encryptWithKey(
-    Buffer.from(clientStatePlain, 'utf8'),
-    dek
-  );
+  const clientStateEnvelope: Envelope = encryptWithKey(Buffer.from(clientStatePlain, 'utf8'), dek);
 
   const minutes = pickExpirationMinutes(
     validated.resource,
@@ -334,9 +331,7 @@ export async function subscriptionsRenew(
     [tenantId, validated.graphSubscriptionId]
   );
   if (rows.length === 0) {
-    throw new Error(
-      `subscriptions-renew: no local row for ${validated.graphSubscriptionId}`
-    );
+    throw new Error(`subscriptions-renew: no local row for ${validated.graphSubscriptionId}`);
   }
   const existing = rows[0]!;
 
@@ -426,10 +421,9 @@ export async function subscriptionsDelete(
   const validated = DeleteParamsZod.parse(params);
 
   try {
-    await deps.graphClient.makeRequest(
-      `/subscriptions/${validated.graphSubscriptionId}`,
-      { method: 'DELETE' }
-    );
+    await deps.graphClient.makeRequest(`/subscriptions/${validated.graphSubscriptionId}`, {
+      method: 'DELETE',
+    });
   } catch (err) {
     if (err instanceof GraphError && err.statusCode === 404) {
       logger.info(
@@ -595,7 +589,7 @@ export function registerSubscriptionTools(
     'subscriptions-list',
     'List all Microsoft Graph subscriptions for this tenant. Response rows ' +
       'NEVER include client_state (T-04-20 mitigation).',
-    {} as never,
+    {},
     {
       title: 'subscriptions-list',
       readOnlyHint: true,
@@ -604,11 +598,9 @@ export function registerSubscriptionTools(
     async () => {
       try {
         const tenantId = deps.tenantIdResolver();
-        const rows = await subscriptionsList(
-          tenantId,
-          {} as Record<string, never>,
-          { pgPool: deps.pgPool }
-        );
+        const rows = await subscriptionsList(tenantId, {} as Record<string, never>, {
+          pgPool: deps.pgPool,
+        });
         return textContent(rows);
       } catch (err) {
         return errorContent(err);
@@ -738,8 +730,7 @@ export function startRenewalCron(
             meta: {
               subscription_id: row.id,
               error_code: err instanceof GraphError ? err.code : 'unknown',
-              graph_request_id:
-                err instanceof GraphError ? (err.requestId ?? null) : null,
+              graph_request_id: err instanceof GraphError ? (err.requestId ?? null) : null,
             },
           });
         }
@@ -751,10 +742,7 @@ export function startRenewalCron(
 
   const timer = setInterval(() => {
     currentRun = renewLoop().catch((err) => {
-      logger.error(
-        { err: (err as Error).message },
-        'renewLoop outer failure'
-      );
+      logger.error({ err: (err as Error).message }, 'renewLoop outer failure');
     });
   }, intervalMs);
   (timer as unknown as TimerHandle).unref();

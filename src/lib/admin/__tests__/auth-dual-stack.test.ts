@@ -265,7 +265,6 @@ describe('plan 04-04 Task 2 — verifyApiKeyHeader + createAdminApiKeyMiddleware
     const mw = createAdminApiKeyMiddleware({
       pgPool: pool,
       redis: new MemoryRedisFacade(),
-      entraConfig: DEFAULT_ENTRA_CONFIG,
     });
 
     const { req, res, next, captured } = makeReqRes({});
@@ -285,7 +284,6 @@ describe('plan 04-04 Task 2 — verifyApiKeyHeader + createAdminApiKeyMiddleware
     const mw = createAdminApiKeyMiddleware({
       pgPool: pool,
       redis: new MemoryRedisFacade(),
-      entraConfig: DEFAULT_ENTRA_CONFIG,
     });
 
     const { req, res, next, captured } = makeReqRes({ 'x-admin-api-key': VALID_PLAINTEXT });
@@ -308,7 +306,6 @@ describe('plan 04-04 Task 2 — verifyApiKeyHeader + createAdminApiKeyMiddleware
     const mw = createAdminApiKeyMiddleware({
       pgPool: pool,
       redis: new MemoryRedisFacade(),
-      entraConfig: DEFAULT_ENTRA_CONFIG,
     });
 
     const { req, res, next, captured } = makeReqRes({ 'x-admin-api-key': VALID_PLAINTEXT });
