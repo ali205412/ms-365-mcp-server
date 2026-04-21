@@ -1,0 +1,33 @@
+{
+  "version": "exo-essentials",
+  "generated_at": "2026-04-21T00:00:00Z",
+  "_comment": "Plan 05.1-07. Flagship Exchange Online (REST v2) read-first admin ops. 8 aliases selected from the 10-op __exo__ catalog produced by plan 05.1-05. Set-Mailbox is included because it is the flagship write op (Microsoft's own REST v2 docs lead with it).",
+  "product": "exo",
+  "prefix": "__exo__",
+  "sections": {
+    "tenant_config": 2,
+    "mailboxes": 2,
+    "mailbox_folder_permissions": 2,
+    "distribution_groups": 2
+  },
+  "rationale": {
+    "__exo__get-organization-config": "Tenant-wide Exchange Online configuration read; baseline grounding for any admin flow (domain + retention + mail flow defaults).",
+    "__exo__get-accepted-domain": "Accepted-domain enumeration; prerequisite for mail-flow / connector / recipient governance.",
+    "__exo__get-mailbox": "Single-mailbox read; the most-used Exchange cmdlet (Get-Mailbox). Included even though Set-Mailbox is the flagship write.",
+    "__exo__set-mailbox": "Single-mailbox update; REST v2's flagship write op. Kept in essentials because mailbox attribute edits are the dominant admin workflow.",
+    "__exo__get-mailbox-folder-permission": "Folder-permission read (e.g., Shared Calendar ACLs); frequent ask for delegation audit.",
+    "__exo__add-mailbox-folder-permission": "Folder-permission grant; companion write op to Get-MailboxFolderPermission for typical delegate-setup workflows.",
+    "__exo__get-distribution-group-member": "Distribution-list membership enumeration; required for DL audit / governance.",
+    "__exo__get-dynamic-distribution-group-member": "Dynamic-DL member preview (filter expansion); required for dynamic-DL governance and validation of recipient filters."
+  },
+  "ops": [
+    "__exo__get-organization-config",
+    "__exo__get-accepted-domain",
+    "__exo__get-mailbox",
+    "__exo__set-mailbox",
+    "__exo__get-mailbox-folder-permission",
+    "__exo__add-mailbox-folder-permission",
+    "__exo__get-distribution-group-member",
+    "__exo__get-dynamic-distribution-group-member"
+  ]
+}

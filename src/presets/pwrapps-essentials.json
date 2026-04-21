@@ -1,0 +1,38 @@
+{
+  "version": "pwrapps-essentials",
+  "generated_at": "2026-04-21T00:00:00Z",
+  "_comment": "Plan 05.1-07. Flagship Power Apps read-first admin ops. 10 aliases selected from the 19-op __pwrapps__ catalog produced by plan 05.1-03.",
+  "product": "pwrapps",
+  "prefix": "__pwrapps__",
+  "sections": {
+    "apps": 3,
+    "environments": 2,
+    "connections": 2,
+    "connectors": 1,
+    "licenses_users": 2
+  },
+  "rationale": {
+    "__pwrapps__list-apps": "Tenant-scoped app inventory; entry point to every Power Apps admin workflow.",
+    "__pwrapps__get-app": "Single-app manifest read; required before any edit/publish/share follow-up.",
+    "__pwrapps__list-app-environments": "Cross-environment app distribution view; grounding call for migration / governance flows.",
+    "__pwrapps__list-environments": "Tenant-wide environment enumeration; prerequisite for all environment-scoped ops.",
+    "__pwrapps__get-environment": "Single-environment read; paired with list-environments for drill-down governance.",
+    "__pwrapps__list-connections": "Per-environment connection inventory; surfaces tenant's integration footprint.",
+    "__pwrapps__get-connection": "Single-connection read for audit of credentials/scopes per connector.",
+    "__pwrapps__list-connectors": "Per-environment connector catalog (custom + standard); compliance surface for connector governance.",
+    "__pwrapps__list-licenses": "Per-environment license enumeration; prerequisite for capacity / cost-governance flows.",
+    "__pwrapps__list-users": "Per-environment user enumeration; identity surface for RBAC and audit flows."
+  },
+  "ops": [
+    "__pwrapps__list-apps",
+    "__pwrapps__get-app",
+    "__pwrapps__list-app-environments",
+    "__pwrapps__list-environments",
+    "__pwrapps__get-environment",
+    "__pwrapps__list-connections",
+    "__pwrapps__get-connection",
+    "__pwrapps__list-connectors",
+    "__pwrapps__list-licenses",
+    "__pwrapps__list-users"
+  ]
+}

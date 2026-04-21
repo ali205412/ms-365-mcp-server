@@ -1,0 +1,42 @@
+{
+  "version": "sp-admin-essentials",
+  "generated_at": "2026-04-21T00:00:00Z",
+  "_comment": "Plan 05.1-07. Flagship SharePoint Tenant Admin read-first ops. 12 aliases selected from the 15-op __spadmin__ catalog produced by plan 05.1-06. Note: product enum is 'sp-admin' (dashed), alias prefix is '__spadmin__' (no dash) — VALID_PREFIX_RE in run-product-pipeline.mjs forbids dashes in prefix literals.",
+  "product": "sp-admin",
+  "prefix": "__spadmin__",
+  "sections": {
+    "sites": 3,
+    "tenant_settings": 3,
+    "external_sharing": 2,
+    "site_admins": 2,
+    "storage": 2
+  },
+  "rationale": {
+    "__spadmin__list-sites": "Tenant-wide site-collection enumeration; entry point for any SharePoint admin workflow.",
+    "__spadmin__get-site": "Single-site-collection read; grounding call before any write / permission edit.",
+    "__spadmin__set-site": "Single-site-collection property update; flagship write for tenant-admin workflows (lock state, owner, etc.).",
+    "__spadmin__get-tenant-info": "Tenant-level metadata read; required for any tenant-wide governance flow.",
+    "__spadmin__get-tenant-settings": "Tenant-wide settings read (sharing, access controls, retention defaults); baseline for governance audits.",
+    "__spadmin__set-tenant-settings": "Tenant-wide settings update; kept because the most-requested admin action is toggling tenant-level sharing / access controls.",
+    "__spadmin__list-external-users": "External-user enumeration; compliance surface for guest-access audits.",
+    "__spadmin__set-sharing-capability": "Per-site sharing-capability toggle; frequent admin action around governance boundaries.",
+    "__spadmin__list-site-collection-admins": "Per-site admin enumeration; required for RBAC / audit flows.",
+    "__spadmin__add-site-collection-admin": "Site-admin grant; companion write to list-site-collection-admins for typical provisioning flows.",
+    "__spadmin__get-site-storage-used": "Per-site storage-usage read; required for quota / capacity governance flows.",
+    "__spadmin__set-site-storage-quota": "Per-site quota update; kept because storage ceiling enforcement is a recurring admin ask."
+  },
+  "ops": [
+    "__spadmin__list-sites",
+    "__spadmin__get-site",
+    "__spadmin__set-site",
+    "__spadmin__get-tenant-info",
+    "__spadmin__get-tenant-settings",
+    "__spadmin__set-tenant-settings",
+    "__spadmin__list-external-users",
+    "__spadmin__set-sharing-capability",
+    "__spadmin__list-site-collection-admins",
+    "__spadmin__add-site-collection-admin",
+    "__spadmin__get-site-storage-used",
+    "__spadmin__set-site-storage-quota"
+  ]
+}
