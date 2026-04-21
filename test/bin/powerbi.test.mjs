@@ -330,32 +330,39 @@ describe('plan 05.1-02 — Power BI generator (Task 1 + 2)', () => {
   });
 
   it('Test 9: importing bin/modules/power-bi.mjs registers exactly one entry in PRODUCT_PIPELINES', async () => {
-    // Module-under-test + orchestrator. Fresh import via resetModules keeps this
-    // test independent of Test 10's idempotency assertion.
+    // The orchestrator imports `./modules/power-bi.mjs` for its side effect,
+    // so by the time we can observe `PRODUCT_PIPELINES`, the Power BI entry
+    // is already present. Assert the observable contract: exactly one entry
+    // with name 'powerbi' and a callable `run` function.
     vi.resetModules();
-    const orchestrator = await import('../../bin/generate-graph-client.mjs');
-    // Before the side-effect import, there is NO powerbi entry.
-    expect(orchestrator.PRODUCT_PIPELINES.some((p) => p.name === 'powerbi')).toBe(false);
-
+    // Import the leaf registry directly — same binding the orchestrator re-exports.
+    const { PRODUCT_PIPELINES } = await import('../../bin/modules/product-registry.mjs');
     await import('../../bin/modules/power-bi.mjs');
 
-    const powerbiEntries = orchestrator.PRODUCT_PIPELINES.filter((p) => p.name === 'powerbi');
+    const powerbiEntries = PRODUCT_PIPELINES.filter((p) => p.name === 'powerbi');
     expect(powerbiEntries).toHaveLength(1);
     expect(typeof powerbiEntries[0].run).toBe('function');
+
+    // Also reachable via the orchestrator's re-export (backwards compat).
+    const orchestrator = await import('../../bin/generate-graph-client.mjs');
+    expect(orchestrator.PRODUCT_PIPELINES).toBe(PRODUCT_PIPELINES);
   });
 
   // ─── Task 2 tests ───────────────────────────────────────────────────────────
 
   it('Test 10: double-importing power-bi.mjs does NOT double-register (idempotent)', async () => {
     vi.resetModules();
-    const orchestrator = await import('../../bin/generate-graph-client.mjs');
-    expect(orchestrator.PRODUCT_PIPELINES.some((p) => p.name === 'powerbi')).toBe(false);
+    const { PRODUCT_PIPELINES } = await import('../../bin/modules/product-registry.mjs');
 
+    // Three imports in sequence; ESM module cache should only initialise once,
+    // but even if a test runner thwarts the cache (vi.resetModules between calls),
+    // the module's `.some(entry => entry.name === 'powerbi')` guard must keep
+    // the registry at exactly 1 entry.
     await import('../../bin/modules/power-bi.mjs');
     await import('../../bin/modules/power-bi.mjs');
     await import('../../bin/modules/power-bi.mjs');
 
-    const powerbiEntries = orchestrator.PRODUCT_PIPELINES.filter((p) => p.name === 'powerbi');
+    const powerbiEntries = PRODUCT_PIPELINES.filter((p) => p.name === 'powerbi');
     expect(powerbiEntries).toHaveLength(1);
   });
 
