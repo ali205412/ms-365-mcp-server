@@ -153,6 +153,7 @@ openapi/*
 # Phase 5.1: pin per-product specs so MS365_MCP_USE_SNAPSHOT=1 works offline.
 !openapi/openapi-powerbi.yaml
 !openapi/openapi-pwrapps.yaml
+!openapi/openapi-pwrauto.yaml
 
 src/generated/client.ts
 **/.claude/settings.local.json

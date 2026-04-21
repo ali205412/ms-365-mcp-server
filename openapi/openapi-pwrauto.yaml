@@ -1,0 +1,686 @@
+# Plan 5.1-04 — Power Automate (Flow) hand-authored OpenAPI fragment.
+# No publicly-downloadable upstream spec exists (verified 2026-04-20).
+# Source of op selection: learn.microsoft.com/en-us/power-automate/manage-flows-with-code
+# Prefix at codegen: __pwrauto__
+# Churn policy: permissive (MS365_MCP_ACCEPT_PWRAUTO_CHURN=1 accepts removals).
+# Flow DSL escape hatch: `definition`, `connectionReferences` are typed
+#   as open objects (z.record(z.any())) — the workflow DSL is a recursive
+#   expression language that Zod cannot schematize cleanly.
+#
+# Base URL note: the `servers:` entry is documentation-only. Runtime dispatch
+# (plan 5.1-06) reads the base URL from PRODUCT_AUDIENCES.get('pwrauto').baseUrl,
+# NOT from this spec's servers: field — so a rogue edit to `servers:` cannot
+# redirect live traffic (T-5.1-04 mitigation).
+#
+# Audience scope note: paths route through `service.flow.microsoft.com`
+# (canonical management plane) but `api.flow.microsoft.com` is the
+# alternate regional host; this duality is resolved at dispatch (plan 5.1-06).
+#
+# Change review policy: every edit to this file is reviewed via git diff.
+# Removing a previously-emitted operationId will fail the next codegen unless
+# MS365_MCP_ACCEPT_PWRAUTO_CHURN=1 (T-5.1-04-c mitigation via run-product-pipeline.mjs).
+
+openapi: '3.0.0'
+info:
+  title: Microsoft Power Automate Flow Management API (hand-authored subset)
+  version: 2016-11-01
+  description: >-
+    Hand-authored OpenAPI 3.0 fragment for Microsoft Power Automate (Flow)
+    management operations. Covers 20 flagship ops drawn from
+    learn.microsoft.com/en-us/power-automate/manage-flows-with-code and the
+    community reference at ashiqf.com/2021/05/09. No publicly-downloadable
+    upstream spec exists as of 2026-04-20. Flow `definition` and
+    `connectionReferences` fields are typed as open objects because the
+    Flow DSL is a recursive expression language (Microsoft Logic Apps DSL).
+    Changes require manual edit plus MS365_MCP_ACCEPT_PWRAUTO_CHURN=1 on
+    first run when operations are removed.
+
+servers:
+  - url: https://service.flow.microsoft.com/providers/Microsoft.ProcessSimple
+    description: >-
+      Documentation-only; runtime dispatch reads the base URL from the
+      product-audiences table in plan 5.1-06. Spec edits here CANNOT redirect
+      live traffic (T-5.1-04 mitigation).
+
+paths:
+  /environments/{envId}/flows:
+    get:
+      operationId: list-flows
+      summary: List Flows in a Power Platform environment.
+      description: Returns the set of Flows visible to the caller in the named environment.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2016-11-01'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  value:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Flow'
+
+  /environments/{envId}/flows/{flowId}:
+    get:
+      operationId: get-flow
+      summary: Get a single Flow by ID.
+      description: Returns the full Flow definition including its DSL body.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: flowId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2016-11-01'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Flow'
+    delete:
+      operationId: delete-flow
+      summary: Delete a Flow.
+      description: Permanently removes the named Flow from the environment.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: flowId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2016-11-01'
+      responses:
+        '204':
+          description: No Content
+
+  /environments/{envId}/flows/{flowId}/triggers/manual/run:
+    post:
+      operationId: trigger-flow
+      summary: Manually trigger a Flow run.
+      description: >-
+        Invokes the Flow's manual trigger with an opaque Flow DSL JSON body.
+        The request body is passed through to Microsoft's Flow runtime
+        unchanged — this gateway does NOT validate Flow DSL semantics.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: flowId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2016-11-01'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: >-
+                Flow DSL input payload. Opaque per design; shape is defined by
+                the Flow's own manual-trigger schema, which is tenant-specific.
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /environments/{envId}/flows/{flowId}/runs:
+    get:
+      operationId: list-flow-runs
+      summary: List recent runs of a Flow.
+      description: Returns the execution history (runs) for the named Flow.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: flowId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2016-11-01'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /environments/{envId}/flows/{flowId}/runs/{runId}:
+    get:
+      operationId: get-flow-run
+      summary: Get a single Flow run by ID.
+      description: Returns the named run's status, inputs, outputs, and trigger metadata.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: flowId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2016-11-01'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /environments/{envId}/flows/{flowId}/runs/{runId}/cancel:
+    post:
+      operationId: cancel-flow-run
+      summary: Cancel a running Flow execution.
+      description: Requests cancellation of the named run; completion is asynchronous.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: flowId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2016-11-01'
+      responses:
+        '202':
+          description: Accepted
+
+  /environments/{envId}/flows/{flowId}/runs/{runId}/resubmit:
+    post:
+      operationId: resubmit-flow-run
+      summary: Re-submit a previously-completed Flow run.
+      description: Re-issues the named run against Microsoft's Flow runtime.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: flowId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2016-11-01'
+      responses:
+        '202':
+          description: Accepted
+
+  /environments/{envId}/flows/{flowId}/start:
+    post:
+      operationId: enable-flow
+      summary: Enable (start) a previously-disabled Flow.
+      description: Transitions the named Flow from Stopped to Started state.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: flowId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2016-11-01'
+      responses:
+        '200':
+          description: OK
+
+  /environments/{envId}/flows/{flowId}/stop:
+    post:
+      operationId: disable-flow
+      summary: Disable (stop) a running Flow.
+      description: Transitions the named Flow from Started to Stopped state.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: flowId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2016-11-01'
+      responses:
+        '200':
+          description: OK
+
+  /environments/{envId}/connections:
+    get:
+      operationId: list-connections
+      summary: List connections available in an environment.
+      description: Returns the connectors + connection instances in the named environment.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2016-11-01'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /environments/{envId}/connections/{connectionName}:
+    get:
+      operationId: get-connection
+      summary: Get a connection by name in an environment.
+      description: Returns metadata about the named connection.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: connectionName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2016-11-01'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /environments:
+    get:
+      operationId: list-environments
+      summary: List Power Platform environments accessible to the caller.
+      description: Returns the set of environments the caller can read from.
+      parameters:
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2016-11-01'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /environments/{envId}:
+    get:
+      operationId: get-environment
+      summary: Get a single Power Platform environment by ID.
+      description: Returns details about the named environment.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2016-11-01'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /environments/{envId}/flows/{flowId}/exportPackage:
+    post:
+      operationId: export-flow
+      summary: Export a Flow as a package for import into another environment.
+      description: >-
+        Produces a downloadable package capturing the Flow definition and its
+        connection references. The request body may carry Flow DSL export
+        options; it is typed as an open object.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: flowId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2016-11-01'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /environments/{envId}/importPackage:
+    post:
+      operationId: import-flow
+      summary: Import a Flow package into a Power Platform environment.
+      description: >-
+        Creates Flows + connection references from the supplied package payload.
+        The request body is a Flow DSL package descriptor; typed as an open
+        object because the Flow DSL is a recursive expression language.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2016-11-01'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /environments/{envId}/flows/{flowId}/owners:
+    get:
+      operationId: list-flow-owners
+      summary: List the users + groups with owner role on a Flow.
+      description: Returns the role assignments for the named Flow.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: flowId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2016-11-01'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /environments/{envId}/flows/{flowId}/modifyPermissions:
+    post:
+      operationId: share-flow
+      summary: Share a Flow with users or groups.
+      description: Grants permissions on the named Flow per the request body's assignments.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: flowId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2016-11-01'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: OK
+
+  /environments/{envId}/approvalRequests:
+    get:
+      operationId: list-approvals
+      summary: List approval requests in an environment.
+      description: Returns outstanding approval requests the caller can act on.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2016-11-01'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /environments/{envId}/approvalRequests/{approvalId}:
+    get:
+      operationId: get-approval
+      summary: Get an approval request by ID.
+      description: Returns the named approval request's metadata and current status.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: approvalId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: api-version
+          in: query
+          required: true
+          schema:
+            type: string
+            default: '2016-11-01'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+components:
+  schemas:
+    Flow:
+      type: object
+      description: >-
+        Power Automate Flow descriptor. The inner `properties` object holds
+        the Flow DSL body — `definition` and `connectionReferences` are typed
+        as open objects because the Microsoft Logic Apps DSL is a recursive
+        expression language that openapi-zod-client collapses to
+        `z.record(z.any())` regardless of strictness.
+      additionalProperties: true
+      properties:
+        name:
+          type: string
+        id:
+          type: string
+        type:
+          type: string
+        properties:
+          type: object
+          additionalProperties: true
+          properties:
+            displayName:
+              type: string
+            state:
+              type: string
+              enum:
+                - Started
+                - Stopped
+                - Suspended
+            definition:
+              type: object
+              additionalProperties: true
+              description: >-
+                Flow DSL JSON. Not schematized — recursive expression language.
+                Callers pass opaque JSON per learn.microsoft.com/power-automate.
+            connectionReferences:
+              type: object
+              additionalProperties: true
+              description: >-
+                Connection refs map. Opaque; tenant-specific. One key per
+                connector, value shape varies by connector.

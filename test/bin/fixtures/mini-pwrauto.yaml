@@ -1,0 +1,70 @@
+openapi: '3.0.0'
+info:
+  title: Mini Power Automate test fixture
+  version: '1.0.0'
+  description: >-
+    Minimal 3-operation OpenAPI 3.0 spec used by Phase 5.1-04 Power Automate
+    pipeline tests. Exercises the hand-authored-spec code path (specUrl=null),
+    the Flow DSL escape-hatch body (additionalProperties: true → z.record(z.any())
+    OR z.object({}).passthrough() at codegen), and the sha1-8 truncation for
+    a 60-char operationId under the __pwrauto__ prefix.
+servers:
+  - url: https://service.flow.microsoft.com/providers/Microsoft.ProcessSimple
+paths:
+  /environments/{envId}/flows:
+    get:
+      operationId: list-flows
+      summary: List Flows (fixture op for prefix-invariant tests).
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+  /environments/{envId}/flows/{flowId}/triggers/manual/run:
+    post:
+      operationId: trigger-flow
+      summary: >-
+        Manually trigger a Flow with a Flow DSL payload — exercises the
+        additionalProperties: true escape hatch that compiles to
+        z.record(z.any()) or z.object({}).passthrough() in the emitted
+        client.ts fragment.
+      parameters:
+        - name: envId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: flowId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: Flow DSL input payload; opaque per design.
+      responses:
+        '202':
+          description: Accepted
+  /very-long-path-for-pwrauto-truncation-test-exercising-sha1-suffix:
+    post:
+      operationId: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      summary: >-
+        60-char operationId; with __pwrauto__ prefix (11 chars) the raw alias
+        would be 71 chars — the pipeline MUST truncate to 64 with an sha1-8
+        suffix.
+      responses:
+        '201':
+          description: Created
