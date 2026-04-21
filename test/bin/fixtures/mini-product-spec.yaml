@@ -1,0 +1,52 @@
+openapi: '3.0.0'
+info:
+  title: Mini product test fixture
+  version: '1.0.0'
+  description: >-
+    Minimal 3-operation OpenAPI spec used by Phase 5.1 per-product pipeline
+    contract tests (plan 05.1-01). Two short operationIds exercise the prefix
+    injection regex; the third (60-char operationId) exercises the MCP 64-char
+    truncation path.
+servers:
+  - url: https://example.invalid/api
+paths:
+  /items:
+    get:
+      operationId: list-things
+      summary: List items
+      description: List all items
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+  /items/{id}:
+    get:
+      operationId: get-thing
+      summary: Get item by id
+      description: Fetch a single item
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+  /very-long-path-designed-to-produce-60-char-operation-ids-for-truncation:
+    post:
+      operationId: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      summary: Long-id op
+      description: >-
+        60 "a" characters; after the __xtest__ prefix (9 chars) the raw alias
+        is 69 chars — the pipeline must truncate to 64 with a sha1-8 suffix.
+      responses:
+        '201':
+          description: Created
