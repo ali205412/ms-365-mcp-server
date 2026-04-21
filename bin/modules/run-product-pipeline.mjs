@@ -150,10 +150,20 @@ export async function runProductPipeline(opts) {
     code = code.replace(/(path:\s*)'(\/[^'\n]*=':[\w]+'[^'\n]*)'/g, '$1`$2`');
     code = code.replace(/(path:\s*)'(\/[^']*\([^)\n]*'@[^)\n]*\)[^']*)'/g, '$1`$2`');
 
-    // Prefix injection. Anchored to `[a-z]` so numerics / uppercase / already-
-    // prefixed aliases are left alone (T-05-03 carry-over — no bait-and-switch
-    // via upstream casing tricks).
-    code = code.replace(/(alias:\s*["'])([a-z][^"']*)/g, `$1${opts.prefix}$2`);
+    // Prefix injection. Anchored to `[a-zA-Z]` so numeric-first and already-
+    // prefixed (`_`-starting) aliases are left alone, but PascalCase and
+    // lowercase-first operationIds both receive the prefix. T-05-03 carry-
+    // over: "no bait-and-switch via upstream casing tricks" — already-prefixed
+    // aliases keep starting with `_`, which the regex explicitly excludes.
+    //
+    // Deviation note (plan 05.1-02 Task 1): Wave 1 shipped with `[a-z]` which
+    // accidentally skipped ALL Microsoft product operationIds (Power BI, Power
+    // Apps, Power Automate, EXO REST v2, SharePoint Tenant Admin all emit
+    // PascalCase). Widening to `[a-zA-Z]` preserves the T-05-03 guard (rejects
+    // underscore-prefixed aliases) while correctly covering Microsoft's casing
+    // conventions. The zero-aliases guard below is the positive invariant that
+    // would have flagged this at plan 05.1-02 runtime anyway.
+    code = code.replace(/(alias:\s*["'])([a-zA-Z][^"']*)/g, `$1${opts.prefix}$2`);
 
     // 64-char truncation with sha1-8 suffix. Structurally identical to the
     // helper in bin/modules/beta.mjs lines 132-142; duplicated rather than
