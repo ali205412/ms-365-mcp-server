@@ -103,7 +103,7 @@ import './modules/power-bi.mjs';
 import './modules/power-apps.mjs';
 import './modules/power-automate.mjs';
 import './modules/exo-admin.mjs';
-// plan 5.1-06 appends the sp-admin import line here
+import './modules/sp-admin.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
