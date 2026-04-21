@@ -54,6 +54,16 @@
  *   2. simplify (full-surface or legacy)
  *   3. generateMcpTools (openapi-zod-client v1 codegen)
  *   4. runBetaPipeline (FULL_COVERAGE=1 only; merges __beta__-prefixed ops)
+ *   4b. stubMissingSchemas (FULL_COVERAGE=1 only; first pass — patches any
+ *       `microsoft_graph_*` refs the v1 + beta merge referenced but never
+ *       declared).
+ *   4c. runProductPipelines (Phase 5.1; iterates PRODUCT_PIPELINES — one
+ *       per-product pipeline at a time, sequentially; each merges a
+ *       `__<prefix>__`-namespaced catalog into client.ts via
+ *       mergeBetaFragmentIntoClient). Empty until plans 5.1-02..06 populate.
+ *   4d. stubMissingSchemas (FULL_COVERAGE=1 only; second pass — catches any
+ *       new undefined refs introduced by the product fragments, per
+ *       05.1-RESEARCH §Anti-Patterns "Do NOT skip stub pass after last merge").
  *   5. runCoverageCheck (FULL_COVERAGE=1 only; diffs vs. snapshot, writes
  *      docs/coverage-report.md, throws on >10%% workload regression)
  *   6. compileEssentialsPreset (unconditional — validates 150-op preset
@@ -85,6 +95,32 @@ const __dirname = path.dirname(__filename);
 const DEFAULT_ROOT = path.resolve(__dirname, '..');
 
 /**
+ * Phase 5.1 per-product pipeline registry. Populated by plans 5.1-02..06
+ * (Power BI, Power Apps, Power Automate, Exchange Admin REST v2, SharePoint
+ * Tenant Admin). Each entry is invoked sequentially at step 4c — parallel
+ * merge into `src/generated/client.ts` is UNSAFE because
+ * `mergeBetaFragmentIntoClient` reads + rewrites the same file; two
+ * concurrent merges would corrupt the endpoints array and the schema
+ * prelude (05.1-RESEARCH §Anti-Patterns "Do NOT merge product fragments
+ * in parallel").
+ *
+ * Entry shape:
+ *   {
+ *     name: string,
+ *     run: async ({openapiDir, generatedDir, rootDir}) => Promise<void>
+ *   }
+ *
+ * Plans 5.1-02..06 append via:
+ *   import { PRODUCT_PIPELINES } from './generate-graph-client.mjs';
+ *   PRODUCT_PIPELINES.push({
+ *     name: 'powerbi',
+ *     run: async ({openapiDir, generatedDir, rootDir}) =>
+ *       runProductPipeline({ prefix: '__powerbi__', ... })
+ *   });
+ */
+export const PRODUCT_PIPELINES = [];
+
+/**
  * Orchestrate the codegen pipeline. When called with no arguments the
  * production layout is used (project root derived from this file's location,
  * real simplifiers + real zod-client invocation). Tests inject a `rootDir`
@@ -99,6 +135,12 @@ const DEFAULT_ROOT = path.resolve(__dirname, '..');
  * @param {Function} [deps.runBetaPipeline]  Override the Plan 05-02 beta pipeline.
  *   Only invoked when MS365_MCP_FULL_COVERAGE=1. Tests inject a stub that
  *   records invocation without running the real openapi-zod-client binary.
+ * @param {Function} [deps.runProductPipelines]  Override the Plan 05.1-01 step 4c
+ *   per-product pipeline iterator. Only invoked when
+ *   MS365_MCP_FULL_COVERAGE=1. Default implementation iterates the module-
+ *   level `PRODUCT_PIPELINES` array sequentially. Tests inject a stub to
+ *   assert invocation count and ordering without running real zod-client
+ *   codegen for 5 products.
  * @param {Function} [deps.runCoverageCheck]  Override the Plan 05-08 coverage
  *   harness. Only invoked when MS365_MCP_FULL_COVERAGE=1. Receives
  *   (generatedClientPath, baselinePath, opts) and must return a report shape
@@ -118,9 +160,19 @@ export async function main(deps = {}) {
   const generateMcpTools = deps.generateMcpTools ?? defaultGenerateMcpTools;
   const runBetaPipeline = deps.runBetaPipeline ?? defaultRunBetaPipeline;
   const runCoverageCheck = deps.runCoverageCheck ?? defaultRunCoverageCheck;
-  const compileEssentialsPreset =
-    deps.compileEssentialsPreset ?? defaultCompileEssentialsPreset;
+  const compileEssentialsPreset = deps.compileEssentialsPreset ?? defaultCompileEssentialsPreset;
   const stubMissingSchemas = deps.stubMissingSchemas ?? defaultStubMissingSchemas;
+  // Plan 05.1-01 step 4c: per-product pipeline iterator. Default walks the
+  // module-level PRODUCT_PIPELINES array sequentially. Tests override with a
+  // vi.fn() to assert invocation count and ordering.
+  const runProductPipelines =
+    deps.runProductPipelines ??
+    (async ({ openapiDir: od, generatedDir: gd, rootDir: rd }) => {
+      for (const entry of PRODUCT_PIPELINES) {
+        console.log(`   → ${entry.name}`);
+        await entry.run({ openapiDir: od, generatedDir: gd, rootDir: rd });
+      }
+    });
 
   const forceDownload = deps.forceDownload ?? process.argv.slice(2).includes('--force');
 
@@ -183,9 +235,36 @@ export async function main(deps = {}) {
     const { stubbed } = stubMissingSchemas(clientTsForStubs);
     if (stubbed.length > 0) {
       console.log(`✅ Stubbed ${stubbed.length} undefined schema(s)`);
-      console.log(`   First: ${stubbed.slice(0, 3).join(', ')}${stubbed.length > 3 ? ', ...' : ''}`);
+      console.log(
+        `   First: ${stubbed.slice(0, 3).join(', ')}${stubbed.length > 3 ? ', ...' : ''}`
+      );
     } else {
       console.log('✅ No missing schemas detected');
+    }
+
+    // Plan 05.1-01 step 4c: run per-product pipelines. Iterates the module-
+    // level PRODUCT_PIPELINES array sequentially. Empty until plans 5.1-02..06
+    // populate entries, so this step is a no-op during Phase 5 regens — the
+    // orchestrator contract is stable either way.
+    console.log('\n🔌 Step 4c: Running per-product pipelines (Phase 5.1)');
+    await runProductPipelines({ openapiDir, generatedDir, rootDir });
+    console.log('✅ Product pipelines complete');
+
+    // Plan 05.1-01 step 4d: second stubMissingSchemas pass. Product fragments
+    // merged in step 4c may reference `microsoft_graph_*` identifiers that
+    // neither the v1 nor beta pipeline declared — e.g. an EXO/SP-Admin op
+    // whose response schema is shared with a Graph type that's only present
+    // in the beta subset not retained by our simplifier. 05.1-RESEARCH
+    // §Anti-Patterns pins this: "Do NOT skip stub pass after last merge."
+    // stubMissingSchemas is idempotent (stubs are `const` declarations; a
+    // second pass finds them defined and emits nothing), so this is a cheap
+    // post-merge safety net.
+    console.log('\n🩹 Step 4d: Stubbing missing schemas (post-product-merge)');
+    const { stubbed: postProductStubbed } = stubMissingSchemas(clientTsForStubs);
+    if (postProductStubbed.length > 0) {
+      console.log(`✅ Stubbed ${postProductStubbed.length} post-product schema(s)`);
+    } else {
+      console.log('✅ No post-product missing schemas detected');
     }
 
     console.log('\n📊 Step 5: Running coverage verification harness');
