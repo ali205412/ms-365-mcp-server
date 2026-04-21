@@ -17,6 +17,16 @@
  *   - Response 200 with the updated tenant row (read-back through
  *     deps.pgPool + tenantRowToWire from tenants.ts).
  *
+ * Phase 5.1 extension (plan 05.1-08, D-04):
+ *   - Audit meta gains a `product` discriminator when selectors target a
+ *     Phase 5.1 product (via `__<product>__` alias prefix, `<product>:*`
+ *     workload selector, or `preset:<product>-essentials` preset name).
+ *     Operators query `meta->>'product' = 'powerbi'` to enumerate all
+ *     PBI-scoped mutations across the audit trail. Returns 'mixed' when
+ *     two or more products appear in the same PATCH, or null for
+ *     Graph-only mutations. The raw selector text still NEVER lands in
+ *     meta (T-05-17 redaction); only the product discriminator.
+ *
  * Auth: reuses the Phase 4 dual-stack middleware (req.admin populated by
  * createAdminAuthMiddleware at router mount).
  *
@@ -26,18 +36,21 @@
  *
  * Redaction (D-01, T-05-07c / T-05-17): the raw enabled_tools text never
  * lands in audit_log.meta or in pino info logs. Audit meta carries only
- * {before_length, after_length, operation} — categorical fields safe for
- * grep + retention. Operators greping `action = 'admin.tenant.enabled-
- * tools-change' AND tenant_id = $X` get the full change history without
- * seeing the selector strings themselves.
+ * {before_length, after_length, operation, product} — categorical fields
+ * safe for grep + retention. Operators greping `action = 'admin.tenant.
+ * enabled-tools-change' AND tenant_id = $X` get the full change history
+ * without seeing the selector strings themselves.
  *
- * Threat dispositions (plan 05-07 <threat_model>):
+ * Threat dispositions (plan 05-07 <threat_model> + plan 05.1-08):
  *   - T-05-15 (PATCH body shape tampering): Zod `.refine` exactly-one gate.
  *   - T-05-16 (cross-tenant PATCH): canActOnTenant RBAC + 404 on deny.
  *   - T-05-17 (selector text in audit/logs): meta carries length+operation
- *     only; pino info log carries {tenantId, actor, operation}.
+ *     +product only; pino info log carries {tenantId, actor, operation}.
  *   - T-05-18 (DoS via huge PATCH): array max=500, selector max=256 chars,
  *     set max=16384 chars via Zod — Levenshtein cost bounded.
+ *   - T-5.1-08-e (audit blind-spot for product mutations): meta.product
+ *     discriminator enables per-product audit queries. Mitigated by
+ *     inferProductFromSelectors below.
  */
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -176,6 +189,82 @@ function extractSelectorsForValidation(
 }
 
 /**
+ * Phase 5.1 audit discriminator (plan 05.1-08, T-5.1-08-e).
+ *
+ * Scans the mutation's selector list for Phase 5.1 product references via
+ * any of three shapes:
+ *   1. `__<product>__` alias prefix (e.g. `__powerbi__GroupsGetGroups`)
+ *   2. `<product>:*` workload selector (e.g. `powerbi:*`, `sp-admin:*`)
+ *   3. `preset:<product>-essentials` preset name (e.g. `preset:powerbi-essentials`)
+ *
+ * Returns the matched product name when exactly one product is present
+ * across the entire PATCH, `'mixed'` when two or more products appear
+ * (so operators know to disambiguate), or `null` when every selector
+ * targets Graph / cross-product surface.
+ *
+ * Discriminator lives in `audit_log.meta.product` (NOT raw selector text,
+ * per T-05-17 redaction) so per-product audit queries are first-class:
+ *   SELECT * FROM audit_log
+ *   WHERE action = 'admin.tenant.enabled-tools-change'
+ *     AND meta->>'product' = 'powerbi';
+ *
+ * Pure function — no side effects; cheap O(n*5) with n=selectors, 5=products.
+ * The 3-map shape below matches the audit-meta contract 1:1 with
+ * PRODUCT_AUDIENCES (src/lib/auth/products.ts) and PRODUCT_POLICIES
+ * (bin/modules/coverage-check.mjs) so all three surfaces agree on the
+ * product set. A future product addition MUST update all three maps.
+ */
+const PRODUCT_PREFIX_MAP: Record<string, string> = {
+  __powerbi__: 'powerbi',
+  __pwrapps__: 'pwrapps',
+  __pwrauto__: 'pwrauto',
+  __exo__: 'exo',
+  __spadmin__: 'sp-admin',
+};
+const PRODUCT_PRESET_MAP: Record<string, string> = {
+  'preset:powerbi-essentials': 'powerbi',
+  'preset:pwrapps-essentials': 'pwrapps',
+  'preset:pwrauto-essentials': 'pwrauto',
+  'preset:exo-essentials': 'exo',
+  'preset:sp-admin-essentials': 'sp-admin',
+};
+const PRODUCT_WORKLOAD_MAP: Record<string, string> = {
+  'powerbi:*': 'powerbi',
+  'pwrapps:*': 'pwrapps',
+  'pwrauto:*': 'pwrauto',
+  'exo:*': 'exo',
+  'sp-admin:*': 'sp-admin',
+};
+
+export function inferProductFromSelectors(selectors: string[]): string | null {
+  const found = new Set<string>();
+  for (const raw of selectors) {
+    const s = raw.startsWith('+') ? raw.slice(1) : raw;
+    // Workload selector (e.g., 'powerbi:*')
+    if (PRODUCT_WORKLOAD_MAP[s]) {
+      found.add(PRODUCT_WORKLOAD_MAP[s]);
+      continue;
+    }
+    // Preset selector (e.g., 'preset:powerbi-essentials')
+    if (PRODUCT_PRESET_MAP[s]) {
+      found.add(PRODUCT_PRESET_MAP[s]);
+      continue;
+    }
+    // Alias prefix (e.g., '__powerbi__GroupsGetGroups') — iterate the 5-entry
+    // map; prefixes are alpha-unique so the first match is definitive.
+    for (const prefix of Object.keys(PRODUCT_PREFIX_MAP)) {
+      if (s.startsWith(prefix)) {
+        found.add(PRODUCT_PREFIX_MAP[prefix]);
+        break;
+      }
+    }
+  }
+  if (found.size === 0) return null;
+  if (found.size === 1) return [...found][0];
+  return 'mixed';
+}
+
+/**
  * Build the /admin/tenants/:id/enabled-tools sub-router. Mounted on the
  * SAME `/tenants` base as createTenantsRoutes — Express composes routers
  * by path+method pattern, so the longer-suffix match (`/:id/enabled-tools`)
@@ -236,6 +325,11 @@ export function createEnabledToolsRoutes(deps: AdminRouterDeps): Router {
     const operation: 'add' | 'remove' | 'set' =
       patch.add !== undefined ? 'add' : patch.remove !== undefined ? 'remove' : 'set';
 
+    // Phase 5.1 audit discriminator (T-5.1-08-e). Computed once outside
+    // the txn so the value is stable across retries and visible in logs
+    // on audit-write failure.
+    const product = inferProductFromSelectors(selectorsToValidate);
+
     let existed = true;
     let beforeText: string | null = null;
     let afterText: string | null = null;
@@ -270,6 +364,7 @@ export function createEnabledToolsRoutes(deps: AdminRouterDeps): Router {
             before_length: beforeText?.length ?? 0,
             after_length: afterText?.length ?? 0,
             operation,
+            product,
           },
         });
       });
@@ -314,10 +409,7 @@ export function createEnabledToolsRoutes(deps: AdminRouterDeps): Router {
         problemNotFound(res, 'tenant', req.id);
         return;
       }
-      logger.info(
-        { tenantId: id, actor: admin.actor, operation },
-        'admin-enabled-tools: updated'
-      );
+      logger.info({ tenantId: id, actor: admin.actor, operation }, 'admin-enabled-tools: updated');
       res.status(200).json(tenantRowToWire(rows[0]));
     } catch (err) {
       logger.error(
