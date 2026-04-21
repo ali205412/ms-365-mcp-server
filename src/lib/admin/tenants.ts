@@ -100,6 +100,14 @@ export interface TenantWireRow {
    * on POST /admin/tenants when the body omits it; operators bump via PATCH.
    */
   preset_version: string;
+  /**
+   * Plan 5.1-06 (T-5.1-06-c). Single-label SharePoint hostname
+   * (e.g. `contoso`) used by `__spadmin__*` dispatch to substitute into
+   * both baseUrl and audience scope. NULL when unset; dispatch returns
+   * a structured MCP tool error (`sp_admin_not_configured`) directing
+   * operators to PATCH this field.
+   */
+  sharepoint_domain: string | null;
   slug: string | null;
   disabled_at: string | null;
   created_at: string;
@@ -137,6 +145,7 @@ const TENANT_SELECT_COLUMNS = `
   id, mode, client_id, client_secret_ref, tenant_id, cloud_type,
   redirect_uri_allowlist, cors_origins, allowed_scopes, enabled_tools,
   preset_version,
+  sharepoint_domain,
   slug, disabled_at, created_at, updated_at
 `;
 
@@ -160,6 +169,19 @@ const CreateTenantZod = z.object({
     .min(1)
     .max(64)
     .regex(/^[a-z0-9-]+$/, 'preset_version must be lowercase alphanumeric + hyphen')
+    .optional(),
+  // Plan 5.1-06 (T-5.1-06-c). Single-label SharePoint hostname for
+  // __spadmin__* dispatch. Defense-in-depth regex: lowercase alphanumeric
+  // plus dashes, 1-63 chars. Rejects dots (URL injection shape),
+  // uppercase, slashes, and special chars. Dispatch re-applies the same
+  // regex before URL / scope construction. Nullable + optional — absence
+  // is how most tenants start.
+  sharepoint_domain: z
+    .string()
+    .regex(/^[a-z0-9-]{1,63}$/, {
+      message: 'sharepoint_domain must be lowercase alphanumeric + dashes, 1-63 chars',
+    })
+    .nullable()
     .optional(),
   slug: z
     .string()
@@ -200,6 +222,7 @@ export function tenantRowToWire(row: {
   allowed_scopes: unknown;
   enabled_tools: string | null;
   preset_version?: string | null;
+  sharepoint_domain?: string | null;
   slug: string | null;
   disabled_at: Date | string | null;
   created_at: Date | string;
@@ -248,6 +271,10 @@ export function tenantRowToWire(row: {
     allowed_scopes: parseJsonbArray(row.allowed_scopes),
     enabled_tools: row.enabled_tools,
     preset_version: presetVersion,
+    // Plan 5.1-06 — pass through unchanged. NULL → null (distinction
+    // matters: dispatch treats NULL as "not configured" and returns
+    // `sp_admin_not_configured` MCP tool error).
+    sharepoint_domain: row.sharepoint_domain ?? null,
     slug: row.slug,
     disabled_at: toIso(row.disabled_at),
     created_at: toIsoNonNull(row.created_at),
@@ -440,8 +467,9 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
              id, mode, client_id, client_secret_ref, tenant_id, cloud_type,
              redirect_uri_allowlist, cors_origins, allowed_scopes, enabled_tools,
              preset_version,
+             sharepoint_domain,
              wrapped_dek, slug
-           ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12::jsonb, $13)`,
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12, $13::jsonb, $14)`,
           [
             newId,
             body.mode,
@@ -458,6 +486,9 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
             // explicit bind keeps the Zod default + bind surface symmetric
             // and makes the intent visible in SQL logs.
             body.preset_version ?? 'essentials-v1',
+            // Plan 5.1-06: optional + nullable. NULL default — operators
+            // PATCH later when they want to enable __spadmin__ tools.
+            body.sharepoint_domain ?? null,
             JSON.stringify(wrappedDek),
             body.slug ?? null,
           ]
@@ -689,6 +720,11 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
     // Plan 05-03 (D-19). PATCH writes the new preset_version verbatim; no
     // auto-migration of enabled_tools here — that is an admin-owned decision.
     if (body.preset_version !== undefined) addSet('preset_version', body.preset_version);
+    // Plan 5.1-06 (T-5.1-06-c). PATCH with null clears (dispatch falls back
+    // to `sp_admin_not_configured` MCP error); PATCH with a validated
+    // string updates. Zod has already applied the regex guard for non-null
+    // values by this point.
+    if (body.sharepoint_domain !== undefined) addSet('sharepoint_domain', body.sharepoint_domain);
     if (body.slug !== undefined) addSet('slug', body.slug);
     setParts.push(`updated_at = NOW()`);
     const whereIdx = idx;

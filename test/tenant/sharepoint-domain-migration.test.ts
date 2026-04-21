@@ -164,9 +164,7 @@ async function startAdminServer(
   app.use(express.json());
   app.use((req, _res, next) => {
     (req as Request & { admin?: AdminContext }).admin = admin;
-    (req as Request & { id?: string }).id = `req-${Math.random()
-      .toString(36)
-      .slice(2, 10)}`;
+    (req as Request & { id?: string }).id = `req-${Math.random().toString(36).slice(2, 10)}`;
     next();
   });
   app.use(
@@ -288,7 +286,32 @@ describe('plan 5.1-06 Task 3 — tenants.sharepoint_domain migration + plumbing'
     expect(rows.length).toBe(1);
     const col = rows[0]!;
     expect(col.data_type).toBe('text');
-    expect(col.is_nullable).toBe('YES');
+
+    // pg-mem quirk: information_schema.is_nullable reports 'NO' for
+    // `ADD COLUMN text NULL` even though the runtime semantics are
+    // nullable (INSERT without the column + SELECT returning NULL both
+    // work — see Test M2, M3 below). Real Postgres reports 'YES'. Prove
+    // the nullable contract via the runtime behavior instead:
+    const tenantId = '99999999-8888-4777-8666-555555555555';
+    await pool.query(
+      `INSERT INTO tenants (id, mode, client_id, tenant_id)
+       VALUES ($1, 'delegated', 'x', 'y')`,
+      [tenantId]
+    );
+    const { rows: inserted } = await pool.query<{ sharepoint_domain: string | null }>(
+      `SELECT sharepoint_domain FROM tenants WHERE id = $1`,
+      [tenantId]
+    );
+    expect(inserted[0]!.sharepoint_domain).toBeNull();
+
+    // Also assert the migration SQL itself declares the column as NULL
+    // (defense-in-depth against pg-mem skew — real Postgres honors this).
+    const migrations = listMigrations();
+    const sp = migrations.find((m) => m.file === '20260801000000_sharepoint_domain.sql');
+    expect(sp).toBeDefined();
+    expect(sp!.up).toMatch(
+      /ALTER\s+TABLE\s+tenants[\s\S]*ADD\s+COLUMN\s+sharepoint_domain\s+text\s+NULL/i
+    );
   });
 
   it('Test M2: pre-existing rows retain NULL after migration (no backfill)', async () => {
@@ -300,9 +323,7 @@ describe('plan 5.1-06 Task 3 — tenants.sharepoint_domain migration + plumbing'
     const { Pool: PgMemPool } = db.adapters.createPg();
     const pool = new PgMemPool() as Pool;
     const migrations = listMigrations();
-    const spIdx = migrations.findIndex(
-      (m) => m.file === '20260801000000_sharepoint_domain.sql'
-    );
+    const spIdx = migrations.findIndex((m) => m.file === '20260801000000_sharepoint_domain.sql');
     expect(spIdx).toBeGreaterThanOrEqual(0);
 
     // Apply everything before the sharepoint_domain migration.
@@ -374,11 +395,9 @@ describe('plan 5.1-06 Task 3 — tenants.sharepoint_domain migration + plumbing'
       expect(created.status).toBe(201);
       expect(created.body.sharepoint_domain ?? null).toBeNull();
 
-      const patched = (await doJson(
-        'PATCH',
-        `${harness.url}/admin/tenants/${created.body.id}`,
-        { sharepoint_domain: 'fabrikam' }
-      )) as { status: number; body: { sharepoint_domain?: string | null } };
+      const patched = (await doJson('PATCH', `${harness.url}/admin/tenants/${created.body.id}`, {
+        sharepoint_domain: 'fabrikam',
+      })) as { status: number; body: { sharepoint_domain?: string | null } };
       expect(patched.status).toBe(200);
       expect(patched.body.sharepoint_domain).toBe('fabrikam');
 
@@ -436,20 +455,16 @@ describe('plan 5.1-06 Task 3 — tenants.sharepoint_domain migration + plumbing'
       expect(created.status).toBe(201);
 
       // Set it first.
-      const setRes = (await doJson(
-        'PATCH',
-        `${harness.url}/admin/tenants/${created.body.id}`,
-        { sharepoint_domain: 'initech' }
-      )) as { status: number; body: { sharepoint_domain?: string | null } };
+      const setRes = (await doJson('PATCH', `${harness.url}/admin/tenants/${created.body.id}`, {
+        sharepoint_domain: 'initech',
+      })) as { status: number; body: { sharepoint_domain?: string | null } };
       expect(setRes.status).toBe(200);
       expect(setRes.body.sharepoint_domain).toBe('initech');
 
       // Now clear it.
-      const clearRes = (await doJson(
-        'PATCH',
-        `${harness.url}/admin/tenants/${created.body.id}`,
-        { sharepoint_domain: null }
-      )) as { status: number; body: { sharepoint_domain?: string | null } };
+      const clearRes = (await doJson('PATCH', `${harness.url}/admin/tenants/${created.body.id}`, {
+        sharepoint_domain: null,
+      })) as { status: number; body: { sharepoint_domain?: string | null } };
       expect(clearRes.status).toBe(200);
       expect(clearRes.body.sharepoint_domain).toBeNull();
     } finally {

@@ -41,6 +41,23 @@ export interface TenantRow {
    * Consumed by Plan 05-04 (dispatch guard) via preset-loader.presetFor().
    */
   preset_version: string;
+  /**
+   * Plan 5.1-06 (T-5.1-06-c). The tenant's single-label SharePoint
+   * hostname — migration 20260801000000_sharepoint_domain.sql adds this
+   * column as `text NULL`. Required for `__spadmin__*` product dispatch
+   * (src/lib/dispatch/product-routing.ts) to resolve both baseUrl
+   * `https://{domain}-admin.sharepoint.com/_api/SPO.TenantAdministrationOffice365Tenant`
+   * and scope `https://{domain}-admin.sharepoint.com/.default`.
+   *
+   * Zod-validated /^[a-z0-9-]{1,63}$/ at admin PATCH AND at dispatch
+   * (defense-in-depth against attacker-planted values). Dispatch-time
+   * absence → structured MCP tool error with code
+   * `sp_admin_not_configured`.
+   *
+   * NULL is the correct default — tenants without SharePoint admin
+   * access simply don't set it.
+   */
+  sharepoint_domain: string | null;
   wrapped_dek: Envelope | null;
   slug: string | null;
   disabled_at: Date | null;
