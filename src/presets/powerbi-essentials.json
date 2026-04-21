@@ -1,0 +1,42 @@
+{
+  "version": "powerbi-essentials",
+  "generated_at": "2026-04-21T00:00:00Z",
+  "_comment": "Plan 05.1-07. Flagship Power BI admin read-first ops. 12 aliases selected from the 285-op __powerbi__ catalog produced by plan 05.1-02.",
+  "product": "powerbi",
+  "prefix": "__powerbi__",
+  "sections": {
+    "admin_tenant": 4,
+    "admin_workspaces": 3,
+    "admin_capacities_gateways": 3,
+    "admin_pipelines": 1,
+    "groups": 1
+  },
+  "rationale": {
+    "__powerbi__Admin_GetActivityEvents": "Tenant-wide activity audit is the primary compliance read for any Power BI admin assistant — baseline visibility.",
+    "__powerbi__Admin_GetCapacitiesAsAdmin": "Premium capacity enumeration is required before any workload or scheduling op — flagship admin entry point.",
+    "__powerbi__Apps_GetAppsAsAdmin": "Tenant-wide published-apps inventory; read-only admin discovery surface for governance tasks.",
+    "__powerbi__Groups_GetGroupsAsAdmin": "Workspaces-as-admin enumeration; the cheapest single-shot grounding call for any admin workflow that scopes by workspace.",
+    "__powerbi__Datasets_GetDatasetsAsAdmin": "Tenant-wide dataset inventory; prerequisite for lineage / refresh / capacity-binding read flows.",
+    "__powerbi__Reports_GetReportsAsAdmin": "Tenant-wide report inventory; pairs with Datasets_GetDatasetsAsAdmin for content audit workflows.",
+    "__powerbi__Dashboards_GetDashboardsAsAdmin": "Tenant-wide dashboard inventory; completes the content-type triad (datasets + reports + dashboards).",
+    "__powerbi__Dataflows_GetDataflowsAsAdmin": "Dataflow inventory for lineage-aware admin flows; required before any lineage-scoped drill-down.",
+    "__powerbi__Capacities_GetCapacities": "Non-admin capacity enumeration (delegated scope); surfaces caller-visible capacities for self-service workflows.",
+    "__powerbi__Gateways_GetGateways": "Gateway enumeration; prerequisite for any on-premises datasource configuration workflow.",
+    "__powerbi__Pipelines_GetPipelinesAsAdmin": "Deployment-pipeline inventory; tenant-wide view for release-governance flows.",
+    "__powerbi__Groups_GetGroups": "Delegated-scope workspace enumeration; mirrors Admin_GetGroupsAsAdmin for non-admin callers."
+  },
+  "ops": [
+    "__powerbi__Admin_GetActivityEvents",
+    "__powerbi__Admin_GetCapacitiesAsAdmin",
+    "__powerbi__Apps_GetAppsAsAdmin",
+    "__powerbi__Groups_GetGroupsAsAdmin",
+    "__powerbi__Datasets_GetDatasetsAsAdmin",
+    "__powerbi__Reports_GetReportsAsAdmin",
+    "__powerbi__Dashboards_GetDashboardsAsAdmin",
+    "__powerbi__Dataflows_GetDataflowsAsAdmin",
+    "__powerbi__Capacities_GetCapacities",
+    "__powerbi__Gateways_GetGateways",
+    "__powerbi__Pipelines_GetPipelinesAsAdmin",
+    "__powerbi__Groups_GetGroups"
+  ]
+}
