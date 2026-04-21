@@ -1,0 +1,55 @@
+openapi: '3.0.0'
+info:
+  title: Mini Power BI test fixture
+  version: '1.0.0'
+  description: >-
+    Minimal 3-operation OpenAPI spec used by Phase 5.1-02 Power BI pipeline
+    tests. First op exercises the happy prefix path; second exercises the
+    "safe under 64 chars" (no truncation) path; third forces sha1-8
+    truncation via a 60-char operationId.
+servers:
+  - url: https://api.powerbi.com/v1.0/myorg
+paths:
+  /groups:
+    get:
+      operationId: WorkspacesList
+      summary: List Power BI workspaces (groups)
+      description: Returns the list of workspaces the user has access to.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+  /groups/{groupId}/datasets:
+    get:
+      operationId: WorkspacesGetDatasetsInGroupAsAdmin
+      summary: List datasets in a workspace as admin
+      description: >-
+        37-char operationId; with __powerbi__ prefix (11 chars) the alias
+        is 48 chars — well under the MCP 64-char limit, so NO truncation.
+      parameters:
+        - name: groupId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+  /very-long-pbi-test-path-for-truncation:
+    post:
+      operationId: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      summary: Long-id op forces truncation
+      description: >-
+        60 "a" characters; with __powerbi__ prefix (11 chars) the raw alias
+        would be 71 chars — the pipeline MUST truncate to 64 with an sha1-8
+        suffix.
+      responses:
+        '201':
+          description: Created
