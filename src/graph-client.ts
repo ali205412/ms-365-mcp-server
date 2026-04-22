@@ -3,7 +3,7 @@ import AuthManager from './auth.js';
 import { encode as toonEncode } from '@toon-format/toon';
 import type { AppSecrets } from './secrets.js';
 import { getCloudEndpoints } from './cloud-config.js';
-import { getRequestTokens } from './request-context.js';
+import { getRequestTokens, requestContext } from './request-context.js';
 import { composePipeline } from './lib/middleware/pipeline.js';
 import { TokenRefreshMiddleware } from './lib/middleware/token-refresh.js';
 import { ODataErrorHandler } from './lib/middleware/odata-error.js';
@@ -15,6 +15,21 @@ import type { RedisClient } from './lib/redis.js';
 import type { TenantRow } from './lib/tenant/tenant-row.js';
 import type { TenantPool } from './lib/tenant/tenant-pool.js';
 import { SessionStore } from './lib/session-store.js';
+import { trace, SpanKind, SpanStatusCode } from '@opentelemetry/api';
+import {
+  mcpToolCallsTotal,
+  mcpToolDurationSeconds,
+  mcpGraphThrottledTotal,
+  labelForTool,
+} from './lib/otel-metrics.js';
+
+/**
+ * Plan 06-02 — module-level tracer for the graph.request parent span.
+ * Distinct scope from the `'graph-middleware'` tracer used by ETag / Retry /
+ * ODataError / TokenRefresh child spans (plans 02-02 / 02-03 / 02-07): those
+ * are per-middleware spans nested under this parent when the pipeline runs.
+ */
+const graphRequestTracer = trace.getTracer('ms-365-mcp-server');
 
 /**
  * Maximum recursion depth for `removeODataProps`. A well-formed Graph response
@@ -178,72 +193,133 @@ class GraphClient {
   }
 
   async makeRequest(endpoint: string, options: GraphRequestOptions = {}): Promise<unknown> {
-    const contextTokens = getRequestTokens();
-    const accessToken =
-      options.accessToken ?? contextTokens?.accessToken ?? (await this.authManager.getToken());
+    // Plan 06-02 (OPS-05, OPS-06): Every Graph call flows through this
+    // chokepoint; we wrap it in a graph.request parent span + emit
+    // mcp_tool_calls_total, mcp_tool_duration_seconds, mcp_graph_throttled_total
+    // in the finally block. Cardinality guard (D-06): the `tool` label is the
+    // workload prefix (labelForTool(alias)), NEVER the full alias. The full
+    // alias is carried on the span as `tool.alias` for trace-query fidelity.
+    const store = requestContext.getStore();
+    const tenantId = store?.tenantId ?? 'unknown';
+    const toolAlias = store?.toolAlias ?? 'unknown';
+    const workload = labelForTool(toolAlias);
 
-    if (!accessToken) {
-      throw new Error('No access token available');
-    }
+    return graphRequestTracer.startActiveSpan(
+      'graph.request',
+      {
+        kind: SpanKind.CLIENT,
+        attributes: {
+          'tenant.id': tenantId,
+          'tool.name': workload,
+          'tool.alias': toolAlias,
+        },
+      },
+      async (span) => {
+        const start = performance.now();
+        let httpStatus = 0;
+        try {
+          const contextTokens = getRequestTokens();
+          const accessToken =
+            options.accessToken ??
+            contextTokens?.accessToken ??
+            (await this.authManager.getToken());
 
-    try {
-      // 401-refresh is now owned by TokenRefreshMiddleware (innermost in the
-      // pipeline). 4xx / 5xx typed-error parsing is owned by ODataErrorHandler
-      // (02-03) — it throws a typed GraphError subclass on any non-2xx
-      // response, so the 2xx path below is the only branch we reach here.
-      // The pipeline returns the post-refresh / post-error-parse response.
-      const response = await this.performRequest(endpoint, accessToken, options);
-
-      const contentTypeHeader = response.headers?.get?.('content-type') || '';
-      const isBinaryResponse = isBinaryContentType(contentTypeHeader);
-
-      let result: any;
-
-      if (isBinaryResponse) {
-        // Binary payloads (images, video, pdf, octet-stream, etc.) must not be
-        // decoded with response.text() — that performs a lossy UTF-8 decode and
-        // replaces every high byte with U+FFFD, destroying the file. Read the
-        // raw bytes and return them as base64 so callers can reconstruct them.
-        const buffer = Buffer.from(await response.arrayBuffer());
-        result = {
-          message: 'OK!',
-          contentType: contentTypeHeader,
-          encoding: 'base64',
-          contentLength: buffer.byteLength,
-          contentBytes: buffer.toString('base64'),
-        };
-      } else {
-        const text = await response.text();
-
-        if (text === '') {
-          result = { message: 'OK!' };
-        } else {
-          try {
-            result = JSON.parse(text);
-          } catch {
-            result = { message: 'OK!', rawResponse: text };
+          if (!accessToken) {
+            throw new Error('No access token available');
           }
+
+          // 401-refresh is now owned by TokenRefreshMiddleware (innermost in the
+          // pipeline). 4xx / 5xx typed-error parsing is owned by ODataErrorHandler
+          // (02-03) — it throws a typed GraphError subclass on any non-2xx
+          // response, so the 2xx path below is the only branch we reach here.
+          // The pipeline returns the post-refresh / post-error-parse response.
+          const response = await this.performRequest(endpoint, accessToken, options);
+          httpStatus = (response as { status?: number }).status ?? 200;
+
+          // Plan 06-02: surface Graph's `request-id` header on the span so
+          // operators can correlate traces with Microsoft support tickets.
+          const graphReqId =
+            (response as { headers?: { get?: (k: string) => string | null } }).headers?.get?.(
+              'request-id'
+            ) ?? null;
+          if (graphReqId) span.setAttribute('graph.request_id', graphReqId);
+
+          const contentTypeHeader = response.headers?.get?.('content-type') || '';
+          const isBinaryResponse = isBinaryContentType(contentTypeHeader);
+
+          let result: any;
+
+          if (isBinaryResponse) {
+            // Binary payloads (images, video, pdf, octet-stream, etc.) must not be
+            // decoded with response.text() — that performs a lossy UTF-8 decode and
+            // replaces every high byte with U+FFFD, destroying the file. Read the
+            // raw bytes and return them as base64 so callers can reconstruct them.
+            const buffer = Buffer.from(await response.arrayBuffer());
+            result = {
+              message: 'OK!',
+              contentType: contentTypeHeader,
+              encoding: 'base64',
+              contentLength: buffer.byteLength,
+              contentBytes: buffer.toString('base64'),
+            };
+          } else {
+            const text = await response.text();
+
+            if (text === '') {
+              result = { message: 'OK!' };
+            } else {
+              try {
+                result = JSON.parse(text);
+              } catch {
+                result = { message: 'OK!', rawResponse: text };
+              }
+            }
+          }
+
+          // If includeHeaders is requested, add response headers to the result
+          if (options.includeHeaders) {
+            const etag = response.headers.get('ETag') || response.headers.get('etag');
+
+            // Simple approach: just add ETag to the result if it's an object
+            if (result && typeof result === 'object' && !Array.isArray(result)) {
+              return {
+                ...result,
+                _etag: etag || 'no-etag-found',
+              };
+            }
+          }
+
+          return result;
+        } catch (error) {
+          // Capture HTTP status from typed GraphError when the pipeline threw
+          // a 4xx/5xx; default to 0 for non-HTTP errors (network, token, etc.)
+          httpStatus = (error as { statusCode?: number }).statusCode ?? 0;
+          span.recordException(error as Error);
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: (error as Error).message,
+          });
+          // Load-bearing operator-triage log line — do NOT remove. Operators
+          // depend on this log channel to correlate Graph failures.
+          logger.error('Microsoft Graph API request failed:', error);
+          throw error;
+        } finally {
+          const durationSec = (performance.now() - start) / 1000;
+          span.setAttribute('http.status_code', httpStatus);
+          span.setAttribute('retry.count', store?.retryCount ?? 0);
+          mcpToolCallsTotal.add(1, {
+            tenant: tenantId,
+            tool: workload,
+            status: String(httpStatus),
+          });
+          mcpToolDurationSeconds.record(durationSec, { tenant: tenantId, tool: workload });
+          if (httpStatus === 429) {
+            mcpGraphThrottledTotal.add(1, { tenant: tenantId });
+          }
+          span.end();
         }
       }
-
-      // If includeHeaders is requested, add response headers to the result
-      if (options.includeHeaders) {
-        const etag = response.headers.get('ETag') || response.headers.get('etag');
-
-        // Simple approach: just add ETag to the result if it's an object
-        if (result && typeof result === 'object' && !Array.isArray(result)) {
-          return {
-            ...result,
-            _etag: etag || 'no-etag-found',
-          };
-        }
-      }
-
-      return result;
-    } catch (error) {
-      logger.error('Microsoft Graph API request failed:', error);
-      throw error;
-    }
+    );
   }
 
   /**
