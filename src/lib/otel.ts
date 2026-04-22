@@ -63,10 +63,24 @@ const prometheusEnabled =
   process.env.MS365_MCP_PROMETHEUS_ENABLED === 'true';
 
 let metricReader: PeriodicExportingMetricReader | PrometheusExporter | undefined;
+// Phase 6 plan 06-01: named export so plan 06-03's metrics server can host
+// the exporter's getMetricsRequestHandler behind a Bearer-auth middleware.
+// `undefined` when MS365_MCP_PROMETHEUS_ENABLED is not '1'/'true' — consumers
+// MUST null-check before reading.
+let prometheusExporter: PrometheusExporter | undefined;
 
 if (prometheusEnabled) {
-  // Prometheus exporter listens on port 9464 at /metrics
-  metricReader = new PrometheusExporter({ port: 9464 });
+  // Phase 6 plan 06-01: construct with preventServerStart so the exporter
+  // does NOT bind its own listener on port 9464. Plan 06-03 wires the
+  // handler into a dedicated Express app with optional Bearer gating.
+  // MS365_MCP_METRICS_PORT lets operators override the default port
+  // (9464) without code changes; Number() returns NaN for empty strings,
+  // so fall back to 9464 when the env var is unset.
+  prometheusExporter = new PrometheusExporter({
+    port: Number(process.env.MS365_MCP_METRICS_PORT ?? 9464),
+    preventServerStart: true,
+  });
+  metricReader = prometheusExporter;
 } else if (otlpEndpoint) {
   // Export metrics to OTLP when endpoint is configured
   metricReader = new PeriodicExportingMetricReader({
@@ -75,9 +89,36 @@ if (prometheusEnabled) {
 }
 
 // ── Instrumentations ─────────────────────────────────────────────────────────
+// Phase 6 plan 06-01 (Pitfall 7): extract the OTLP collector host once at
+// startup so the outgoing-request filter on http instrumentation can skip
+// OTel's own self-export POSTs without incurring a URL-parse per outbound
+// request. An invalid OTEL_EXPORTER_OTLP_ENDPOINT falls through to `null`
+// so the hook becomes a no-op — we never want to crash the SDK because the
+// operator typoed a URL.
+let otlpHost: string | null = null;
+try {
+  otlpHost = otlpEndpoint ? new URL(otlpEndpoint).host : null;
+} catch {
+  otlpHost = null;
+}
 const instrumentations = getNodeAutoInstrumentations({
   // Disable fs instrumentation — it is extremely noisy and adds no value here
   '@opentelemetry/instrumentation-fs': { enabled: false },
+  // Phase 6 plan 06-01 (Pitfall 7): do NOT instrument OTel's own OTLP export
+  // POSTs — self-referential spans pile up on slow collectors and can wedge
+  // the exporter under backpressure. The hook runs on every outbound HTTP
+  // request so the closed-over `otlpHost` string comparison must stay cheap.
+  '@opentelemetry/instrumentation-http': {
+    // Type matches @opentelemetry/instrumentation-http's IgnoreOutgoingRequestFunction:
+    // `request` is `http.RequestOptions` whose `hostname`/`host` are
+    // `string | null | undefined`. Treat null as "no hostname" (Symbol mutability
+    // inside core http means we must not narrow further).
+    ignoreOutgoingRequestHook: (req: { hostname?: string | null; host?: string | null }) => {
+      if (!otlpHost) return false;
+      const h = req.hostname ?? req.host ?? '';
+      return typeof h === 'string' && h.includes(otlpHost);
+    },
+  },
 });
 
 // ── SDK construction + start ──────────────────────────────────────────────────
@@ -107,3 +148,9 @@ const shutdown = async (): Promise<void> => {
 
 export const otel = { sdk, shutdown };
 export default otel;
+
+// Phase 6 plan 06-01: named export so plan 06-03 can host
+// `getMetricsRequestHandler` inside a Bearer-gated Express app (D-02).
+// `undefined` when MS365_MCP_PROMETHEUS_ENABLED is not '1'/'true' — consumers
+// must null-check before reading.
+export { prometheusExporter };
