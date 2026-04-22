@@ -1264,8 +1264,27 @@ class MicrosoftGraphServer {
       toolsListFilter,
       legacySsePost
     );
-    app.post('/t/:tenantId/mcp', seedTenantContext, authSelector, toolsListFilter, streamableHttp);
-    app.get('/t/:tenantId/mcp', seedTenantContext, authSelector, streamableHttp);
+    // region:phase6-rate-limit (plan 06-09 — closes OPS-08 gap from 06-04 Task 3)
+    // Mount the per-tenant rate-limit middleware BETWEEN the existing chain
+    // members and the streamableHttp handler. Both request-rate and
+    // graph-points budgets are gated (per ROADMAP SC#3 + RESEARCH.md
+    // §Open Question #5). legacy SSE routes (/t/:tenantId/sse +
+    // /t/:tenantId/messages) are INTENTIONALLY NOT gated — SSE streams are
+    // long-lived; per-request gating would break MCP streaming semantics.
+    // D-04 per-tenant granularity is still preserved because the SAME tenant's
+    // Streamable HTTP requests (below) carry the budget.
+    const { createRateLimitMiddleware } = await import('./lib/rate-limit/middleware.js');
+    const rateLimit = createRateLimitMiddleware({ redis });
+    app.post(
+      '/t/:tenantId/mcp',
+      seedTenantContext,
+      authSelector,
+      toolsListFilter,
+      rateLimit,
+      streamableHttp
+    );
+    app.get('/t/:tenantId/mcp', seedTenantContext, authSelector, rateLimit, streamableHttp);
+    // endregion:phase6-rate-limit
 
     // region:phase4-webhook-receiver
     // Plan 04-07: Microsoft Graph change-notification receiver (WEBHK-01 +

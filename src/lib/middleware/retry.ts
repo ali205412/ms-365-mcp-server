@@ -50,6 +50,11 @@ import { mcpGraphThrottledTotal } from '../otel-metrics.js';
 import { requestContext } from '../../request-context.js';
 import { GraphError } from '../graph-errors.js';
 import type { GraphMiddleware, GraphRequest } from './types.js';
+// plan 06-09 (OPS-08 D-05): post-2xx observe hook for graph-points budget auto-tracking.
+// parseResourceUnit caps at 100 (A1 defense-in-depth); observe() never gates.
+import { observe, parseResourceUnit } from '../rate-limit/sliding-window.js';
+import { WINDOW_MS } from '../rate-limit/defaults.js';
+import { getRedis } from '../redis.js';
 
 const BASE_MS = 500;
 const CAP_MS = 30_000;
@@ -82,6 +87,7 @@ export class RetryHandler implements GraphMiddleware {
           if (!RETRYABLE_STATUSES.has(response.status)) {
             finalizeSpan(span, attempt, response.status);
             updateContext(attempt, response.status);
+            observeResourceUnit(response);
             return response;
           }
 
@@ -95,6 +101,7 @@ export class RetryHandler implements GraphMiddleware {
             );
             finalizeSpan(span, attempt, response.status);
             updateContext(attempt, response.status);
+            observeResourceUnit(response);
             return response;
           }
 
@@ -103,6 +110,7 @@ export class RetryHandler implements GraphMiddleware {
           if (!shouldRetryMethodByStatus(req.method, response.status, req.headers)) {
             finalizeSpan(span, attempt, response.status);
             updateContext(attempt, response.status);
+            observeResourceUnit(response);
             return response;
           }
 
@@ -198,6 +206,46 @@ function emitThrottleMetric(status: number): void {
   if (status !== 429) return;
   const tenantId = requestContext.getStore()?.tenantId ?? 'unknown';
   mcpGraphThrottledTotal.add(1, { tenant: tenantId });
+}
+
+/**
+ * Plan 06-09 (OPS-08, D-05) — observe Graph's x-ms-resource-unit post-response
+ * and fire-and-forget `observe()` to the per-tenant graph-points ZSET. This is
+ * the D-05 auto-tracking hook: the graph-points budget scales with real
+ * observed cost instead of a static estimate.
+ *
+ * Fire-and-forget semantics:
+ *   - Never await the observe() promise — response delivery must not block on
+ *     rate-limit bookkeeping.
+ *   - Any throw from observe() is caught and logged warn; never surfaces.
+ *   - Skip when tenantId is undefined (stdio mode) or when response has no
+ *     meaningful body for the resource-unit header (headers absent).
+ *
+ * This helper is called from the non-retryable-return + retry-exhausted +
+ * idempotency-gate branches in RetryHandler.execute — see call-sites below.
+ */
+function observeResourceUnit(response: Response): void {
+  try {
+    const ctx = requestContext.getStore();
+    const tenantId = ctx?.tenantId;
+    if (!tenantId) return;
+    // response.headers is a Fetch Headers object; .get() returns string | null.
+    const headerValue =
+      typeof response.headers?.get === 'function'
+        ? response.headers.get('x-ms-resource-unit')
+        : null;
+    const weight = parseResourceUnit(headerValue);
+    if (weight <= 0) return;
+    void observe(getRedis(), tenantId, WINDOW_MS, weight).catch((err: Error) => {
+      logger.warn({ err: err.message, tenantId, weight }, 'plan 06-09: rate-limit observe failed');
+    });
+  } catch (obsErr) {
+    // Defensive: never let observation errors bubble up to the retry loop.
+    logger.warn(
+      { err: (obsErr as Error).message },
+      'plan 06-09: observeResourceUnit wrapper threw'
+    );
+  }
 }
 
 /**
