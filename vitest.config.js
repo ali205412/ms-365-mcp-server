@@ -29,6 +29,13 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     setupFiles: ['./test/setup.ts'],
+    // Plan 06-05 (D-07): vitest globalSetup that boots Postgres + Redis
+    // Testcontainers once per process and hands URLs to .int.test.ts files
+    // via project.provide() / vitest.inject(). Gated by the same
+    // MS365_MCP_INTEGRATION=1 flag as the integration-tier exclude list so
+    // `npm test` (unit-only) pays ZERO Docker cost — the hook is not even
+    // registered when the gate is off.
+    globalSetup: RUN_INTEGRATION ? ['./test/setup/integration-globalSetup.ts'] : [],
     exclude: ['**/node_modules/**', '**/dist/**', ...(RUN_INTEGRATION ? [] : INTEGRATION_PATTERNS)],
     // Threads share a single V8 isolate (one parse of the 46 MB client)
     // across many test files, where forks + isolate:true would re-parse
@@ -63,5 +70,16 @@ export default defineConfig({
     // comfortably over the observed cold-import wall time.
     testTimeout: 45_000,
     hookTimeout: 45_000,
+    // Plan 06-05 D-10: coverage narrowed to src/server.ts so the post-
+    // processor (bin/check-oauth-coverage.mjs) operates on a small
+    // statement map. The post-processor filters further to the OAuth
+    // handler line ranges specifically — whole-file coverage would
+    // include the MCP transport branches and mask the OAuth surface
+    // coverage number that D-10 tracks.
+    coverage: {
+      provider: 'v8',
+      include: ['src/server.ts'],
+      reporter: ['json', 'lcov', 'text'],
+    },
   },
 });
