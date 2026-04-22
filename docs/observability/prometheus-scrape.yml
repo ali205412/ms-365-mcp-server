@@ -19,7 +19,7 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets:
-          - "ms-365-mcp-server:9464"   # Docker Compose service name
+          - 'ms-365-mcp-server:9464' # Docker Compose service name
         labels:
           service: ms-365-mcp-server
           environment: production
@@ -41,7 +41,7 @@ scrape_configs:
       credentials: YOUR_BEARER_TOKEN
     static_configs:
       - targets:
-          - "mcp.example.com:9464"
+          - 'mcp.example.com:9464'
         labels:
           service: ms-365-mcp-server
           environment: production

@@ -11,10 +11,10 @@ Either budget exhausted → gateway returns HTTP 429 + `Retry-After` BEFORE any 
 
 Configured via env vars (apply to tenants with `rate_limits = NULL`):
 
-| Env Var | Default | Meaning |
-|---------|---------|---------|
-| `MS365_MCP_DEFAULT_REQ_PER_MIN` | 1000 | Requests/min/tenant |
-| `MS365_MCP_DEFAULT_GRAPH_POINTS_PER_MIN` | 50000 | ResourceUnits/min/tenant |
+| Env Var                                  | Default | Meaning                  |
+| ---------------------------------------- | ------- | ------------------------ |
+| `MS365_MCP_DEFAULT_REQ_PER_MIN`          | 1000    | Requests/min/tenant      |
+| `MS365_MCP_DEFAULT_GRAPH_POINTS_PER_MIN` | 50000   | ResourceUnits/min/tenant |
 
 ## Per-Tenant Override
 
@@ -31,6 +31,7 @@ PATCH /admin/tenants/{id}
 ```
 
 Zod validators:
+
 - `request_per_min`: positive integer, max `1_000_000`.
 - `graph_points_per_min`: positive integer, max `10_000_000`.
 
@@ -40,15 +41,16 @@ Set `rate_limits: null` to clear the override and re-inherit platform defaults.
 
 Microsoft Graph enforces per-tenant resource unit ceilings:
 
-| Graph Tier | RU / 10s | RU / min (approx) | Conservative `graph_points_per_min` | Rationale |
-|------------|----------|-------------------|-------------------------------------|-----------|
-| **Small (S)** | 3,500 | 21,000 | **50,000** | ~24% of the 10s-peak — headroom for multiple tenants against the same Graph tenant, plus retry overhead. |
-| **Medium (M)** | 5,000 | 30,000 | **150,000** | Same ratio as S. |
-| **Large (L)** | 8,000 | 48,000 | **300,000** | Same ratio as L. |
+| Graph Tier     | RU / 10s | RU / min (approx) | Conservative `graph_points_per_min` | Rationale                                                                                                |
+| -------------- | -------- | ----------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| **Small (S)**  | 3,500    | 21,000            | **50,000**                          | ~24% of the 10s-peak — headroom for multiple tenants against the same Graph tenant, plus retry overhead. |
+| **Medium (M)** | 5,000    | 30,000            | **150,000**                         | Same ratio as S.                                                                                         |
+| **Large (L)**  | 8,000    | 48,000            | **300,000**                         | Same ratio as L.                                                                                         |
 
 The `graph_points_per_min` budget is OUR gateway's per-tenant ceiling — it bounds how many ResourceUnits a single tenant can consume from the shared Graph-tenant allowance. Microsoft's actual rate limit is enforced separately at their end; if we 429 a tenant before Graph does, the tenant simply retries later against our budget without hitting Graph's limits.
 
 **Starting rule of thumb:**
+
 - Single-tenant deployment (one Graph tenant, one mcp tenant): use M-tier defaults.
 - Multi-tenant deployment (one Graph tenant, N mcp tenants): divide M-tier by N and configure per-tenant.
 - Cross-Graph deployment (mcp tenants mapped to DIFFERENT Graph tenants): use M-tier per mcp tenant.
@@ -57,12 +59,12 @@ The `graph_points_per_min` budget is OUR gateway's per-tenant ceiling — it bou
 
 The request-rate budget caps raw tool-call volume regardless of workload. Typical values:
 
-| Use Case | `request_per_min` | Rationale |
-|----------|-------------------|-----------|
-| Human chat app (one AI assistant per tenant) | 200–500 | A single assistant rarely sustains > 5 tool calls per second. |
-| Multiple assistants + automation | 1,000 (default) | Headroom for burst without abuse. |
-| Batch workflows / background agents | 2,000–5,000 | Elevated but capped to prevent runaway loops. |
-| Public demo / untrusted clients | 100 | Low cap; raise per customer. |
+| Use Case                                     | `request_per_min` | Rationale                                                     |
+| -------------------------------------------- | ----------------- | ------------------------------------------------------------- |
+| Human chat app (one AI assistant per tenant) | 200–500           | A single assistant rarely sustains > 5 tool calls per second. |
+| Multiple assistants + automation             | 1,000 (default)   | Headroom for burst without abuse.                             |
+| Batch workflows / background agents          | 2,000–5,000       | Elevated but capped to prevent runaway loops.                 |
+| Public demo / untrusted clients              | 100               | Low cap; raise per customer.                                  |
 
 ## Observed-Cost Mechanism
 

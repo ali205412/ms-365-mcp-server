@@ -15,40 +15,40 @@ services:
       - MS365_MCP_METRICS_BEARER=replace-me-with-random-32-bytes
       # ... other env
     labels:
-      - "traefik.enable=true"
+      - 'traefik.enable=true'
 
       # Main MCP surface
-      - "traefik.http.routers.mcp.rule=Host(`mcp.example.com`)"
-      - "traefik.http.routers.mcp.entrypoints=websecure"
-      - "traefik.http.routers.mcp.tls.certresolver=letsencrypt"
-      - "traefik.http.services.mcp.loadbalancer.server.port=3000"
+      - 'traefik.http.routers.mcp.rule=Host(`mcp.example.com`)'
+      - 'traefik.http.routers.mcp.entrypoints=websecure'
+      - 'traefik.http.routers.mcp.tls.certresolver=letsencrypt'
+      - 'traefik.http.services.mcp.loadbalancer.server.port=3000'
       # Long-lived timeout for MCP streams (default is 0 = unlimited for read, 1m for idle).
-      - "traefik.http.services.mcp.loadbalancer.responseforwarding.flushInterval=100ms"
+      - 'traefik.http.services.mcp.loadbalancer.responseforwarding.flushInterval=100ms'
 
       # Security headers
-      - "traefik.http.middlewares.mcp-sec.headers.stsSeconds=31536000"
-      - "traefik.http.middlewares.mcp-sec.headers.stsIncludeSubdomains=true"
-      - "traefik.http.middlewares.mcp-sec.headers.contentTypeNosniff=true"
-      - "traefik.http.middlewares.mcp-sec.headers.frameDeny=true"
-      - "traefik.http.middlewares.mcp-sec.headers.referrerPolicy=strict-origin-when-cross-origin"
-      - "traefik.http.routers.mcp.middlewares=mcp-sec@docker"
+      - 'traefik.http.middlewares.mcp-sec.headers.stsSeconds=31536000'
+      - 'traefik.http.middlewares.mcp-sec.headers.stsIncludeSubdomains=true'
+      - 'traefik.http.middlewares.mcp-sec.headers.contentTypeNosniff=true'
+      - 'traefik.http.middlewares.mcp-sec.headers.frameDeny=true'
+      - 'traefik.http.middlewares.mcp-sec.headers.referrerPolicy=strict-origin-when-cross-origin'
+      - 'traefik.http.routers.mcp.middlewares=mcp-sec@docker'
 
       # Metrics — separate router with IP allowlist (Prometheus only).
-      - "traefik.http.routers.metrics.rule=Host(`metrics.example.com`)"
-      - "traefik.http.routers.metrics.entrypoints=websecure"
-      - "traefik.http.routers.metrics.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.metrics.middlewares=ip-allowlist@docker"
-      - "traefik.http.routers.metrics.service=metrics"
-      - "traefik.http.services.metrics.loadbalancer.server.port=9464"
-      - "traefik.http.middlewares.ip-allowlist.ipallowlist.sourcerange=10.0.0.0/8"
+      - 'traefik.http.routers.metrics.rule=Host(`metrics.example.com`)'
+      - 'traefik.http.routers.metrics.entrypoints=websecure'
+      - 'traefik.http.routers.metrics.tls.certresolver=letsencrypt'
+      - 'traefik.http.routers.metrics.middlewares=ip-allowlist@docker'
+      - 'traefik.http.routers.metrics.service=metrics'
+      - 'traefik.http.services.metrics.loadbalancer.server.port=9464'
+      - 'traefik.http.middlewares.ip-allowlist.ipallowlist.sourcerange=10.0.0.0/8'
 
       # Admin — separate router typically behind Entra SSO or IP allowlist.
-      - "traefik.http.routers.admin.rule=Host(`admin.example.com`)"
-      - "traefik.http.routers.admin.entrypoints=websecure"
-      - "traefik.http.routers.admin.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.admin.middlewares=ip-allowlist@docker"
-      - "traefik.http.routers.admin.service=admin"
-      - "traefik.http.services.admin.loadbalancer.server.port=3000"
+      - 'traefik.http.routers.admin.rule=Host(`admin.example.com`)'
+      - 'traefik.http.routers.admin.entrypoints=websecure'
+      - 'traefik.http.routers.admin.tls.certresolver=letsencrypt'
+      - 'traefik.http.routers.admin.middlewares=ip-allowlist@docker'
+      - 'traefik.http.routers.admin.service=admin'
+      - 'traefik.http.services.admin.loadbalancer.server.port=3000'
 ```
 
 ## SSE Verification
