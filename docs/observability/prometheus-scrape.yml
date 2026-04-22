@@ -1,0 +1,52 @@
+# Reference Prometheus scrape config for ms-365-mcp-server v2.
+# Plan 06-07 — docs/observability/prometheus-scrape.yml
+#
+# Two configurations shown: localhost-only (open endpoint) and Bearer-gated.
+# Pick ONE per deployment. See docs/observability/env-vars.md § Metrics server
+# for the security posture decision.
+
+scrape_configs:
+  # ----------------------------------------------------------------------
+  # Variant 1: localhost-only (MS365_MCP_METRICS_BEARER unset or empty)
+  #
+  # Prometheus and ms-365-mcp-server must share a network namespace
+  # (same host, same Docker network, etc.). Endpoint is NOT
+  # reachable from outside the trust boundary.
+  # ----------------------------------------------------------------------
+  - job_name: ms-365-mcp-server
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - 'ms-365-mcp-server:9464' # Docker Compose service name
+        labels:
+          service: ms-365-mcp-server
+          environment: production
+
+  # ----------------------------------------------------------------------
+  # Variant 2: Bearer-gated (MS365_MCP_METRICS_BEARER set)
+  #
+  # Use when the metrics port is exposed beyond the host's trust
+  # boundary. Replace YOUR_BEARER_TOKEN with the value of
+  # MS365_MCP_METRICS_BEARER. Constant-time-compared on the server
+  # via crypto.timingSafeEqual (plan 06-03).
+  # ----------------------------------------------------------------------
+  - job_name: ms-365-mcp-server-secured
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials: YOUR_BEARER_TOKEN
+    static_configs:
+      - targets:
+          - 'mcp.example.com:9464'
+        labels:
+          service: ms-365-mcp-server
+          environment: production
+
+# OpenTelemetry Collector alternative: configure an OTel collector to
+# receive via Prometheus receiver on the same /metrics endpoint; the
+# collector can re-export to any compatible backend (Mimir, Cortex,
+# Grafana Cloud, etc.). The Bearer token works identically.
