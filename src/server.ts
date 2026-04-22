@@ -1906,6 +1906,48 @@ class MicrosoftGraphServer {
         });
       }
       registerShutdownHooks(httpServer, logger);
+
+      // region:phase6-metrics-server (filled by 06-03 — OPS-07)
+      // Host the PrometheusExporter's getMetricsRequestHandler behind an
+      // optional Bearer gate on a dedicated port (default 9464 per D-08),
+      // and wire the mcp_oauth_pkce_store_size observable gauge to the active
+      // PkceStore instance. Dynamic imports so the module-load cost is only
+      // paid when operators actually enable Prometheus.
+      if (
+        process.env.MS365_MCP_PROMETHEUS_ENABLED === '1' ||
+        process.env.MS365_MCP_PROMETHEUS_ENABLED === 'true'
+      ) {
+        try {
+          const { prometheusExporter } = await import('./lib/otel.js');
+          if (prometheusExporter) {
+            const { createMetricsServer } = await import('./lib/metrics-server/metrics-server.js');
+            const { wirePkceStoreGauge } = await import('./lib/otel-metrics.js');
+            const metricsPortEnv = process.env.MS365_MCP_METRICS_PORT;
+            const metricsPort =
+              metricsPortEnv !== undefined && metricsPortEnv !== '' ? Number(metricsPortEnv) : 9464;
+            const metricsServer = createMetricsServer(prometheusExporter, {
+              port: metricsPort,
+              bearerToken: process.env.MS365_MCP_METRICS_BEARER ?? null,
+            });
+            // Attach mcp_oauth_pkce_store_size — observable gauge polls
+            // pkceStore.size() on each collection interval.
+            wirePkceStoreGauge(this.pkceStore);
+            // Register shutdown hook so graceful-shutdown (plan 01-05) closes
+            // the metrics listener alongside the main HTTP server.
+            registerShutdownHooks(metricsServer, logger);
+          } else {
+            logger.warn(
+              'plan 06-03: MS365_MCP_PROMETHEUS_ENABLED is truthy but prometheusExporter is undefined — check OTel bootstrap (src/lib/otel.ts)'
+            );
+          }
+        } catch (err) {
+          logger.error(
+            { err: (err as Error).message },
+            'plan 06-03: failed to start metrics server'
+          );
+        }
+      }
+      // endregion:phase6-metrics-server
     } else {
       const transport = new StdioServerTransport();
       await this.server!.connect(transport);
