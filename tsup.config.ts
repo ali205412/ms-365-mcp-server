@@ -11,7 +11,21 @@ export default defineConfig({
   sourcemap: false,
   dts: false,
   publicDir: false,
-  onSuccess: process.platform === 'win32' ? undefined : 'chmod +x dist/index.js',
+  onSuccess: async () => {
+    // Phase 6 plan 06-04: preserve the chmod behavior AND copy the Lua script.
+    const { chmodSync, copyFileSync, mkdirSync } = await import('node:fs');
+    const path = await import('node:path');
+    // 1. Preserve existing chmod (skip on Windows — matches prior behavior).
+    if (process.platform !== 'win32') {
+      chmodSync('dist/index.js', 0o755);
+    }
+    // 2. Copy the Lua script so runtime readFileSync(__dirname/sliding-window.lua)
+    //    resolves in dist/lib/rate-limit/.
+    const srcLua = path.resolve('src/lib/rate-limit/sliding-window.lua');
+    const distLua = path.resolve('dist/lib/rate-limit/sliding-window.lua');
+    mkdirSync(path.dirname(distLua), { recursive: true });
+    copyFileSync(srcLua, distLua);
+  },
   loader: {
     '.json': 'copy',
   },

@@ -22,6 +22,18 @@ import type { Envelope } from '../crypto/envelope.js';
 export type TenantMode = 'delegated' | 'app-only' | 'bearer';
 export type CloudType = 'global' | 'china';
 
+/**
+ * Plan 06-04 (D-11). Per-tenant rate-limit override shape stored in the
+ * JSONB `tenants.rate_limits` column. NULL (absent) means the tenant
+ * inherits the platform defaults from MS365_MCP_DEFAULT_REQ_PER_MIN and
+ * MS365_MCP_DEFAULT_GRAPH_POINTS_PER_MIN env vars (see
+ * src/lib/rate-limit/defaults.ts::resolveRateLimits).
+ */
+export interface RateLimitsConfig {
+  request_per_min: number;
+  graph_points_per_min: number;
+}
+
 export interface TenantRow {
   id: string;
   mode: TenantMode;
@@ -58,6 +70,14 @@ export interface TenantRow {
    * access simply don't set it.
    */
   sharepoint_domain: string | null;
+  /**
+   * Plan 06-04 (D-11). Per-tenant rate-limit overrides. NULL = inherit
+   * platform defaults from MS365_MCP_DEFAULT_REQ_PER_MIN /
+   * MS365_MCP_DEFAULT_GRAPH_POINTS_PER_MIN env vars.
+   * Admin PATCH /admin/tenants/{id} accepts the JSONB shape; dispatch
+   * consumes via src/lib/rate-limit/defaults.ts::resolveRateLimits.
+   */
+  rate_limits: RateLimitsConfig | null;
   wrapped_dek: Envelope | null;
   slug: string | null;
   disabled_at: Date | null;
