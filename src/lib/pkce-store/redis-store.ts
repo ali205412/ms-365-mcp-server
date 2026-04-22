@@ -58,4 +58,32 @@ export class RedisPkceStore implements PkceStore {
     if (!raw) return null;
     return JSON.parse(raw) as PkceEntry;
   }
+
+  /**
+   * Plan 06-03 (OPS-07) — count of PKCE entries via SCAN MATCH mcp:pkce:*
+   * COUNT 500. SCAN is non-blocking (unlike KEYS, which would stall the
+   * Redis event loop for the full O(n) scan across the entire keyspace
+   * — banned on prod per CONTEXT.md §D-02 rationale). Cursor-based
+   * iteration continues until Redis returns cursor '0' to signal
+   * completion.
+   *
+   * Pattern `mcp:pkce:*` matches the keying contract
+   * `mcp:pkce:{tenantId}:{clientCodeChallenge}` from plan 03-03, so the
+   * count aggregates across ALL tenants — matching the gauge contract
+   * (unlabelled aggregate, per T-06-03-e disposition).
+   */
+  async size(): Promise<number> {
+    let cursor = '0';
+    let total = 0;
+    do {
+      const [next, batch] = await (
+        this.redis as unknown as {
+          scan: (cursor: string, ...args: Array<string | number>) => Promise<[string, string[]]>;
+        }
+      ).scan(cursor, 'MATCH', 'mcp:pkce:*', 'COUNT', '500');
+      cursor = next;
+      total += batch.length;
+    } while (cursor !== '0');
+    return total;
+  }
 }

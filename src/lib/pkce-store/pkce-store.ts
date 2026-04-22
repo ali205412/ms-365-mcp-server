@@ -49,8 +49,19 @@ export interface PkceStore {
    * Returns the entry on hit, null on miss. Two concurrent calls with the
    * same key: exactly one gets the entry, the other gets null.
    */
-  takeByChallenge(
-    tenantId: string,
-    clientCodeChallenge: string
-  ): Promise<PkceEntry | null>;
+  takeByChallenge(tenantId: string, clientCodeChallenge: string): Promise<PkceEntry | null>;
+
+  /**
+   * Plan 06-03 (OPS-07) — observable count for the
+   * `mcp_oauth_pkce_store_size` gauge (Phase 6 success criterion 1).
+   *
+   * Semantics: aggregate count across all tenants (no labels — the gauge is
+   * intentionally unlabelled per 06-CONTEXT.md §T-06-03-e disposition).
+   *
+   * Implementations:
+   *   - RedisPkceStore: SCAN MATCH mcp:pkce:* COUNT 500 — non-blocking,
+   *     cursor-based. Never KEYS (banned on prod Redis).
+   *   - MemoryPkceStore: Map.size — O(1).
+   */
+  size(): Promise<number>;
 }

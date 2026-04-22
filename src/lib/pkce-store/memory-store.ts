@@ -49,4 +49,17 @@ export class MemoryPkceStore implements PkceStore {
     }
     return e.entry;
   }
+
+  /**
+   * Plan 06-03 (OPS-07) — Map.size is O(1). Stdio-mode PKCE store is
+   * process-local, so size() observably represents a single process's
+   * in-flight entries. Includes expired entries that have not yet been
+   * cleaned up on access (no background timer per the class-level rule);
+   * this is acceptable because the gauge is an aggregate health signal,
+   * not a precise count, and expired entries age out within 600s as
+   * /token lookups cull them.
+   */
+  async size(): Promise<number> {
+    return this.store.size;
+  }
 }
