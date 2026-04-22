@@ -167,6 +167,27 @@ async function executeGraphTool(
 ): Promise<CallToolResult> {
   logger.info(`Tool ${tool.alias} called with params: ${JSON.stringify(params)}`);
 
+  // Plan 06-02 (OPS-05, D-06): augment ALS frame with toolAlias for GraphClient
+  // span attribute + workload-prefix label. Spread preserves upstream fields
+  // (tenantId, enabledToolsSet, presetVersion from seedTenantContext; tokens
+  // from authSelector/bearer). Stdio mode: upstream frame may be undefined; the
+  // `?? {}` fallback yields an empty object and the spread still composes a
+  // valid frame. GraphClient.makeRequest reads ctx.toolAlias inside the span
+  // wrap to populate the `tool.alias` attribute and the workload-prefix metric
+  // label (via labelForTool).
+  const existingCtx = requestContext.getStore() ?? {};
+  return requestContext.run({ ...existingCtx, toolAlias: tool.alias }, () =>
+    executeGraphToolInner(tool, config, graphClient, params, authManager)
+  );
+}
+
+async function executeGraphToolInner(
+  tool: (typeof api.endpoints)[0],
+  config: EndpointConfig | undefined,
+  graphClient: GraphClient,
+  params: Record<string, unknown>,
+  authManager?: AuthManager
+): Promise<CallToolResult> {
   // ── DISPATCH GATE (plan 05-04, TENANT-08, D-20) ────────────────────────
   // Read enabled_tools_set + tenantId + preset_version from AsyncLocalStorage.
   //   HTTP mode: populated by src/server.ts at /t/:tenantId/mcp entry

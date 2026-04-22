@@ -61,6 +61,13 @@ export interface RequestContext {
    * tenant row.
    */
   sharepointDomain?: string | null;
+  /**
+   * Plan 06-02 (OPS-05, D-06). Full tool alias captured at dispatch time and
+   * consumed by GraphClient.makeRequest to emit `tool.alias` span attribute.
+   * The metric label uses the workload prefix (labelForTool(alias)); the span
+   * attribute keeps the full alias for high-fidelity trace queries.
+   */
+  toolAlias?: string;
 }
 
 export const requestContext = new AsyncLocalStorage<RequestContext>();
