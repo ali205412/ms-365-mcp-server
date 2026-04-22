@@ -91,9 +91,13 @@ export function createMetricsServer(
 
   app.get('/metrics', auth, (req: Request, res: Response) => {
     // exporter.getMetricsRequestHandler accepts (IncomingMessage, ServerResponse).
-    // Express Request extends IncomingMessage, Response extends ServerResponse,
-    // so these pass through as-is.
-    exporter.getMetricsRequestHandler(req, res);
+    // Express Request extends IncomingMessage at runtime; the `id` property
+    // added by pino-http is optional and unused by the exporter — widen the
+    // static type to match the nominal IncomingMessage contract.
+    exporter.getMetricsRequestHandler(
+      req as unknown as Parameters<typeof exporter.getMetricsRequestHandler>[0],
+      res as unknown as Parameters<typeof exporter.getMetricsRequestHandler>[1]
+    );
   });
 
   // Health probe for orchestrators (no auth — always 200). The metrics server
