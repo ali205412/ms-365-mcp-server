@@ -11,7 +11,7 @@ import { TOOL_CATEGORIES } from './tool-categories.js';
 import { getRequestTokens, getRequestTenant, requestContext } from './request-context.js';
 import { checkDispatch, _getStdioFallbackForTest } from './lib/tool-selection/dispatch-guard.js';
 import { parseTeamsUrl } from './lib/teams-url-parser.js';
-import { buildBM25Index, scoreQuery, tokenize, type BM25Index } from './lib/bm25.js';
+import { type BM25Index, tokenize, scoreQuery } from './lib/bm25.js';
 import { isProductPrefix } from './lib/auth/products.js';
 import { executeProductTool } from './lib/dispatch/product-routing.js';
 import {
@@ -20,10 +20,16 @@ import {
   type ToolRegistryEntry,
   type TenantBm25Cache,
 } from './lib/tool-selection/per-tenant-bm25.js';
-export interface DiscoverySearchIndex {
-  bm25: BM25Index;
-  nameTokens: Map<string, Set<string>>;
-}
+import { clampTopQueryParam } from './lib/graph-tools-pure.js';
+// Re-export pure helpers so existing callers (tests, downstream modules)
+// keep working. New callers should import directly from
+// `./lib/graph-tools-pure.js` to avoid transitively pulling the 45 MB
+// generated `./generated/client.js` catalog that this module imports.
+export {
+  buildDiscoverySearchIndex,
+  scoreDiscoveryQuery,
+  type DiscoverySearchIndex,
+} from './lib/graph-tools-pure.js';
 import { describeToolSchema } from './lib/tool-schema-describer.js';
 
 /**
@@ -81,28 +87,11 @@ const endpointsMap: Map<string, EndpointConfig> = new Map(
   endpointsData.map((e) => [e.toolName, e])
 );
 
-/** When set to a positive integer, caps Graph `$top` on list requests (see README). */
-function maxTopFromEnv(): number | undefined {
-  const raw = process.env.MS365_MCP_MAX_TOP;
-  if (raw === undefined || raw === '') return undefined;
-  const n = Number.parseInt(raw, 10);
-  if (!Number.isFinite(n) || n < 1) {
-    logger.warn(
-      `Ignoring invalid MS365_MCP_MAX_TOP=${JSON.stringify(raw)} (use a positive integer)`
-    );
-    return undefined;
-  }
-  return n;
-}
-
-function clampTopQueryParam(queryParams: Record<string, string>): void {
-  const cap = maxTopFromEnv();
-  if (cap === undefined || queryParams['$top'] === undefined) return;
-  const requested = Number.parseInt(queryParams['$top'], 10);
-  if (!Number.isFinite(requested) || requested <= cap) return;
-  logger.info(`Clamping $top from ${requested} to ${cap} (MS365_MCP_MAX_TOP)`);
-  queryParams['$top'] = String(cap);
-}
+// `maxTopFromEnv` + `clampTopQueryParam` live in `./lib/graph-tools-pure.ts`
+// so other modules can consume them without transitively loading the 45 MB
+// generated client catalog. `clampTopQueryParam` is imported above and used
+// directly below; `maxTopFromEnv` is only consumed internally by
+// `clampTopQueryParam` and is not re-exported here.
 
 type TextContent = {
   type: 'text';
@@ -1181,79 +1170,11 @@ export function buildToolsRegistry(
   return toolsMap;
 }
 
-/**
- * Builds a BM25 index over the tool registry. Name tokens are weighted 3x and llmTip
- * tokens 2x via repetition, so a tool whose name matches the query outranks one that
- * merely mentions the query term in its Microsoft-supplied description.
- */
-export function buildDiscoverySearchIndex(
-  toolsRegistry: ReturnType<typeof buildToolsRegistry>
-): DiscoverySearchIndex {
-  // Cap contribution from the `description` and `llmTip` fields so a verbose llmTip
-  // (e.g. the KQL search-syntax guide on list-mail-messages, ~300 tokens) doesn't
-  // inflate a tool's doc length and crush BM25's length normalization. Names and
-  // paths are short and reliable, so they stay uncapped and are repeated to carry
-  // the bulk of the ranking signal. Tip excerpt (12 tokens) is enough to capture
-  // the first "what this tool does" phrase without swamping the doc.
-  const TIP_EXCERPT_TOKENS = 12;
-  const DESC_CAP_TOKENS = 40;
-  const docs: Array<{ id: string; tokens: string[] }> = [];
-  const nameTokens = new Map<string, Set<string>>();
-  for (const [name, { tool, config }] of toolsRegistry) {
-    const nt = tokenize(name);
-    nameTokens.set(name, new Set(nt));
-    const pathTokens = tokenize(tool.path);
-    const descTokens = tokenize(tool.description).slice(0, DESC_CAP_TOKENS);
-    const tipTokens = tokenize(config?.llmTip).slice(0, TIP_EXCERPT_TOKENS);
-    const tokens = [
-      ...nt,
-      ...nt,
-      ...nt,
-      ...nt,
-      ...nt,
-      ...pathTokens,
-      ...pathTokens,
-      ...tipTokens,
-      ...descTokens,
-    ];
-    docs.push({ id: name, tokens });
-  }
-  return { bm25: buildBM25Index(docs), nameTokens };
-}
-
-/**
- * BM25 + a "name precision" bonus: reward tools whose names contain a high fraction
- * of the query tokens (and consist mostly of query-matching tokens). This counteracts
- * cases where a tool with a longer or more off-topic description outranks a tool
- * whose name directly matches — a common problem because many endpoint descriptions
- * are the wrong Graph prose pasted in.
- */
-export function scoreDiscoveryQuery(
-  query: string,
-  index: DiscoverySearchIndex
-): Array<{ id: string; score: number }> {
-  const queryTokenSet = new Set(tokenize(query));
-  if (queryTokenSet.size === 0) return [];
-  const ranked = scoreQuery(query, index.bm25);
-  const NAME_BONUS_WEIGHT = 2;
-  for (const r of ranked) {
-    const nt = index.nameTokens.get(r.id);
-    if (!nt || nt.size === 0) continue;
-    let matchedIdf = 0;
-    let matchedCount = 0;
-    for (const qt of queryTokenSet) {
-      if (nt.has(qt)) {
-        matchedCount++;
-        matchedIdf += index.bm25.idf.get(qt) ?? 0;
-      }
-    }
-    if (matchedCount === 0) continue;
-    const precision = matchedCount / nt.size;
-    r.score += precision * matchedIdf * NAME_BONUS_WEIGHT;
-  }
-  ranked.sort((a, b) => b.score - a.score);
-  return ranked;
-}
+// `buildDiscoverySearchIndex` + `scoreDiscoveryQuery` live in
+// `./lib/graph-tools-pure.ts` so they can be consumed without transitively
+// loading the 45 MB generated client catalog. They are re-exported at the
+// top of this module so existing imports of
+// `./graph-tools` keep working unchanged.
 
 /**
  * Project the `buildToolsRegistry` Map down to the lightweight
