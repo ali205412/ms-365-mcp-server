@@ -18,7 +18,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 4: Admin API, Webhooks & Delta Persistence** - Admin REST API (dual-secured: Entra OAuth + rotatable API keys) for tenant + key + audit lifecycle, /notifications webhook receiver with HMAC validation, subscription helpers, delta-token persistence per tenant + resource
 - [ ] **Phase 5: Graph Coverage Expansion & Per-Tenant Tool Selection** - Regenerated client against full Graph v1.0 + curated beta whitelist (~5,000 ops), default ~150-op essentials preset, per-tenant enabled_tools enforcement at dispatch and discovery, HIGH-priority workload coverage verified
 - [ ] **Phase 5.1: Power Platform & M365 Admin Surface Expansion** (INSERTED) - Extend the generator pipeline beyond Microsoft Graph to cover Power BI REST API, Power Apps, Power Automate, Exchange Admin (PowerShell REST bridge), and SharePoint Tenant Admin. Each product gets a namespace prefix (`__powerbi__`, `__pwrapps__`, `__pwrauto__`, `__exo__`, `__spadmin__`), per-product essentials preset additions, admin-API workload selectors, and coverage harness thresholds.
-- [ ] **Phase 6: Operational Observability & Rate Limiting** - OpenTelemetry traces + metrics on every Graph request (tenant/tool/status/duration/retry-count), Prometheus /metrics endpoint, per-tenant rate limiting (request count + Graph token budget), and the integration test pass that closes v1's 0%-coverage OAuth surface
+- [x] **Phase 6: Operational Observability & Rate Limiting** - OpenTelemetry traces + metrics on every Graph request (tenant/tool/status/duration/retry-count), Prometheus /metrics endpoint, per-tenant rate limiting (request count + Graph token budget), and the integration test pass that closes v1's 0%-coverage OAuth surface (completed 2026-04-22)
 
 ## Phase Details
 
@@ -56,7 +56,7 @@ Plans:
   3. AI assistant requesting a list whose result spans 50,000 items receives a response that either contains all items, or contains a partial page set with an explicit `_truncated: true` flag and resumable `nextLink` — never silently truncated
   4. AI assistant uploading a 200 MB file via the upload-session helper resumes after a simulated mid-stream 503 from `nextExpectedRanges` and the final DriveItem is created intact
   5. AI assistant calling a Graph endpoint that returns a 4xx receives a structured `ODataError` with `code`, `message`, and Microsoft `requestId` available in MCP `_meta` so the user can paste the requestId into a Microsoft support ticket
-**Plans**: 7 plans
+**Plans**: 9 plans (7 original + 2 gap closure)
 **UI hint**: no
 
 Plans:
@@ -177,17 +177,19 @@ Plans:
   3. Operator can configure a tenant's request budget (e.g., 1000 req/min, 50000 Graph-points/min) via admin API; AI assistant exceeding either receives a structured 429 from the gateway (with `Retry-After`) before any Graph call is made; metric `mcp_rate_limit_blocked_total{tenant,reason}` increments
   4. Integration test suite exercises: two concurrent PKCE flows interleaving on the same server, dynamic registration with valid + invalid `redirect_uris`, multi-tenant token isolation (two tenants holding tokens, no cross-tenant cache hit), tenant disable cascading to MSAL eviction + Redis cryptoshred — all green in CI
   5. Operator running `npm test -- --coverage` sees src/server.ts coverage above 70% (up from 0% in v1 per CONCERNS.md) on the OAuth-surface lines (PKCE store, /authorize, /token, /register, /.well-known/*)
-**Plans**: 7 plans
+**Plans**: 9 plans (7 original + 2 gap closure)
 **UI hint**: no
 
 Plans:
 - [x] 06-01: OpenTelemetry SDK bootstrap — `instrumentation.ts` preloaded via `NODE_OPTIONS=--require ./instrumentation.js`, OTLP trace exporter, metric reader wired to PrometheusExporter on port 9464; auto-instrumentations for HTTP/Express/PG/IORedis with fs disabled; `serviceName: 'ms-365-mcp-server'`
 - [x] 06-02: Per-Graph-request span and metric emission (OPS-05, OPS-06) — every `GraphClient.makeRequest` emits an OTel span and updates `mcp_tool_calls_total`/`mcp_tool_duration_seconds`/`mcp_graph_throttled_total` (incremented by RetryHandler from Phase 2); span attributes include `tenant.id`, `tool.name`, `http.status_code`, `graph.request_id` (from ODataError if present), `retry_count`
-- [ ] 06-03: Prometheus `/metrics` endpoint (OPS-07) — exposed by PrometheusExporter on dedicated port (default 9464, configurable); document scrape config; expose process metrics + custom MCP metrics; gate with optional Bearer auth for non-localhost deployments
-- [ ] 06-04: Per-tenant rate limiter (OPS-08) — Redis-backed sliding-window counter for request count (`mcp:rl:req:{tenantId}`); separate counter for Graph token budget (`mcp:rl:graph:{tenantId}`) accumulated from observed Graph throttle headers; admin API to configure per-tenant budgets (extends Phase 4); 429 response from gateway with `Retry-After` before any Graph call when budget exhausted
+- [x] 06-03: Prometheus `/metrics` endpoint (OPS-07) — exposed by PrometheusExporter on dedicated port (default 9464, configurable); document scrape config; expose process metrics + custom MCP metrics; gate with optional Bearer auth for non-localhost deployments
+- [x] 06-04: Per-tenant rate limiter (OPS-08) — Redis-backed sliding-window counter for request count (`mcp:rl:req:{tenantId}`); separate counter for Graph token budget (`mcp:rl:graph:{tenantId}`) accumulated from observed Graph throttle headers; admin API to configure per-tenant budgets (extends Phase 4); 429 response from gateway with `Retry-After` before any Graph call when budget exhausted
 - [x] 06-05: OAuth-surface integration test suite (closes 0%-coverage gap from CONCERNS.md) — concurrent PKCE flow tests, dynamic-registration valid/invalid redirect_uri tests, /token error-path coverage (no body in logs verification), /well-known metadata correctness with and without `MS365_MCP_PUBLIC_URL`, multi-tenant token isolation tests; targets >70% coverage on src/server.ts
-- [ ] 06-06: Multi-tenant correctness regression suite — two-tenant concurrent-request test (verifies cache-key isolation by deliberately requesting same `userOid+scope` from different `tenantId` and asserting cache misses); tenant disable + Redis cryptoshred cascade test; bearer-pass-through `tid` mismatch test
-- [ ] 06-07: Operational documentation — runbook covering common alerts off the metric set, scrape-target reference Prometheus + Grafana JSON dashboard skeleton (operator-owned per PROJECT.md, but a starter committed under `docs/observability/`), per-tenant rate-limit tuning guide, audit-log query cookbook, KEK rotation procedure, reverse-proxy reference configs (Caddy primary, nginx + Traefik secondary) with SSE buffering directives
+- [x] 06-06: Multi-tenant correctness regression suite — two-tenant concurrent-request test (verifies cache-key isolation by deliberately requesting same `userOid+scope` from different `tenantId` and asserting cache misses); tenant disable + Redis cryptoshred cascade test; bearer-pass-through `tid` mismatch test
+- [x] 06-07: Operational documentation — runbook covering common alerts off the metric set, scrape-target reference Prometheus + Grafana JSON dashboard skeleton (operator-owned per PROJECT.md, but a starter committed under `docs/observability/`), per-tenant rate-limit tuning guide, audit-log query cookbook, KEK rotation procedure, reverse-proxy reference configs (Caddy primary, nginx + Traefik secondary) with SSE buffering directives
+- [x] 06-08: **Gap closure** — wire Prometheus `/metrics` endpoint into `src/server.ts` startup (closes 06-03 Task 3) — `region:phase6-metrics-server` block + `wirePkceStoreGauge(this.pkceStore)` + additive SIGTERM/SIGINT shutdown hook + self-contained Tier B integration test (closes VERIFICATION.md gap 1, unblocks ROADMAP SC#1)
+- [x] 06-09: **Gap closure** — rate-limit middleware + retry observe hook + server chain wiring (closes 06-04 Task 3) — create `src/lib/rate-limit/middleware.ts` (two-budget gate + mcp_rate_limit_blocked_total emission + fail-closed 503), extend `src/lib/middleware/retry.ts` with `parseResourceUnit` + `observe()` fire-and-forget at 2xx return sites (D-05), add `region:phase6-rate-limit` mount on `/t/:tenantId/mcp` POST + GET chains (closes VERIFICATION.md gap 2, unblocks ROADMAP SC#3)
 
 ## Progress
 
@@ -201,7 +203,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 3. Multi-Tenant Identity & State Substrate | 0/10 | Not started | - |
 | 4. Admin API, Webhooks & Delta Persistence | 0/9 | Not started | - |
 | 5. Graph Coverage Expansion & Per-Tenant Tool Selection | 0/8 | Not started | - |
-| 6. Operational Observability & Rate Limiting | 0/7 | Not started | - |
+| 6. Operational Observability & Rate Limiting | 9/9 | Complete    | 2026-04-22 |
 
 ---
 
