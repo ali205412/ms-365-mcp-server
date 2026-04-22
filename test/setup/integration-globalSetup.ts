@@ -17,10 +17,7 @@
  * test files that inject('pgUrl') get `string` back.
  */
 import type { TestProject } from 'vitest/node';
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from '@testcontainers/postgresql';
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
 
 declare module 'vitest' {

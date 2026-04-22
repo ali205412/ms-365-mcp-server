@@ -47,10 +47,7 @@ export interface SeedTenantOverrides {
  *   - wrapped_dek=NULL
  *   - rate_limits=null (platform defaults)
  */
-export async function seedTenant(
-  pool: Pool,
-  overrides: SeedTenantOverrides = {}
-): Promise<string> {
+export async function seedTenant(pool: Pool, overrides: SeedTenantOverrides = {}): Promise<string> {
   const id = overrides.id ?? crypto.randomUUID();
   const mode = overrides.mode ?? 'delegated';
   const clientId = overrides.client_id ?? 'test-client-id';

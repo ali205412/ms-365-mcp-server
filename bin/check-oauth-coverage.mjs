@@ -104,9 +104,7 @@ function verifyLineRanges() {
       console.error(`  ${d.fn} at start=${d.start} — window did NOT match expected marker`);
       console.error(`    window:\n${d.window}`);
     }
-    console.error(
-      'Re-run grep for the handler function names, update OAUTH_LINE_RANGES, commit.'
-    );
+    console.error('Re-run grep for the handler function names, update OAUTH_LINE_RANGES, commit.');
     return 3;
   }
   return 0;
