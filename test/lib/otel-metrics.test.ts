@@ -45,6 +45,13 @@ describe('plan 06-02 — otel-metrics instrument registry', () => {
   let testEnv: ReturnType<typeof installTestMeterProvider>;
 
   beforeEach(async () => {
+    // Clear any pre-existing global MeterProvider before installing a fresh
+    // test provider. `metrics.setGlobalMeterProvider` has NX semantics — if
+    // another test (or prior suite) already registered one, our install
+    // silently becomes a no-op and the data-point assertions would capture
+    // nothing. `metrics.disable()` unregisters the global and forces our
+    // install to win.
+    metrics.disable();
     vi.resetModules();
     testEnv = installTestMeterProvider();
   });
@@ -88,9 +95,8 @@ describe('plan 06-02 — otel-metrics instrument registry', () => {
     });
 
     it('exports Counters mcpGraphThrottledTotal + mcpRateLimitBlockedTotal', async () => {
-      const { mcpGraphThrottledTotal, mcpRateLimitBlockedTotal } = await import(
-        '../../src/lib/otel-metrics.js'
-      );
+      const { mcpGraphThrottledTotal, mcpRateLimitBlockedTotal } =
+        await import('../../src/lib/otel-metrics.js');
       expect(typeof mcpGraphThrottledTotal.add).toBe('function');
       expect(typeof mcpRateLimitBlockedTotal.add).toBe('function');
     });
@@ -110,7 +116,7 @@ describe('plan 06-02 — otel-metrics instrument registry', () => {
     it('mcpToolCallsTotal.add(1, {tenant,tool,status}) is captured with exact labels', async () => {
       const { mcpToolCallsTotal } = await import('../../src/lib/otel-metrics.js');
       mcpToolCallsTotal.add(1, { tenant: 't1', tool: 'mail', status: '200' });
-      await testEnv.reader.collect();
+      await testEnv.reader.forceFlush();
       const collected = testEnv.exporter.getMetrics();
       const series = collected
         .flatMap((batch) => batch.scopeMetrics.flatMap((sm) => sm.metrics))
@@ -128,7 +134,7 @@ describe('plan 06-02 — otel-metrics instrument registry', () => {
     it('mcpToolDurationSeconds.record(0.42, {tenant,tool}) stores histogram data', async () => {
       const { mcpToolDurationSeconds } = await import('../../src/lib/otel-metrics.js');
       mcpToolDurationSeconds.record(0.42, { tenant: 't1', tool: 'mail' });
-      await testEnv.reader.collect();
+      await testEnv.reader.forceFlush();
       const collected = testEnv.exporter.getMetrics();
       const hist = collected
         .flatMap((batch) => batch.scopeMetrics.flatMap((sm) => sm.metrics))
@@ -140,7 +146,7 @@ describe('plan 06-02 — otel-metrics instrument registry', () => {
     it('mcpGraphThrottledTotal increments only with tenant label (no tool, no status)', async () => {
       const { mcpGraphThrottledTotal } = await import('../../src/lib/otel-metrics.js');
       mcpGraphThrottledTotal.add(1, { tenant: 't-a' });
-      await testEnv.reader.collect();
+      await testEnv.reader.forceFlush();
       const collected = testEnv.exporter.getMetrics();
       const throttled = collected
         .flatMap((batch) => batch.scopeMetrics.flatMap((sm) => sm.metrics))
@@ -165,7 +171,7 @@ describe('plan 06-02 — otel-metrics instrument registry', () => {
           status: '200',
         });
       }
-      await testEnv.reader.collect();
+      await testEnv.reader.forceFlush();
       const collected = testEnv.exporter.getMetrics();
       const series = collected
         .flatMap((batch) => batch.scopeMetrics.flatMap((sm) => sm.metrics))

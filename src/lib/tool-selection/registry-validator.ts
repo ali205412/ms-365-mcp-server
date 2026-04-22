@@ -68,7 +68,7 @@ import { parseSelectorList } from './selector-ast.js';
  *   "__powerbi__GroupsGetGroups"    → "powerbi"
  *   "__spadmin__list-sites"         → "sp-admin"
  */
-function extractWorkloadPrefix(alias: string): string {
+export function extractWorkloadPrefix(alias: string): string {
   // Phase 5.1: product prefix → product name is the workload.
   // The 5-entry iteration is O(1) in practice; the alias-building pass runs
   // once at module load so this is never on a hot path.
