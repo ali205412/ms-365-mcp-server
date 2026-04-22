@@ -46,6 +46,7 @@
 
 import { trace, type Span } from '@opentelemetry/api';
 import logger from '../../logger.js';
+import { mcpGraphThrottledTotal } from '../otel-metrics.js';
 import { requestContext } from '../../request-context.js';
 import { GraphError } from '../graph-errors.js';
 import type { GraphMiddleware, GraphRequest } from './types.js';
@@ -181,6 +182,22 @@ function updateContext(retryCount: number, lastStatus: number): void {
     ctx.retryCount = retryCount;
     ctx.lastStatus = lastStatus;
   }
+  emitThrottleMetric(lastStatus);
+}
+
+/**
+ * Plan 06-02 Task 3 — increment mcp_graph_throttled_total when a terminal
+ * Graph observation carries status 429. Called once per RetryHandler exit
+ * path (via updateContext), so retries of the same logical call are
+ * counted exactly once at the terminal observation.
+ *
+ * Safe when requestContext is undefined (stdio mode): tenant label falls
+ * back to 'unknown'.
+ */
+function emitThrottleMetric(status: number): void {
+  if (status !== 429) return;
+  const tenantId = requestContext.getStore()?.tenantId ?? 'unknown';
+  mcpGraphThrottledTotal.add(1, { tenant: tenantId });
 }
 
 /**
