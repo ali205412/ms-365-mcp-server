@@ -108,6 +108,13 @@ export interface TenantWireRow {
    * operators to PATCH this field.
    */
   sharepoint_domain: string | null;
+  /**
+   * Plan 06-04 (D-11). Per-tenant rate-limit overrides. NULL inherits the
+   * platform defaults from MS365_MCP_DEFAULT_REQ_PER_MIN and
+   * MS365_MCP_DEFAULT_GRAPH_POINTS_PER_MIN env vars at consume time
+   * (src/lib/rate-limit/defaults.ts::resolveRateLimits).
+   */
+  rate_limits: { request_per_min: number; graph_points_per_min: number } | null;
   slug: string | null;
   disabled_at: string | null;
   created_at: string;
@@ -150,10 +157,24 @@ const TENANT_SELECT_COLUMNS = `
   redirect_uri_allowlist, cors_origins, allowed_scopes, enabled_tools,
   preset_version,
   sharepoint_domain,
+  rate_limits,
   slug, disabled_at, created_at, updated_at
 `;
 
 // ── Zod validators (snake_case wire) ────────────────────────────────────────
+
+/**
+ * Plan 06-04 (D-11). Per-tenant rate-limit override shape validated on admin
+ * PATCH. Positive-int + sensible caps (defense against `Infinity`, `-1`,
+ * accidental `'100'` string, T-06-04-b). `strict()` rejects extra keys so
+ * typos in operator JSON fail loud rather than silently drift.
+ */
+const RateLimitsZod = z
+  .object({
+    request_per_min: z.number().int().positive().max(1_000_000),
+    graph_points_per_min: z.number().int().positive().max(10_000_000),
+  })
+  .strict();
 
 const CreateTenantZod = z.object({
   mode: z.enum(['delegated', 'app-only', 'bearer']),
@@ -187,6 +208,9 @@ const CreateTenantZod = z.object({
     })
     .nullable()
     .optional(),
+  // Plan 06-04 (D-11). Per-tenant rate-limit override. Null/absent = platform
+  // defaults apply at consume time (MS365_MCP_DEFAULT_* env vars).
+  rate_limits: RateLimitsZod.nullable().optional(),
   slug: z
     .string()
     .min(1)
@@ -227,6 +251,7 @@ export function tenantRowToWire(row: {
   enabled_tools: string | null;
   preset_version?: string | null;
   sharepoint_domain?: string | null;
+  rate_limits?: unknown;
   slug: string | null;
   disabled_at: Date | string | null;
   created_at: Date | string;
@@ -263,6 +288,38 @@ export function tenantRowToWire(row: {
       ? row.preset_version
       : 'essentials-v1';
 
+  // Plan 06-04 (D-11). JSONB comes from pg as a parsed object, from pg-mem as
+  // a string. Normalise to either the typed object shape or null. Malformed
+  // JSON is treated as null (defensive — admin PATCH Zod validates on write,
+  // so this only defends against manual DB corruption).
+  const parseRateLimits = (
+    v: unknown
+  ): { request_per_min: number; graph_points_per_min: number } | null => {
+    if (v === null || v === undefined) return null;
+    let candidate: unknown = v;
+    if (typeof v === 'string') {
+      if (v.length === 0) return null;
+      try {
+        candidate = JSON.parse(v);
+      } catch {
+        return null;
+      }
+    }
+    if (
+      typeof candidate === 'object' &&
+      candidate !== null &&
+      typeof (candidate as { request_per_min?: unknown }).request_per_min === 'number' &&
+      typeof (candidate as { graph_points_per_min?: unknown }).graph_points_per_min === 'number'
+    ) {
+      const o = candidate as { request_per_min: number; graph_points_per_min: number };
+      return {
+        request_per_min: o.request_per_min,
+        graph_points_per_min: o.graph_points_per_min,
+      };
+    }
+    return null;
+  };
+
   return {
     id: row.id,
     mode: row.mode as 'delegated' | 'app-only' | 'bearer',
@@ -279,6 +336,8 @@ export function tenantRowToWire(row: {
     // matters: dispatch treats NULL as "not configured" and returns
     // `sp_admin_not_configured` MCP tool error).
     sharepoint_domain: row.sharepoint_domain ?? null,
+    // Plan 06-04 (D-11). Pass through parsed JSONB or null.
+    rate_limits: parseRateLimits(row.rate_limits),
     slug: row.slug,
     disabled_at: toIso(row.disabled_at),
     created_at: toIsoNonNull(row.created_at),
@@ -472,8 +531,9 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
              redirect_uri_allowlist, cors_origins, allowed_scopes, enabled_tools,
              preset_version,
              sharepoint_domain,
+             rate_limits,
              wrapped_dek, slug
-           ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12, $13::jsonb, $14)`,
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12, $13::jsonb, $14::jsonb, $15)`,
           [
             newId,
             body.mode,
@@ -493,6 +553,9 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
             // Plan 5.1-06: optional + nullable. NULL default — operators
             // PATCH later when they want to enable __spadmin__ tools.
             body.sharepoint_domain ?? null,
+            // Plan 06-04 (D-11): optional + nullable. NULL inherits from
+            // MS365_MCP_DEFAULT_* env vars at consume time.
+            body.rate_limits ? JSON.stringify(body.rate_limits) : null,
             JSON.stringify(wrappedDek),
             body.slug ?? null,
           ]
@@ -729,6 +792,17 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
     // string updates. Zod has already applied the regex guard for non-null
     // values by this point.
     if (body.sharepoint_domain !== undefined) addSet('sharepoint_domain', body.sharepoint_domain);
+    // Plan 06-04 (D-11). Per-tenant rate-limit override. `null` clears (falls
+    // back to platform defaults); an object JSONB-writes via the same addSet
+    // helper that sharepoint/allowed_scopes/etc. use. fieldsChanged picks up
+    // 'rate_limits' automatically for the audit-log row.
+    if (body.rate_limits !== undefined) {
+      addSet(
+        'rate_limits',
+        body.rate_limits === null ? null : JSON.stringify(body.rate_limits),
+        true /* jsonb */
+      );
+    }
     if (body.slug !== undefined) addSet('slug', body.slug);
     setParts.push(`updated_at = NOW()`);
     const whereIdx = idx;

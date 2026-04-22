@@ -89,6 +89,17 @@ export function getRedis(): RedisClient {
   realClient.on('error', (err: Error) => {
     logger.error({ err: err.message }, 'redis client error');
   });
+  // Phase 6 plan 06-04: register the sliding-window Lua command so rate-limit
+  // middleware can invoke .slidingWindow(...) via EVALSHA. Idempotent —
+  // defineCommand is safe to call repeatedly. Dynamic import keeps stdio-mode
+  // callers free of the Lua file's fs.readFileSync cost.
+  void import('./rate-limit/sliding-window.js')
+    .then(({ registerSlidingWindow }) => {
+      registerSlidingWindow(realClient);
+    })
+    .catch((err: Error) => {
+      logger.error({ err: err.message }, 'plan 06-04: sliding-window registration failed');
+    });
   client = realClient;
   return realClient;
 }
