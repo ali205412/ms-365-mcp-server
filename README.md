@@ -1,128 +1,106 @@
-# ms-365-mcp-server
+# ms-365-mcp-server v2
 
 [![npm version](https://img.shields.io/npm/v/@softeria/ms-365-mcp-server.svg)](https://www.npmjs.com/package/@softeria/ms-365-mcp-server) [![build status](https://github.com/softeria/ms-365-mcp-server/actions/workflows/build.yml/badge.svg)](https://github.com/softeria/ms-365-mcp-server/actions/workflows/build.yml) [![license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/softeria/ms-365-mcp-server/blob/main/LICENSE)
 
-Microsoft 365 MCP Server
+**Enterprise multi-tenant Microsoft 365 MCP gateway.** One Docker Compose deployment that gives AI assistants full, governed access to Microsoft Graph across many Azure AD tenants — with tenant isolation, resilient Graph transport, all four identity flows, and per-tenant observability + rate limiting.
 
-A Model Context Protocol (MCP) server for interacting with Microsoft 365 and Microsoft Office services through the Graph
-API.
+v2 is a clean break from v1's single-user CLI model. Same project, new runtime: Postgres + Redis substrate, runtime tenant onboarding via admin REST API, 5,000+ Graph operations exposable per-tenant, AES-GCM token-at-rest, concurrent stdio + Streamable HTTP + legacy HTTP+SSE transports.
 
-## Supported Clouds
+---
 
-This server supports multiple Microsoft cloud environments:
+## Table of Contents
 
-| Cloud                | Description                        | Auth Endpoint             | Graph API Endpoint              |
-| -------------------- | ---------------------------------- | ------------------------- | ------------------------------- |
-| **Global** (default) | International Microsoft 365        | login.microsoftonline.com | graph.microsoft.com             |
-| **China** (21Vianet) | Microsoft 365 operated by 21Vianet | login.chinacloudapi.cn    | microsoftgraph.chinacloudapi.cn |
+- [What's new in v2](#whats-new-in-v2)
+- [When to use v2 vs v1](#when-to-use-v2-vs-v1)
+- [Quickstart — Docker Compose (reference)](#quickstart--docker-compose-reference)
+- [Quickstart — single user (stdio)](#quickstart--single-user-stdio)
+- [Architecture](#architecture)
+- [Identity flows](#identity-flows)
+- [Multi-tenant onboarding (Admin API)](#multi-tenant-onboarding-admin-api)
+- [Tool catalog & presets](#tool-catalog--presets)
+- [Observability & rate limiting](#observability--rate-limiting)
+- [Supported clouds](#supported-clouds)
+- [CLI reference](#cli-reference)
+- [Environment variables](#environment-variables)
+- [Token storage (stdio mode)](#token-storage-stdio-mode)
+- [Azure Key Vault (stdio mode)](#azure-key-vault-stdio-mode)
+- [Migrating from v1](#migrating-from-v1)
+- [Contributing](#contributing)
+- [Support & license](#support--license)
 
-## Prerequisites
+---
 
-- Node.js 20 LTS or Node.js 22 LTS (recommended)
+## What's new in v2
 
-## Features
+| Capability | v1 | v2 |
+|---|---|---|
+| **Deployment** | `npx` per user | Docker Compose with Postgres + Redis |
+| **Tenancy** | One user per process | Many tenants per gateway, onboarded at runtime |
+| **Identity** | Device code + BYOT | Delegated OAuth + app-only client-credentials + bearer pass-through + device code, all concurrent, per-tenant isolated |
+| **Token storage** | OS keychain / file (plaintext) | AES-GCM encrypted in Postgres with KEK rotation |
+| **Admin surface** | None | REST API dual-secured by Entra OAuth (group check) OR rotatable API keys |
+| **Rate limiting** | None | Per-tenant sliding-window Redis limiter (request count + Graph point budget) |
+| **Observability** | Winston file logs | OTel traces via OTLP/HTTP + Prometheus `/metrics` on port 9464 |
+| **Graph coverage** | ~200 tools | Full v1.0 + curated beta (5,000+ ops) with per-tenant enablement |
+| **Transports** | stdio OR HTTP (mutually exclusive) | stdio + Streamable HTTP + legacy HTTP+SSE concurrently |
+| **Tool surface control** | `--enabled-tools` regex / `--preset` | Per-tenant enabled-tools stored in Postgres + ~150-op "essentials" preset |
 
-- Authentication via Microsoft Authentication Library (MSAL)
-- Comprehensive Microsoft 365 service integration
-- Read-only mode support for safe operations
-- Tool filtering for granular access control
+---
 
-## Output Format: JSON vs TOON
+## When to use v2 vs v1
 
-The server supports two output formats that can be configured globally:
+**Use v2 if you:**
+- Run MCP as infrastructure for multiple users or tenants
+- Need audit trails, rate limits, and observability
+- Want a single deployment that serves Claude Desktop, Claude Code, Cursor, Continue, and bespoke integrations
+- Need production-grade token security (encrypted at rest, per-tenant isolation)
 
-### JSON Format (Default)
+**Use v1 (single-user CLI) if you:**
+- Just want to hook one personal or work account into Claude Desktop
+- Don't need Docker / Postgres / Redis
+- Are happy with OS keychain token storage
 
-Standard JSON output with pretty-printing:
+v1 continues to work via the same `npx @softeria/ms-365-mcp-server` entry point described below. v2 is a deliberate superset; the stdio mode keeps v1 ergonomics intact.
 
-```json
-{
-  "value": [
-    {
-      "id": "1",
-      "displayName": "Alice Johnson",
-      "mail": "alice@example.com",
-      "jobTitle": "Software Engineer"
-    }
-  ]
-}
-```
+---
 
-### (experimental) TOON Format
+## Quickstart — Docker Compose (reference)
 
-[Token-Oriented Object Notation](https://github.com/toon-format/toon) for efficient LLM token usage:
-
-```
-value[1]{id,displayName,mail,jobTitle}:
-  "1",Alice Johnson,alice@example.com,Software Engineer
-```
-
-**Benefits:**
-
-- 30-60% fewer tokens vs JSON
-- Best for uniform array data (lists of emails, calendar events, files, etc.)
-- Ideal for cost-sensitive applications at scale
-
-**Usage:**
-(experimental) Enable TOON format globally:
-
-Via CLI flag:
-
-```bash
-npx @softeria/ms-365-mcp-server --toon
-```
-
-Via Claude Desktop configuration:
-
-```json
-{
-  "mcpServers": {
-    "ms365": {
-      "command": "npx",
-      "args": ["-y", "@softeria/ms-365-mcp-server", "--toon"]
-    }
-  }
-}
-```
-
-Via environment variable:
+v2's reference deployment is a single Docker Compose stack on one VM. No Kubernetes, no Azure-native services required.
 
 ```bash
-MS365_MCP_OUTPUT_FORMAT=toon npx @softeria/ms-365-mcp-server
+git clone https://github.com/softeria/ms-365-mcp-server.git
+cd ms-365-mcp-server
+cp .env.example .env
+# Edit .env — set at minimum: MS365_MCP_ADMIN_GROUP_ID, MS365_MCP_KEK, database URL, Redis URL
+docker compose up -d
 ```
 
-## Supported Services & Tools
+Once up, the gateway exposes:
 
-The server provides 200+ tools covering most of the Microsoft Graph API surface. Each tool maps 1-to-1 to a Graph API endpoint and is defined declaratively in [`src/endpoints.json`](src/endpoints.json).
+| Endpoint | Purpose |
+|---|---|
+| `/mcp` (Streamable HTTP) | Primary MCP transport for modern clients |
+| `/sse` + `/messages` | Legacy MCP transport (Claude Desktop < 0.8) |
+| `/admin/tenants` | Tenant CRUD (dual-secured) |
+| `/admin/api-keys` | API-key rotation (dual-secured) |
+| `/metrics` (port 9464) | Prometheus scrape target (optionally Bearer-gated) |
+| `/health` | Liveness + readiness |
 
-### Personal Account Tools (Available by default)
+Full deployment guide with reverse-proxy (Caddy / nginx / Traefik) SSE buffering directives, TLS termination, and production hardening: **[docs/deployment.md](docs/deployment.md)** and **[docs/observability/](docs/observability/)**.
 
-Email (Outlook), Calendar, OneDrive Files, Excel, OneNote, To Do Tasks, Planner, Contacts, User Profile, Search
+---
 
-### Organization Account Tools (Requires --org-mode flag)
+## Quickstart — single user (stdio)
 
-Teams & Chats, Online Meetings, Transcripts & Recordings, Attendance Reports, SharePoint Sites & Lists, Shared Mailboxes & Calendars, User Management, Presence, Virtual Events
-
-### Required Graph API Permissions
-
-Permissions are requested dynamically based on which tools are enabled. Use `--list-permissions` to see the exact permissions for your configuration:
+v1-style usage still works unchanged:
 
 ```bash
-# Personal mode (default)
-npx @softeria/ms-365-mcp-server --list-permissions
-
-# Organization mode (includes Teams, SharePoint, etc.)
-npx @softeria/ms-365-mcp-server --org-mode --list-permissions
-
-# Filtered by preset
-npx @softeria/ms-365-mcp-server --preset mail --list-permissions
+npx @softeria/ms-365-mcp-server --login
+# Follow the device code prompt
 ```
 
-This is useful for enterprise environments where Graph API permissions must be pre-approved and admin-consented before deploying a new version.
-
-## Organization/Work Mode
-
-To access work/school features (Teams, SharePoint, etc.), enable organization mode using any of these flags:
+In Claude Desktop (`settings → Developer → Edit Config`):
 
 ```json
 {
@@ -135,501 +113,290 @@ To access work/school features (Teams, SharePoint, etc.), enable organization mo
 }
 ```
 
-Organization mode must be enabled from the start to access work account features. Without this flag, only personal
-account features (email, calendar, OneDrive, etc.) are available.
+See the [CLI reference](#cli-reference) for the full stdio flag list.
 
-## Shared Mailbox Access
+---
 
-To access shared mailboxes, you need:
+## Architecture
 
-1. **Organization mode**: Shared mailbox tools require `--org-mode` flag (work/school accounts only)
-2. **Delegated permissions**: `Mail.Read.Shared` or `Mail.Send.Shared` scopes
-3. **Exchange permissions**: The signed-in user must have been granted access to the shared mailbox
-4. **Usage**: Use the shared mailbox's email address as the `user-id` parameter in the shared mailbox tools
-
-**Finding shared mailboxes**: Use the `list-users` tool to discover available users and shared mailboxes in your
-organization.
-
-Example: `list-shared-mailbox-messages` with `user-id` set to `shared-mailbox@company.com`
-
-## Quick Start Example
-
-Test login in Claude Desktop:
-
-![Login example](https://github.com/user-attachments/assets/27f57f0e-57b8-4366-a8d1-c0bdab79900c)
-
-## Examples
-
-![Image](https://github.com/user-attachments/assets/ed275100-72e8-4924-bcf2-cd8e1b4c6f3a)
-
-## Integration
-
-### Claude Desktop
-
-To add this MCP server to Claude Desktop, edit the config file under Settings > Developer.
-
-#### Personal Account (MSA)
-
-```json
-{
-  "mcpServers": {
-    "ms365": {
-      "command": "npx",
-      "args": ["-y", "@softeria/ms-365-mcp-server"]
-    }
-  }
-}
+```
+                  ┌─────────────────────────────────────────┐
+                  │  AI Clients (Claude, Cursor, Continue)  │
+                  └────────────────┬────────────────────────┘
+                                   │ MCP (stdio | Streamable HTTP | HTTP+SSE)
+                                   ▼
+     ┌──────────────────────────────────────────────────────────┐
+     │  ms-365-mcp-server (gateway)                             │
+     │  ┌────────────────────────────────────────────────────┐  │
+     │  │ Transports · Rate limit · Tenant resolver · Auth   │  │
+     │  └───────┬────────────────────┬──────────────────┬────┘  │
+     │          │                    │                  │       │
+     │     Tool catalog        Graph transport     Observability│
+     │   (per-tenant enabled   (retry + batch +    (OTel + Prom)│
+     │     tools, ~5000 ops)    page + etag)                    │
+     └──────┬────────────────────┬──────────────────────┬───────┘
+            │                    │                      │
+     ┌──────▼──────┐      ┌──────▼──────┐        ┌──────▼──────┐
+     │  Postgres   │      │   Redis     │        │ OTel + Prom │
+     │ (tenants,   │      │ (rate limit,│        │ (collectors,│
+     │  tokens,    │      │  PKCE, pub/ │        │   Grafana)  │
+     │  audit)     │      │  sub)       │        │             │
+     └─────────────┘      └─────────────┘        └─────────────┘
+                                   │
+                                   ▼
+                        ┌───────────────────────┐
+                        │  Microsoft Graph API  │
+                        └───────────────────────┘
 ```
 
-#### Work/School Account (Global)
+Detailed architecture: **[CLAUDE.md](CLAUDE.md)** (codebase conventions) and **[.planning/PROJECT.md](.planning/PROJECT.md)** (requirements + decisions).
 
-```json
-{
-  "mcpServers": {
-    "ms365": {
-      "command": "npx",
-      "args": ["-y", "@softeria/ms-365-mcp-server", "--org-mode"]
-    }
-  }
-}
-```
+---
 
-#### Work/School Account (China 21Vianet)
+## Identity flows
 
-```json
-{
-  "mcpServers": {
-    "ms365-china": {
-      "command": "npx",
-      "args": ["-y", "@softeria/ms-365-mcp-server", "--org-mode", "--cloud", "china"]
-    }
-  }
-}
-```
+All four flows run concurrently and are correctly isolated per tenant. The gateway picks the right one per incoming request.
 
-### Claude Code CLI
+| Flow | Who uses it | How the gateway receives credentials |
+|---|---|---|
+| **Delegated OAuth 2.1 + PKCE** | End-users authenticating through a modern MCP client | Client redirects through `/authorize` → `/token`; server stores refresh token AES-GCM-encrypted in Postgres |
+| **App-only client credentials** | Daemons / background automation | Tenant registration supplies client secret or cert; gateway caches the access token per tenant |
+| **Bearer pass-through** | Systems that already hold a Graph token | `Authorization: Bearer <token>` on `/mcp` request; gateway validates `tid` claim matches the URL tenant |
+| **Device code** | Interactive CLI / stdio mode | `npx @softeria/ms-365-mcp-server --login` |
 
-#### Personal Account (MSA)
+Per-tenant isolation is the security foundation: token cache, PKCE state, rate-limit counters, and audit log are all keyed by `tenantId`. Cross-tenant leak is a P0 bug, not a feature.
+
+---
+
+## Multi-tenant onboarding (Admin API)
+
+Tenants are onboarded at runtime via REST API. No restart needed.
 
 ```bash
-claude mcp add ms365 -- npx -y @softeria/ms-365-mcp-server
+# Register a new tenant
+curl -X POST https://gateway.example.com/admin/tenants \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tenant_id": "contoso.onmicrosoft.com",
+    "client_id": "00000000-0000-0000-0000-000000000000",
+    "client_secret": "...",
+    "enabled_tools_preset": "essentials",
+    "rate_limits": { "request_per_min": 1000, "graph_points_per_min": 50000 }
+  }'
 ```
 
-#### Work/School Account (Global)
+The Admin API is **dual-secured**:
+- **Entra OAuth** (admin app registration + group membership check) for humans via the admin portal
+- **Rotatable API keys** for automation (`Authorization: Bearer mcpk_...`)
 
-```bash
-# macOS/Linux
-claude mcp add ms365 -- npx -y @softeria/ms-365-mcp-server --org-mode
+Tenant disable triggers a cryptoshred cascade: MSAL cache evicted, Redis keys flushed, DEK destroyed. Tokens cannot be recovered post-disable.
 
-# Windows (use cmd /c wrapper)
-claude mcp add ms365 -s user -- cmd /c "npx -y @softeria/ms-365-mcp-server --org-mode"
-```
+Full admin API reference: **[docs/admin-api.md](docs/admin-api.md)** (generated from OpenAPI).
 
-#### Work/School Account (China 21Vianet)
+---
 
-```bash
-# macOS/Linux
-claude mcp add ms365-china -- npx -y @softeria/ms-365-mcp-server --org-mode --cloud china
+## Tool catalog & presets
 
-# Windows (use cmd /c wrapper)
-claude mcp add ms365-china -s user -- cmd /c "npx -y @softeria/ms-365-mcp-server --org-mode --cloud china"
-```
+The generated catalog covers all of Microsoft Graph v1.0 plus a curated beta surface (~5,000 operations). MCP clients cannot display 5,000 tools in one catalog, so v2 ships **per-tenant enabled-tools**:
 
-For other interfaces that support MCPs, please refer to their respective documentation for the correct
-integration method.
+- **Default preset: "essentials"** (~150 ops covering Mail, Calendar, Files, Users, Teams, SharePoint)
+- **Regex filter** on the generated aliases via admin API
+- **Workload presets**: `mail`, `calendar`, `files`, `personal`, `work`, `excel`, `contacts`, `tasks`, `onenote`, `search`, `users`, `powerbi`, `intune`, `exchange`, `sharepoint`, `teams-admin`, `all`
 
-### Open WebUI
-
-Open WebUI supports MCP servers via HTTP transport with OAuth 2.1.
-
-1. Start the server with HTTP mode:
-
-   ```bash
-   npx @softeria/ms-365-mcp-server --http
-   ```
-
-2. In Open WebUI, go to **Admin Settings → Tools** (`/admin/settings/tools`) → **Add Connection**:
-   - **Type**: MCP Streamable HTTP
-   - **URL**: Your MCP server URL with `/mcp` path
-   - **Auth**: OAuth 2.1
-
-3. Click **Register Client**.
-
-> **Note**: Dynamic client registration is enabled by default in HTTP mode. Use `--no-dynamic-registration` to disable it. If using a custom Azure Entra app, add your redirect URI under "Mobile and desktop applications" platform (not "Single-page application").
-
-**Quick test setup** using the default Azure app (ID `ms-365` and `localhost:8080` are pre-configured):
-
-```bash
-docker run -d -p 8080:8080 \
-  -e WEBUI_AUTH=false \
-  -e OPENAI_API_KEY \
-  ghcr.io/open-webui/open-webui:main
-
-npx @softeria/ms-365-mcp-server --http
-```
-
-Then add connection with URL `http://localhost:3000/mcp` and ID `ms-365`.
-
-![Open WebUI MCP Connection](https://github.com/user-attachments/assets/dcab71dd-cf02-4bcb-b7db-5725d6be4064)
-
-> **Running in Docker behind a reverse proxy?** Set `--public-url https://your-domain.com` so the OAuth authorize URL handed to the user's browser is reachable from outside the container network. See [docs/deployment.md](docs/deployment.md) for the full guide.
-
-### Local Development
-
-For local development or testing:
-
-```bash
-# From the project directory
-claude mcp add ms -- npx tsx src/index.ts --org-mode
-```
-
-Or configure Claude Desktop manually:
-
-```json
-{
-  "mcpServers": {
-    "ms365": {
-      "command": "node",
-      "args": ["/absolute/path/to/ms-365-mcp-server/dist/index.js", "--org-mode"]
-    }
-  }
-}
-```
-
-> **Note**: Run `npm run build` after code changes to update the `dist/` folder.
-
-### Authentication
-
-> ⚠️ You must authenticate before using tools.
-
-The server supports three authentication methods:
-
-#### 1. Device Code Flow (Default)
-
-For interactive authentication via device code:
-
-- **MCP client login**:
-  - Call the `login` tool (auto-checks existing token)
-  - If needed, get URL+code, visit in browser
-  - Use `verify-login` tool to confirm
-- **CLI login**:
-  ```bash
-  npx @softeria/ms-365-mcp-server --login
-  ```
-  Follow the URL and code prompt in the terminal.
-
-Tokens are cached securely in your OS credential store (fallback to file).
-
-#### 2. OAuth Authorization Code Flow (HTTP mode only)
-
-When running with `--http`, the server **requires** OAuth authentication:
-
-```bash
-npx @softeria/ms-365-mcp-server --http 3000
-```
-
-This mode:
-
-- Advertises OAuth capabilities to MCP clients
-- Provides OAuth endpoints at `/auth/*` (authorize, token, metadata)
-- **Requires** `Authorization: Bearer <token>` for all MCP requests
-- Validates tokens with Microsoft Graph API
-- **Disables** login/logout tools by default (use `--enable-auth-tools` to enable them)
-
-MCP clients will automatically handle the OAuth flow when they see the advertised capabilities.
-
-##### Setting up Azure AD for OAuth Testing
-
-To use OAuth mode with custom Azure credentials (recommended for production), you'll need to set up an Azure AD app
-registration:
-
-1. **Create Azure AD App Registration**:
-
-- Go to [Azure Portal](https://portal.azure.com)
-- Navigate to Azure Active Directory → App registrations → New registration
-- Set name: "MS365 MCP Server"
-
-2. **Configure Redirect URIs**:
-
-- **Configure the OAuth callback URI**: Go to your app registration and on the left side, go to Authentication.
-- Under Platform configurations:
-  - Click Add a platform (if you don’t already see one for "Mobile and desktop applications" / "Public client").
-  - Choose Mobile and desktop applications or Public client/native (mobile & desktop) (label depends on portal version).
-
-3. **Testing with MCP Inspector (`npm run inspector`)**:
-
-- Go to your app registration and on the left side, go to Authentication.
-- Under Platform configurations:
-  - Click Add a platform (if you don’t already see one for "Web").
-  - Choose Web.
-  - Configure the following redirect URIs
-    - `http://localhost:6274/oauth/callback`
-    - `http://localhost:6274/oauth/callback/debug`
-    - `http://localhost:3000/callback` (optional, for server callback)
-
-4. **Get Credentials**:
-
-- Copy the **Application (client) ID** from Overview page
-- Go to Certificates & secrets → New client secret → Copy the secret value (optional for public apps)
-
-5. **Configure Environment Variables**:
-   Create a `.env` file in your project root:
-   ```env
-   MS365_MCP_CLIENT_ID=your-azure-ad-app-client-id-here
-   MS365_MCP_CLIENT_SECRET=your-secret-here  # Optional for public apps
-   MS365_MCP_TENANT_ID=common
-   ```
-
-With these configured, the server will use your custom Azure app instead of the built-in one.
-
-#### 3. Bring Your Own Token (BYOT)
-
-If you are running ms-365-mcp-server as part of a larger system that manages Microsoft OAuth tokens externally, you can
-provide an access token directly to this MCP server:
-
-```bash
-MS365_MCP_OAUTH_TOKEN=your_oauth_token npx @softeria/ms-365-mcp-server
-```
-
-This method:
-
-- Bypasses the interactive authentication flows
-- Use your pre-existing OAuth token for Microsoft Graph API requests
-- Does not handle token refresh (token lifecycle management is your responsibility)
-
-> **Note**: HTTP mode requires authentication. For unauthenticated testing, use stdio mode with device code flow.
->
-> **Authentication Tools**: In HTTP mode, login/logout tools are disabled by default since OAuth handles authentication.
-> Use `--enable-auth-tools` if you need them available.
-
-## Multi-Account Support
-
-Use a single server instance to serve multiple Microsoft accounts. When more than one account is logged in, an `account` parameter is automatically injected into every tool, allowing you to specify which account to use per tool call.
-
-**Login multiple accounts** (one-time per account):
-
-```bash
-# Login first account (device code flow)
-npx @softeria/ms-365-mcp-server --login
-# Follow the device code prompt, sign in as personal@outlook.com
-
-# Login second account
-npx @softeria/ms-365-mcp-server --login
-# Follow the device code prompt, sign in as work@company.com
-```
-
-**List configured accounts:**
-
-```bash
-npx @softeria/ms-365-mcp-server --list-accounts
-```
-
-**Use in tool calls:** Pass `"account": "work@company.com"` in any tool request:
-
-```json
-{ "tool": "list-mail-messages", "arguments": { "account": "work@company.com" } }
-```
-
-**Behavior:**
-
-- With a **single account** configured, it auto-selects (no `account` parameter needed).
-- With **multiple accounts** and no `account` parameter, the server uses the selected default or returns a helpful error listing available accounts.
-- **100% backward compatible**: existing single-account setups work unchanged.
-- The `account` parameter accepts email address (e.g. `user@outlook.com`) or MSAL `homeAccountId`.
-
-> **For MCP multiplexers (Legate, Governor):** Multi-account mode replaces the N-process pattern. Instead of spawning one server per account, a single instance handles all accounts via the `account` parameter, reducing tool duplication from N×110 to 110.
-
-## Tool Presets
-
-To reduce initial connection overhead, use preset tool categories instead of loading all 90+ tools:
+For single-user stdio mode, use `--preset`, `--enabled-tools <regex>`, or `--discovery` (lazy load tools on demand):
 
 ```bash
 npx @softeria/ms-365-mcp-server --preset mail
-npx @softeria/ms-365-mcp-server --list-presets  # See all available presets
+npx @softeria/ms-365-mcp-server --enabled-tools "excel|contact"
+npx @softeria/ms-365-mcp-server --discovery     # LLM searches tools on-demand
 ```
 
-Available presets: `mail`, `calendar`, `files`, `personal`, `work`, `excel`, `contacts`, `tasks`, `onenote`, `search`, `users`, `all`
+Use `--list-presets` to see the full list.
 
-## Dynamic Tool Discovery
+---
 
-Instead of loading all 90+ tools upfront, use dynamic discovery so the LLM finds and loads tools only when it needs them:
+## Observability & rate limiting
 
-```bash
-npx @softeria/ms-365-mcp-server --discovery
+v2 ships production-grade observability out of the box:
+
+### Traces (OTel)
+
+Every Graph request emits a span with `{tenant.id, tool.name, tool.alias, http.status_code, retry.count, graph.request_id, duration_ms}`. Export via `OTEL_EXPORTER_OTLP_ENDPOINT`.
+
+### Metrics (Prometheus)
+
+Scrape `/metrics` on port 9464 (configurable via `MS365_MCP_METRICS_PORT`):
+
+| Metric | Type | Labels |
+|---|---|---|
+| `mcp_tool_calls_total` | Counter | `tenant`, `tool` (workload prefix), `status` |
+| `mcp_tool_duration_seconds` | Histogram | `tenant`, `tool` |
+| `mcp_graph_throttled_total` | Counter | `tenant` |
+| `mcp_rate_limit_blocked_total` | Counter | `tenant`, `reason` |
+| `mcp_oauth_pkce_store_size` | Gauge | — |
+| `mcp_token_cache_hit_ratio` | Gauge | `tenant` |
+| `mcp_active_streams` | Gauge | `tenant` |
+
+Label cardinality is bounded: the `tool` label is the **workload prefix** (~40 values), not the full alias (~14k values). Full aliases appear as span attributes only.
+
+### Rate limits (Redis sliding window)
+
+Per-tenant budgets are enforced **before** any Graph call is made:
+
+- **Request rate**: `MS365_MCP_DEFAULT_REQ_PER_MIN` (default 1000, overridable per-tenant)
+- **Graph point budget**: `MS365_MCP_DEFAULT_GRAPH_POINTS_PER_MIN` (default 50000, observed from Graph's `x-ms-resource-unit` header)
+
+Over-budget requests return `429` with `Retry-After` and increment `mcp_rate_limit_blocked_total`.
+
+A starter Grafana dashboard (5 panels: request rate, p50/p95/p99 latency, 429 rate, token-cache hit ratio, PKCE store size) ships under **[docs/observability/grafana-starter.json](docs/observability/grafana-starter.json)**. Runbook with alert patterns and per-metric PromQL reference lives at **[docs/observability/runbook.md](docs/observability/runbook.md)**.
+
+---
+
+## Supported clouds
+
+| Cloud | Description | Auth endpoint | Graph endpoint |
+|---|---|---|---|
+| **Global** (default) | Worldwide Microsoft 365 | `login.microsoftonline.com` | `graph.microsoft.com` |
+| **China** (21Vianet) | Microsoft 365 operated by 21Vianet | `login.chinacloudapi.cn` | `microsoftgraph.chinacloudapi.cn` |
+
+Set via `--cloud china` or `MS365_MCP_CLOUD_TYPE=china`. Per-tenant cloud override is supported via the admin API.
+
+---
+
+## CLI reference
+
+For the single-user stdio path. (HTTP-mode flags are orthogonal; see [deployment.md](docs/deployment.md) for gateway config.)
+
+```
+--login                   Login via device code flow
+--logout                  Log out and clear saved credentials
+--verify-login            Verify login without starting the server
+--list-permissions        List required Graph permissions and exit (respects --org-mode, --preset, --enabled-tools)
+--list-accounts           List configured MSAL accounts
+--list-presets            List tool presets and exit
+--org-mode                Enable work/school scope set (Teams, SharePoint, etc.)
+--cloud <type>            Microsoft cloud: global (default) or china
+--read-only               Disable write operations
+--http [port]             Streamable HTTP transport (default port 3000)
+--enable-auth-tools       Enable login/logout tools in HTTP mode (off by default)
+--no-dynamic-registration Disable OAuth DCR (on by default in HTTP mode)
+--enabled-tools <regex>   Filter tools by regex (e.g. "excel|contact")
+--preset <names>          Comma-separated preset list
+--discovery               Lazy tool discovery — loads tools on demand
+--toon                    (experimental) TOON output format for 30-60% token reduction
+--public-url <url>        Public base URL for OAuth when behind a reverse proxy
+-v                        Verbose logging
 ```
 
-Keeps the initial context small and cuts token usage, especially useful for long sessions or cost-sensitive setups (e.g. Open WebUI running against a paid API).
+---
 
-## CLI Options
+## Environment variables
 
-The following options can be used when running ms-365-mcp-server directly from the command line:
+### Identity + cloud
 
-```
---login           Login using device code flow
---logout          Log out and clear saved credentials
---verify-login    Verify login without starting the server
---list-permissions List all required Graph API permissions and exit (respects --org-mode, --preset, --enabled-tools)
---org-mode        Enable organization/work mode from start (includes Teams, SharePoint, etc.)
---work-mode       Alias for --org-mode
---force-work-scopes Backwards compatibility alias for --org-mode (deprecated)
---cloud <type>    Microsoft cloud environment: global (default) or china (21Vianet)
-```
+- `MS365_MCP_CLIENT_ID` — Custom Azure app client ID (defaults to built-in)
+- `MS365_MCP_CLIENT_SECRET` — Enables confidential-client flow
+- `MS365_MCP_TENANT_ID` — Tenant ID or `common` (default)
+- `MS365_MCP_CLOUD_TYPE` — `global` (default) or `china`
+- `MS365_MCP_OAUTH_TOKEN` — Pre-supplied bearer token (BYOT)
+- `MS365_MCP_KEYVAULT_URL` — Switch secrets source to Azure Key Vault
 
-### Server Options
+### Gateway (Docker Compose)
 
-When running as an MCP server, the following options can be used:
+- `MS365_MCP_DATABASE_URL` — Postgres connection string
+- `MS365_MCP_REDIS_URL` — Redis connection string
+- `MS365_MCP_KEK` — 32-byte base64 key-encryption key for token encryption at rest
+- `MS365_MCP_ADMIN_GROUP_ID` — Entra group whose members may call the admin API
+- `MS365_MCP_PUBLIC_URL` — Public base URL for browser-facing OAuth redirects (when behind a proxy)
 
-```
--v                Enable verbose logging
---read-only       Start server in read-only mode, disabling write operations
---http [port]     Use Streamable HTTP transport instead of stdio (optionally specify port, default: 3000)
-                  Starts Express.js server with MCP endpoint at /mcp
---enable-auth-tools Enable login/logout tools when using HTTP mode (disabled by default in HTTP mode)
---no-dynamic-registration Disable OAuth Dynamic Client Registration (enabled by default in HTTP mode)
---enabled-tools <pattern> Filter tools using regex pattern (e.g., "excel|contact" to enable Excel and Contact tools)
---preset <names>  Use preset tool categories (comma-separated). See "Tool Presets" section above
---list-presets    List all available presets and exit
---toon            (experimental) Enable TOON output format for 30-60% token reduction
---discovery       Dynamic tool discovery: loads tools on demand to reduce initial token usage (see "Dynamic Tool Discovery" above)
---public-url <url> Public base URL for OAuth when behind a reverse proxy (see Open WebUI section and docs/deployment.md)
-```
+### Observability (Phase 6)
 
-Environment variables:
+- `OTEL_EXPORTER_OTLP_ENDPOINT` — OTLP/HTTP collector endpoint for traces
+- `MS365_MCP_PROMETHEUS_ENABLED` — Gate Prometheus exporter on/off (default on)
+- `MS365_MCP_METRICS_PORT` — Dedicated port for `/metrics` (default `9464`)
+- `MS365_MCP_METRICS_BEARER` — Optional Bearer token gating `/metrics`
+- `MS365_MCP_DEFAULT_REQ_PER_MIN` — Default per-tenant request budget (default `1000`)
+- `MS365_MCP_DEFAULT_GRAPH_POINTS_PER_MIN` — Default per-tenant Graph point budget (default `50000`)
 
-- `READ_ONLY=true|1`: Alternative to --read-only flag
-- `ENABLED_TOOLS`: Filter tools using a regex pattern (alternative to --enabled-tools flag)
-- `MS365_MCP_ORG_MODE=true|1`: Enable organization/work mode (alternative to --org-mode flag)
-- `MS365_MCP_FORCE_WORK_SCOPES=true|1`: Backwards compatibility for MS365_MCP_ORG_MODE
-- `MS365_MCP_OUTPUT_FORMAT=toon`: Enable TOON output format (alternative to --toon flag)
-- `MS365_MCP_MAX_TOP=<n>`: Hard cap for Graph `$top` / `top` on list requests (positive integer). When the model passes a larger value, the server clamps it to `n` so responses stay smaller. Example: `MS365_MCP_MAX_TOP=15`
-- `MS365_MCP_BODY_FORMAT=html`: Return email bodies as HTML instead of plain text (default: text)
-- `MS365_MCP_CLOUD_TYPE=global|china`: Microsoft cloud environment (alternative to --cloud flag)
-- `LOG_LEVEL`: Set logging level (default: 'info')
-- `SILENT=true|1`: Disable console output
-- `MS365_MCP_CLIENT_ID`: Custom Azure app client ID (defaults to built-in app)
-- `MS365_MCP_TENANT_ID`: Custom tenant ID (defaults to 'common' for multi-tenant)
-- `MS365_MCP_OAUTH_TOKEN`: Pre-existing OAuth token for Microsoft Graph API (BYOT method)
-- `MS365_MCP_KEYVAULT_URL`: Azure Key Vault URL for secrets management (see Azure Key Vault section)
-- `MS365_MCP_TOKEN_CACHE_PATH`: Custom file path for MSAL token cache (see Token Storage below)
-- `MS365_MCP_SELECTED_ACCOUNT_PATH`: Custom file path for selected account metadata (see Token Storage below)
+### Behaviour
 
-## Token Storage
+- `READ_ONLY=true|1` — Disable write operations
+- `ENABLED_TOOLS` — Regex filter
+- `MS365_MCP_ORG_MODE=true|1` — Enable work/school scopes
+- `MS365_MCP_OUTPUT_FORMAT=toon` — Switch to TOON output
+- `MS365_MCP_MAX_TOP=<n>` — Cap Graph `$top` values
+- `MS365_MCP_BODY_FORMAT=html|text` — Outlook body content type (default text)
+- `LOG_LEVEL` — Winston level (default `info`)
+- `SILENT=true|1` — Suppress console output
 
-Authentication tokens are stored using the OS credential store (via keytar) when available. If keytar is not installed or fails (common on headless Linux), the server falls back to file-based storage.
+Full env reference with per-plan provenance: **[docs/observability/env-vars.md](docs/observability/env-vars.md)**.
 
-**Default fallback paths** are relative to the installed package directory. This means tokens can be lost when the package is reinstalled or updated via npm.
+---
 
-To persist tokens across updates, set custom paths outside the package directory:
+## Token storage (stdio mode)
+
+Stdio mode uses the OS credential store via `keytar` when available, with fallback to file storage (mode `0600`). To survive npm reinstalls, set custom paths outside the package dir:
 
 ```bash
 export MS365_MCP_TOKEN_CACHE_PATH="$HOME/.config/ms365-mcp/.token-cache.json"
 export MS365_MCP_SELECTED_ACCOUNT_PATH="$HOME/.config/ms365-mcp/.selected-account.json"
 ```
 
-Parent directories are created automatically. Files are written with `0600` permissions.
+Parent directories are created automatically.
 
-> **Security note**: File-based token storage writes sensitive credentials to disk. Ensure the chosen directory has appropriate access controls. The OS credential store (keytar) is preferred when available.
+> **Gateway mode** stores tokens AES-GCM-encrypted in Postgres — not on disk. The stdio token storage documented here only applies to single-user CLI mode.
 
-> **Hosted/sandboxed environments** (e.g. Anthropic Cowork): Set `MS365_MCP_TOKEN_CACHE_PATH` and `MS365_MCP_SELECTED_ACCOUNT_PATH` to a persistent mount so tokens survive between sessions.
+---
 
-## Azure Key Vault Integration
+## Azure Key Vault (stdio mode)
 
-For production deployments, you can store secrets in Azure Key Vault instead of environment variables. This is particularly useful for Azure Container Apps with managed identity.
+For stdio deployments that need Key Vault instead of env vars:
 
-### Setup
+```bash
+az keyvault secret set --vault-name your-kv --name ms365-mcp-client-id --value "..."
+az keyvault secret set --vault-name your-kv --name ms365-mcp-tenant-id --value "..."
+az keyvault secret set --vault-name your-kv --name ms365-mcp-client-secret --value "..."   # optional
 
-1. **Create a Key Vault** (if you don't have one):
+MS365_MCP_KEYVAULT_URL=https://your-kv.vault.azure.net npx @softeria/ms-365-mcp-server
+```
 
-   ```bash
-   az keyvault create --name your-keyvault-name --resource-group your-rg --location eastus
-   ```
+Auth uses `DefaultAzureCredential` (env vars → managed identity → Azure CLI → VS Code → Azure PowerShell).
 
-2. **Add secrets to Key Vault**:
+Gateway mode uses Postgres, not Key Vault; the KEK that encrypts tokens is supplied via `MS365_MCP_KEK`.
 
-   ```bash
-   az keyvault secret set --vault-name your-keyvault-name --name ms365-mcp-client-id --value "your-client-id"
-   az keyvault secret set --vault-name your-keyvault-name --name ms365-mcp-tenant-id --value "your-tenant-id"
-   # Optional: if using confidential client flow
-   az keyvault secret set --vault-name your-keyvault-name --name ms365-mcp-client-secret --value "your-secret"
-   ```
+---
 
-3. **Grant access to Key Vault**:
+## Migrating from v1
 
-   For Azure Container Apps with managed identity:
+v2 is a clean break. Upgrade path:
 
-   ```bash
-   # Get the managed identity principal ID
-   PRINCIPAL_ID=$(az containerapp show --name your-app --resource-group your-rg --query identity.principalId -o tsv)
+1. **Single user staying single user?** No change. `npx @softeria/ms-365-mcp-server` still works exactly as it did in v1.
+2. **Moving to gateway?** Stand up a v2 Docker Compose stack alongside your v1 setup. Onboard tenants via admin API. Point each MCP client at the gateway `/mcp` endpoint. Retire v1 processes once all users are migrated.
+3. **Tokens?** v1 OS-keychain tokens cannot be imported into v2's AES-GCM-encrypted Postgres store — users re-auth once via OAuth.
+4. **Config?** `--enabled-tools` / `--preset` work the same at the CLI level but in gateway mode the per-tenant equivalents live on the tenant row.
 
-   # Grant access to Key Vault secrets
-   az keyvault set-policy --name your-keyvault-name --object-id $PRINCIPAL_ID --secret-permissions get list
-   ```
+Full migration guide (when the last v1 user has moved): **[docs/migration-v1-to-v2.md](docs/migration-v1-to-v2.md)**.
 
-   For local development with Azure CLI:
-
-   ```bash
-   # Your Azure CLI identity already has access if you have appropriate RBAC roles
-   az login
-   ```
-
-4. **Configure the server**:
-   ```bash
-   MS365_MCP_KEYVAULT_URL=https://your-keyvault-name.vault.azure.net npx @softeria/ms-365-mcp-server
-   ```
-
-### Secret Name Mapping
-
-| Key Vault Secret Name   | Environment Variable    | Required                  |
-| ----------------------- | ----------------------- | ------------------------- |
-| ms365-mcp-client-id     | MS365_MCP_CLIENT_ID     | Yes                       |
-| ms365-mcp-tenant-id     | MS365_MCP_TENANT_ID     | No (defaults to 'common') |
-| ms365-mcp-client-secret | MS365_MCP_CLIENT_SECRET | No                        |
-
-### Authentication
-
-The Key Vault integration uses `DefaultAzureCredential` from the Azure Identity SDK, which automatically tries multiple authentication methods in order:
-
-1. Environment variables (AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID)
-2. Managed Identity (recommended for Azure Container Apps)
-3. Azure CLI credentials (for local development)
-4. Visual Studio Code credentials
-5. Azure PowerShell credentials
-
-### Optional Dependencies
-
-The Azure Key Vault packages (`@azure/identity` and `@azure/keyvault-secrets`) are optional dependencies. They are only loaded when `MS365_MCP_KEYVAULT_URL` is configured. If you don't use Key Vault, these packages are not required.
-
-## Production Deployment
-
-See [docs/deployment.md](docs/deployment.md) for a full guide to hosting the server for organization-wide access, including Docker, Azure Container Apps, Azure App Service, Azure AD app registration, reverse proxy setup, client configuration, and exposed endpoints.
+---
 
 ## Contributing
 
-We welcome contributions! Before submitting a pull request, please ensure your changes meet our quality standards.
-
-Run the verification script to check all code quality requirements:
-
 ```bash
-npm run verify
+npm ci
+npm run generate    # (re)generate src/generated/client.ts from Graph OpenAPI
+npm run verify      # generate + lint + format:check + build + test
 ```
 
-### For Developers
+Before submitting a PR, `npm run verify` must pass. For a full developer workflow (GSD planning / TDD loops / code review agents), see **[CLAUDE.md](CLAUDE.md)**.
 
-After cloning the repository, you may need to generate the client code from the Microsoft Graph OpenAPI specification:
+---
 
-```bash
-npm run generate
-```
+## Support & license
 
-## Support
-
-If you're having problems or need help:
-
-- Create an [issue](https://github.com/softeria/ms-365-mcp-server/issues)
-- Start a [discussion](https://github.com/softeria/ms-365-mcp-server/discussions)
+- Issues: https://github.com/softeria/ms-365-mcp-server/issues
+- Discussions: https://github.com/softeria/ms-365-mcp-server/discussions
+- Discord: https://discord.gg/WvGVNScrAZ
 - Email: eirikb@eirikb.no
-- Discord: https://discord.gg/WvGVNScrAZ or @eirikb
-
-## License
 
 MIT © 2026 Softeria
