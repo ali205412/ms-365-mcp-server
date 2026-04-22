@@ -24,7 +24,7 @@ export interface DiscoverySearchIndex {
   bm25: BM25Index;
   nameTokens: Map<string, Set<string>>;
 }
-import { describeToolSchema } from './lib/tool-schema.js';
+import { describeToolSchema } from './lib/tool-schema-describer.js';
 
 /**
  * Plan 05-06 (COVRG-05, D-20, T-05-12) — module-level per-tenant BM25 cache.
