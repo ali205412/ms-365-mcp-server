@@ -44,23 +44,11 @@ export function generateMcpTools(openApiSpec, outputDir) {
     clientCode = clientCode.replace(/&#x3A;/g, ':'); // Decode colon
 
     console.log('Fixing function-style API paths with template literals...');
-    // After HTML decoding, paths like range(address=':address') have nested single quotes
-    // which cause TypeScript syntax errors. Convert the path string from single quotes
-    // to backticks (template literal) so single quotes can remain inside.
-    // Match: path: '/...range(param=':value')...',
-    // Replace with: path: `/...range(param=':value')...`,
-    clientCode = clientCode.replace(/(path:\s*)'(\/[^'\n]*=':[\w]+'[^'\n]*)'/g, '$1`$2`');
-    // Additional: handle @-prefixed literal params (userId='@userId', etc.)
-    // common in Graph beta action paths. Any path with an embedded '@ sequence
-    // inside parentheses is wrapped in backticks.
-    clientCode = clientCode.replace(/(path:\s*)'(\/[^']*\([^)\n]*'@[^)\n]*\)[^']*)'/g, '$1`$2`');
-    // Multi-param Graph function paths (e.g. reminderView(StartDateTime=':X',EndDateTime=':Y')
-    // contain 4+ single quotes; any path with 2+ `=':` occurrences gets
-    // wrapped in backticks wholesale.
-    clientCode = clientCode.replace(
-      /(path:\s*)'(\/[^'\n]*(=':[\w]+'[^'\n]*){2,})'/g,
-      '$1`$2`'
-    );
+    // Path-literal wrapping is handled in a single pass by the finalization
+    // step in bin/modules/escape-describe-quotes.mjs (fixMultiParamFunctionPaths).
+    // That pass runs AFTER the beta + product pipelines have merged their
+    // own endpoints into client.ts, so it sees the complete set of paths.
+    // Doing it here would miss merges and produce mixed quote state.
 
     // Plan 05.1 + v1.1 hardening: Microsoft Graph description strings
     // frequently embed example snippets in double quotes, e.g.

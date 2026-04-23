@@ -75,17 +75,55 @@ function fixMultiParamFunctionPaths(source) {
   const rebuilt = source
     .split('\n')
     .map((line) => {
-      if (!line.includes("=':")) return line;
-      // Match any line with path: followed by a quote-delimited string
-      // and containing =': inside.
-      return line.replace(
-        /(path:\s*)(['`])(\/[^\n]*?=':[^\n]*?)\2/,
-        (_m, prefix, _q, body) => {
-          count++;
-          // Strip stray backticks inside the body (from prior partial fixes)
-          const clean = body.replace(/`/g, '');
-          return `${prefix}\`${clean}\``;
+      // Trigger on ANY path line containing nested single quotes inside
+      // parentheses — covers `=':param'` (Graph function params), `='@uid'`
+      // (literal @-prefixed params), and any other '(...' pattern.
+      if (!line.includes('(')) return line;
+      const pathIdx = line.indexOf('path:');
+      if (pathIdx === -1) return line;
+      // Count single quotes after `path:` — if more than 2 (open + close)
+      // then there's nested content requiring backtick wrapping.
+      const tail = line.slice(pathIdx + 5);
+      const singleQuoteCount = (tail.match(/'/g) || []).length;
+      if (singleQuoteCount <= 2) return line;
+      // Locate the opening quote of the path value.
+      let openIdx = -1;
+      for (let i = pathIdx + 5; i < line.length; i++) {
+        const c = line[i];
+        if (c === ' ' || c === '\t') continue;
+        if (c === "'" || c === '`' || c === '"') {
+          openIdx = i;
+          break;
         }
+        return line; // not a quoted value
+      }
+      if (openIdx === -1) return line;
+      // Find the close of the path value by locating the last `,` that
+      // terminates a zodios endpoint field (`method:`, `alias:`,
+      // `requestFormat:`, `parameters:`, `response:`, `errors:`) after
+      // the path opener. The char immediately before that `,` is the
+      // true path-value closer.
+      // Multi-field inline pattern: path AND following field on same line.
+      // Also matches end-of-line pattern where path is on its own line and
+      // ends with a trailing `,` (next zodios field is on the next line).
+      const fieldSep = /,\s*(method|alias|requestFormat|parameters|response|errors|description)\s*:|,\s*$/g;
+      fieldSep.lastIndex = openIdx + 1;
+      const m = fieldSep.exec(line);
+      if (!m) return line;
+      const sepIdx = m.index; // index of the `,`
+      // Closer is the char right before the comma.
+      const closerIdx = sepIdx - 1;
+      const rawBody = line.slice(openIdx + 1, closerIdx);
+      // Strip backticks + strip original opening/closing quote chars if
+      // any ended up inside from prior mangling.
+      const clean = rawBody.replace(/`/g, '');
+      count++;
+      return (
+        line.slice(0, openIdx) +
+        '`' +
+        clean +
+        '`' +
+        line.slice(sepIdx) // keep the `, method: ...` continuation intact
       );
     })
     .join('\n');
