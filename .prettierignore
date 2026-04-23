@@ -2,6 +2,8 @@ node_modules/
 dist/
 coverage/
 src/generated/
+src/presets/generated-index.ts
+src/presets/*.json
 openapi/
 .planning/
 docs/coverage-report.md
