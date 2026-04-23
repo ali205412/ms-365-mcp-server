@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+src/generated/
+openapi/
+.planning/
+docs/coverage-report.md
+bin/.last-beta-snapshot.json
+bin/.last-powerbi-snapshot.json
+bin/.last-exo-snapshot.json
+bin/.last-pwrapps-snapshot.json
+bin/.last-pwrauto-snapshot.json
+bin/.last-spadmin-snapshot.json
+package-lock.json

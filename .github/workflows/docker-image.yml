@@ -80,7 +80,11 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          # arm64 disabled: QEMU emulated arm64 build hits OOM + 40+min
+          # runtime on the 45MB src/generated/client.ts transform. Can re-enable
+          # once either (a) native arm64 runners are available, OR (b) the
+          # generated catalog is split per workload. v1.1 plant-seed.
+          platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
