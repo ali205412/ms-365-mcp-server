@@ -11,8 +11,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, type CommandOptions } from './cli.js';
 import logger from './logger.js';
-import AuthManager, { buildScopesFromEndpoints, getTokenCachePath } from './auth.js';
-import MicrosoftGraphServer, { parseHttpOption } from './server.js';
+import { parseHttpOption } from './lib/http-option.js';
+// NOTE: AuthManager and MicrosoftGraphServer are dynamic-imported below inside
+// main() so the ~45 MB src/generated/client.ts (pulled transitively through
+// server.ts) is NOT parsed during --health-check probes or before the
+// fail-fast prod-HTTP config validation. See validateProdHttpConfig and plan
+// 01-07 SECUR-04: the fail-fast must exit within the 10 s timeout of
+// test/startup-validation.test.ts, which a cold tsx transform of the generated
+// client violates on CI runners.
 import { registerShutdownHooks } from './lib/shutdown.js';
 import type { ReadinessCheck } from './lib/health.js';
 import * as postgres from './lib/postgres.js';
@@ -84,9 +90,10 @@ const EX_CONFIG = 78;
  * advisory only (2 = leftovers present); the server continues regardless
  * so a broken or missing probe cannot block startup.
  */
-function maybeProbeKeytarLeftovers(args: CommandOptions): void {
+async function maybeProbeKeytarLeftovers(args: CommandOptions): Promise<void> {
   if (args.http) return;
   try {
+    const { getTokenCachePath } = await import('./auth.js');
     const cachePath = getTokenCachePath();
     if (existsSync(cachePath)) return;
 
@@ -246,6 +253,18 @@ async function main(): Promise<void> {
     // server bootstrapping (so a misconfigured deployment exits cleanly
     // without allocating resources). Stdio mode + dev mode are permissive.
     validateProdHttpConfig(args);
+
+    // Heavy modules are loaded AFTER the fail-fast so a misconfigured prod
+    // deployment exits in <1 s rather than waiting for the tsx transform of
+    // src/generated/client.ts (~45 MB, pulled transitively via server.ts).
+    // See test/startup-validation.test.ts 10 s timeout.
+    const [authModule, serverModule] = await Promise.all([
+      import('./auth.js'),
+      import('./server.js'),
+    ]);
+    const AuthManager = authModule.default;
+    const { buildScopesFromEndpoints } = authModule;
+    const MicrosoftGraphServer = serverModule.default;
 
     // Register graceful-shutdown hooks early (plan 01-05 / OPS-09). In stdio
     // mode the null server skips server.close() but still flushes pino +
@@ -475,7 +494,7 @@ async function main(): Promise<void> {
     // bootstrap so we've already confirmed tokens would have loaded from
     // the file cache — if we got here without tokens, the probe can tell
     // the user how to migrate them.
-    maybeProbeKeytarLeftovers(args);
+    await maybeProbeKeytarLeftovers(args);
 
     // Plan 05-04 TENANT-08 (Pitfall 8): seed the stdio-mode dispatch-guard
     // fallback. StdioServerTransport dispatches tool calls outside the ALS

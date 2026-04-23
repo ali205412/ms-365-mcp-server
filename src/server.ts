@@ -61,28 +61,8 @@ const LEGACY_SINGLE_TENANT_KEY = '_';
  * @param httpOption - The HTTP option value (string or boolean)
  * @returns Object with host (undefined if not specified) and port number
  */
-export function parseHttpOption(httpOption: string | boolean): {
-  host: string | undefined;
-  port: number;
-} {
-  if (typeof httpOption === 'boolean') {
-    return { host: undefined, port: 3000 };
-  }
-
-  const httpString = httpOption.trim();
-
-  // Check if it contains a colon (host:port format)
-  if (httpString.includes(':')) {
-    const [hostPart, portPart] = httpString.split(':');
-    const host = hostPart || undefined; // Empty string becomes undefined
-    const port = parseInt(portPart) || 3000;
-    return { host, port };
-  }
-
-  // No colon, treat as port only
-  const port = parseInt(httpString) || 3000;
-  return { host: undefined, port };
-}
+export { parseHttpOption } from './lib/http-option.js';
+import { parseHttpOption } from './lib/http-option.js';
 
 /**
  * Build the dynamic-client-registration (POST /register) handler.
