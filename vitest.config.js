@@ -16,31 +16,15 @@ const INTEGRATION_PATTERNS = [
   'test/token-endpoint.test.ts',
 ];
 
-// CI-environment-specific test failures (pass locally on Node 25, fail on
-// Node 22 CI runners with Express 5 middleware setup order or vi.mock
-// hoist-ordering issues). Quarantined via MS365_MCP_SKIP_CI_FLAKY=1 so
-// Release/Build workflows go green while the test-infra migration
-// follow-up (mock-target-path sweep after the workload-prefix module
-// extraction landed in 2026-04-23) proceeds in a dedicated session.
-// Re-enable by removing these entries or setting the env var to 0.
-const CI_FLAKY_QUARANTINE =
-  process.env.MS365_MCP_SKIP_CI_FLAKY === '1' || process.env.CI === 'true'
-    ? [
-        'test/transports/streamable-http.test.ts',
-        'test/transports/legacy-sse.test.ts',
-        'test/lib/readiness-chain.test.ts',
-        'test/lib/graph-client.span.test.ts',
-        'test/lib/otel-metrics.test.ts',
-        'test/lib/rate-limit/sliding-window.test.ts',
-        'test/lib/metrics-server/bearer-auth.test.ts',
-        'test/lib/middleware/retry.span.test.ts',
-        'test/tool-selection/per-tenant-bm25.test.ts',
-        'test/tenant/postgres-schema.test.ts',
-        'test/bin/generate-graph-client.test.mjs',
-        'test/bin/coverage-check-orchestrator.test.mjs',
-        'test/bin/beta-churn-guard.test.mjs',
-      ]
-    : [];
+// Previously used to quarantine CI-only test failures during the 2026-04-23
+// module-split debug session. After diagnosis (2026-04-24) the real failures
+// were unrelated to mock-path drift: (a) postgres-schema's migration list was
+// stale, (b) generate-graph-client/coverage/beta tests broke after the
+// finalize-client step became unconditional, and (c) ioredis/startup
+// failures had their own root causes. All 13 files now pass — the quarantine
+// is retained as an empty array + env gate so operators can re-engage it if
+// a future refactor trips CI while a fix is in flight.
+const CI_FLAKY_QUARANTINE = process.env.MS365_MCP_SKIP_CI_FLAKY === '1' ? [] : [];
 
 // The generated Microsoft Graph client under src/generated/client.ts is
 // ~46 MB and is transitively imported by most server-level tests
