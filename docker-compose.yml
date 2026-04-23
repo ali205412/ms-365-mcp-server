@@ -65,6 +65,35 @@ services:
       MS365_MCP_DATABASE_URL: "postgres://mcp:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/mcp"
       MS365_MCP_MIGRATE_ON_STARTUP: ${MS365_MCP_MIGRATE_ON_STARTUP:-1}
       MS365_MCP_REDIS_URL: redis://redis:6379
+      # Phase 6: enable Prometheus /metrics on port 9464 (D-02 Bearer auth
+      # is optional — unset env var = open endpoint, suitable for localhost).
+      MS365_MCP_PROMETHEUS_ENABLED: ${MS365_MCP_PROMETHEUS_ENABLED:-1}
+      MS365_MCP_METRICS_PORT: "9464"
+      # Public URL allows OAuth redirect + webhook SSRF-safe notificationUrl;
+      # override in .env for deployments behind reverse proxy.
+      MS365_MCP_PUBLIC_URL: ${MS365_MCP_PUBLIC_URL:-http://localhost:3000}
+      # Phase 1 SECUR-04: CORS allowlist required in production HTTP mode.
+      MS365_MCP_CORS_ORIGINS: ${MS365_MCP_CORS_ORIGINS:-http://localhost:3000,http://localhost:8080,http://127.0.0.1:3000}
+      # Phase 3 SECUR-01: Key-encryption-key for AES-GCM envelope encryption
+      # of tenant refresh tokens at rest. Generate: openssl rand -base64 32
+      MS365_MCP_KEK: "${MS365_MCP_KEK:?MS365_MCP_KEK must be set in .env - generate with openssl rand -base64 32}"
+      # Pass through Azure AD app credentials from .env (operator sets these).
+      MS365_MCP_CLIENT_ID: ${MS365_MCP_CLIENT_ID:-}
+      MS365_MCP_CLIENT_SECRET: ${MS365_MCP_CLIENT_SECRET:-}
+      MS365_MCP_TENANT_ID: ${MS365_MCP_TENANT_ID:-common}
+    # Command: run in Streamable-HTTP gateway mode on port 3000, org-mode
+    # enables Teams/SharePoint/admin scopes. Operators running stdio-only
+    # deployments can override this in their own compose.override.yml.
+    command: ['--http', '3000', '--org-mode']
+    ports:
+      - '127.0.0.1:3000:3000'   # Streamable HTTP + legacy SSE transports
+      - '127.0.0.1:9464:9464'   # Prometheus /metrics (Phase 6 plan 06-03)
+    healthcheck:
+      test: ['CMD', 'node', 'bin/check-health.cjs']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
 volumes:
   mcp_pg_data:
