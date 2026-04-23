@@ -126,10 +126,16 @@ function fixMultiParamFunctionPaths(source) {
 
 /**
  * Run ALL post-merge fixes over a client.ts file. Writes back in place.
+ * When clientPath does not exist (e.g., tests that stub `generateMcpTools`
+ * to a no-op and never emit client.ts), this function is a no-op and
+ * returns zero counts — there is nothing to finalize.
  * @param {string} clientPath absolute path to client.ts
  * @returns {{ describeFix: number, pathFix: number }}
  */
 export function finalizeGeneratedClient(clientPath) {
+  if (!fs.existsSync(clientPath)) {
+    return { describeFix: 0, pathFix: 0 };
+  }
   const raw = fs.readFileSync(clientPath, 'utf-8');
   const { source: step1, count: describeFix } = escapeNestedDescribeQuotes(raw);
   const { source: step2, count: pathFix } = fixMultiParamFunctionPaths(step1);

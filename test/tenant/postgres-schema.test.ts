@@ -124,6 +124,10 @@ describe('plan 03-01 — Postgres schema round-trip', () => {
       // __spadmin__-prefixed tool dispatch — routes admin requests to
       // the correct {slug}-admin.sharepoint.com tenant.
       '20260801000000_sharepoint_domain.sql',
+      // Plan 06-04 (D-11): tenants.rate_limits JSONB column for
+      // per-tenant rate limit overrides (request_per_min,
+      // graph_points_per_min).
+      '20260901000000_tenant_rate_limits.sql',
     ]);
   });
 

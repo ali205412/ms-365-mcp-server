@@ -144,7 +144,11 @@ describe('plan 06-04 — rate-limit middleware', () => {
       rate_limits: { request_per_min: 5, graph_points_per_min: 10000 },
     });
     await redis.quit();
-    // Now redis.status === 'end'
+    // ioredis-mock does NOT transition .status after quit — it stays
+    // undefined, which the middleware intentionally treats as "no status
+    // info, proceed" for MemoryRedisFacade compatibility. Explicitly set
+    // it to 'end' to simulate a real ioredis client that has disconnected.
+    (redis as unknown as { status: string }).status = 'end';
     const res = await fetch(`${baseUrl}/t/t-c/mcp`);
     expect(res.status).toBe(503);
     expect(res.headers.get('retry-after')).toBe('5');

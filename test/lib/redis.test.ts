@@ -12,11 +12,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // Mock ioredis with ioredis-mock (both provide the same API surface). The
-// factory MUST return the actual `default` export of ioredis-mock, matching
-// how `import IORedis from 'ioredis'` resolves under ESM+tsx.
+// factory returns both `default` and the named `Redis` export because
+// src/lib/redis.ts uses `import { Redis as IORedis } from 'ioredis'` —
+// default-only was insufficient under the stricter named-export resolution
+// exercised on Node 22 CI.
 vi.mock('ioredis', async () => {
   const mod = await import('ioredis-mock');
-  return { default: mod.default };
+  return { default: mod.default, Redis: mod.default };
 });
 
 import { getRedis, shutdown, readinessCheck, __setRedisForTesting } from '../../src/lib/redis.js';
