@@ -1,0 +1,134 @@
+name: Docker Image
+
+# Multi-arch (amd64 + arm64) container image build and publish to GHCR.
+# Publishes to ghcr.io/ali205412/ms-365-mcp-server (this fork's namespace).
+# The upstream Softeria repo owns @softeria/ms-365-mcp-server on npm; this
+# workflow only ships the container artefact for operators running the v2
+# multi-tenant gateway locally or in their own infrastructure.
+
+on:
+  push:
+    branches: [main, dev]
+    tags: ['v*.*.*']
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-push:
+    name: Build and push container image
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (for arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # Branch-named tags: main → :main, dev → :dev
+            type=ref,event=branch
+            # PR preview tag: pr-123
+            type=ref,event=pr
+            # Semver on git tags: v2.3.1 → :2.3.1 + :2.3 + :2
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            # SHA-prefixed tag for traceability: sha-abc1234
+            type=sha,prefix=sha-
+            # Latest → main only
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+          labels: |
+            org.opencontainers.image.title=ms-365-mcp-server
+            org.opencontainers.image.description=Enterprise multi-tenant Microsoft 365 MCP gateway
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build and push (multi-arch)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      - name: Attest image build provenance
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Summary
+        run: |
+          echo "## Published image tags" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Digest: \`${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  smoke-test:
+    name: Container smoke test
+    runs-on: ubuntu-latest
+    needs: build-push
+    if: github.event_name != 'pull_request'
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull freshly-published image
+        run: docker pull ghcr.io/${{ github.repository }}:sha-$(echo ${{ github.sha }} | cut -c1-7)
+
+      - name: Smoke-test stdio mode (--help exits 0)
+        run: |
+          docker run --rm \
+            -e MS365_MCP_CLIENT_ID=smoke-test \
+            -e MS365_MCP_TENANT_ID=common \
+            ghcr.io/${{ github.repository }}:sha-$(echo ${{ github.sha }} | cut -c1-7) \
+            --help

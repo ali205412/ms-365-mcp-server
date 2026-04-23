@@ -68,24 +68,12 @@ import { parseSelectorList } from './selector-ast.js';
  *   "__powerbi__GroupsGetGroups"    → "powerbi"
  *   "__spadmin__list-sites"         → "sp-admin"
  */
-export function extractWorkloadPrefix(alias: string): string {
-  // Phase 5.1: product prefix → product name is the workload.
-  // The 5-entry iteration is O(1) in practice; the alias-building pass runs
-  // once at module load so this is never on a hot path.
-  for (const audience of PRODUCT_AUDIENCES.values()) {
-    if (alias.startsWith(audience.prefix)) {
-      return audience.product;
-    }
-  }
-  // Existing Graph behavior unchanged:
-  const stripped = alias.startsWith('__beta__') ? alias.slice('__beta__'.length) : alias;
-  const dash = stripped.indexOf('-');
-  const dot = stripped.indexOf('.');
-  const dashIdx = dash === -1 ? Infinity : dash;
-  const dotIdx = dot === -1 ? Infinity : dot;
-  const cutoff = Math.min(dashIdx, dotIdx);
-  return cutoff === Infinity ? stripped : stripped.slice(0, cutoff);
-}
+// Re-export from the dependency-free module so callers that already import
+// from registry-validator.js keep working. New callers (otel-metrics.ts)
+// should import directly from './workload-prefix.js' to avoid pulling in
+// the 45 MB generated client catalog transitively.
+import { extractWorkloadPrefix } from './workload-prefix.js';
+export { extractWorkloadPrefix };
 
 // Built once at module load, frozen to prevent downstream mutation.
 const REGISTRY_ALIASES: ReadonlySet<string> = Object.freeze(

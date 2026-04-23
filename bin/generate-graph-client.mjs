@@ -89,6 +89,7 @@ import {
 } from './modules/coverage-check.mjs';
 import { compileEssentialsPreset as defaultCompileEssentialsPreset } from './modules/compile-preset.mjs';
 import { stubMissingSchemas as defaultStubMissingSchemas } from './modules/stub-missing-schemas.mjs';
+import { finalizeGeneratedClient } from './modules/escape-describe-quotes.mjs';
 // Phase 5.1: `PRODUCT_PIPELINES` lives in its own leaf module so the
 // per-product modules below can import it WITHOUT triggering an ESM cycle.
 // The orchestrator re-exports it for backwards compatibility with any caller
@@ -310,6 +311,18 @@ export async function main(deps = {}) {
     }
     console.log(`   Totals: current=${report.totals.current}, baseline=${report.totals.baseline}`);
   }
+
+  // v1.1 hardening: finalization pass over client.ts AFTER all merge
+  // pipelines (v1 generate / beta / product) have completed. Fixes syntax
+  // issues that per-pipeline post-processing can't see because they depend
+  // on content merged by later pipelines (nested double-quotes in
+  // describe() strings that come from Microsoft example snippets; multi-
+  // parameter Graph function paths with nested single quotes).
+  console.log('\n🧹 Step 4e: Finalizing client.ts (escape nested quotes)');
+  const finalizeResult = finalizeGeneratedClient(path.join(generatedDir, 'client.ts'));
+  console.log(
+    `✅ Finalized: escaped ${finalizeResult.describeFix} describe() string(s), rewrote ${finalizeResult.pathFix} multi-param path(s)`
+  );
 
   // Plan 05-03 Step 5: compile essentials-v1 preset -> generated-index.ts.
   // Runs unconditionally -- the preset is a 150-op constant that must stay

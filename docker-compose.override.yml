@@ -1,0 +1,24 @@
+# Local-development override to bypass Docker daemon restrictions on this host.
+# /etc/docker/daemon.json sets `no-new-privileges: true` globally, which breaks
+# the postgres-alpine entrypoint (gosu needs setuid to drop to the postgres
+# user) and `icc: false`, which blocks default-bridge inter-container
+# communication. This override is safe for local testing; production deploys
+# should use examples/docker-compose/docker-compose.yml which uses explicit
+# network isolation + non-root images that don't rely on gosu.
+
+services:
+  postgres:
+    # Pin by digest to bypass local image-tag cache corruption that was
+    # mapping postgres:16-alpine to a stale postgres:18rc1-trixie layer.
+    image: postgres@sha256:4e6e670bb069649261c9c18031f0aded7bb249a5b6664ddec29c013a89310d50
+    security_opt:
+      - no-new-privileges=false
+
+  redis:
+    image: redis@sha256:7aec734b2bb298a1d769fd8729f13b8514a41bf90fcdd1f38ec52267fbaa8ee6
+    security_opt:
+      - no-new-privileges=false
+
+  mcp:
+    security_opt:
+      - no-new-privileges=false

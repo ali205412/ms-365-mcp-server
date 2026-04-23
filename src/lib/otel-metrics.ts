@@ -20,9 +20,12 @@
 import { metrics } from '@opentelemetry/api';
 
 // Re-export the D-06 label helper (workload prefix — NOT full tool alias).
-// The source of truth is registry-validator.ts; this is a name alias
-// for consumers that want explicit "this is for metric labels" semantics.
-export { extractWorkloadPrefix as labelForTool } from './tool-selection/registry-validator.js';
+// Imported from the dependency-free `workload-prefix.ts` module so this
+// file does NOT transitively pull in the 45 MB generated client catalog.
+// Tests + runtime callers get the same pure function without the
+// cold-import cost that was forcing 12 GB vitest heaps and docker-build
+// OOMs (root cause of the Phase 6 test-env flakiness).
+export { extractWorkloadPrefix as labelForTool } from './tool-selection/workload-prefix.js';
 
 /**
  * Structural type describing the subset of the PKCE-store interface consumed

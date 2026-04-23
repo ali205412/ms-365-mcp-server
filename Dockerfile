@@ -20,7 +20,21 @@ RUN --mount=type=cache,target=/root/.npm \
     npm install --prefer-offline --no-audit --no-fund --ignore-scripts
 
 COPY . .
-RUN npm run generate && npm run build && npm prune --omit=dev
+# MS365_MCP_FULL_COVERAGE=1: produce the full v1.0 catalog (5k+ ops) so the
+# essentials preset (plan 05-03) can resolve all 150 required aliases. Without
+# this flag the generator emits the legacy 211-alias subset and preset
+# compilation fails with "N preset op(s) NOT in registry".
+ENV MS365_MCP_FULL_COVERAGE=1 \
+    MS365_MCP_USE_SNAPSHOT=1 \
+    MS365_MCP_ACCEPT_BETA_CHURN=1 \
+    NODE_OPTIONS=--max-old-space-size=12288
+
+# Split into separate RUN steps so buildkit shows precisely which command
+# fails — `npm run generate && npm run build` hides the failure point.
+RUN npm run generate
+# Fail fast on build errors; don't pipe to tail (pipe hides exit code).
+RUN set -e && npm run build
+RUN npm prune --omit=dev
 
 # ---- Release stage ------------------------------------------------------
 FROM node:${NODE_VERSION} AS release

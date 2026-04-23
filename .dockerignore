@@ -11,6 +11,10 @@ coverage
 # Tests and dev scaffolding
 test
 src/__tests__
+src/**/__tests__
+**/*.test.ts
+**/*.int.test.ts
+**/*.spec.ts
 vitest.config.js
 
 # Planning and docs
@@ -19,8 +23,15 @@ vitest.config.js
 CHANGELOG.md
 LICENSE
 
-# Generator inputs (regenerated at build time via npm run generate)
-openapi
+# Generator inputs: exclude the huge auto-downloaded specs (openapi.yaml
+# and openapi-beta.yaml are ~35-62MB each; they are regenerated at build
+# time). Keep the hand-authored product specs (openapi-powerbi.yaml,
+# openapi-pwrapps.yaml, openapi-pwrauto.yaml, openapi-exo.yaml,
+# openapi-spadmin.yaml) which drive Phase 5.1 per-product pipelines.
+openapi/openapi.yaml
+openapi/openapi-trimmed.yaml
+openapi/openapi-beta.yaml
+openapi/openapi-beta-trimmed.yaml
 
 # Environment and secrets
 .env

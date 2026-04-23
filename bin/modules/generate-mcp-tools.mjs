@@ -54,6 +54,84 @@ export function generateMcpTools(openApiSpec, outputDir) {
     // common in Graph beta action paths. Any path with an embedded '@ sequence
     // inside parentheses is wrapped in backticks.
     clientCode = clientCode.replace(/(path:\s*)'(\/[^']*\([^)\n]*'@[^)\n]*\)[^']*)'/g, '$1`$2`');
+    // Multi-param Graph function paths (e.g. reminderView(StartDateTime=':X',EndDateTime=':Y')
+    // contain 4+ single quotes; any path with 2+ `=':` occurrences gets
+    // wrapped in backticks wholesale.
+    clientCode = clientCode.replace(
+      /(path:\s*)'(\/[^'\n]*(=':[\w]+'[^'\n]*){2,})'/g,
+      '$1`$2`'
+    );
+
+    // Plan 05.1 + v1.1 hardening: Microsoft Graph description strings
+    // frequently embed example snippets in double quotes, e.g.
+    //   .describe("The description of the product (example: "Fabrikam...app."). ...")
+    // openapi-zod-client emits these verbatim, producing TypeScript syntax
+    // errors. Rewrite `.describe("…")` arguments to escape unbalanced
+    // inner double quotes while preserving the leading `.describe("` and
+    // trailing `")` boundary markers.
+    console.log('Escaping nested double-quotes in describe() argument strings...');
+    let escapeCount = 0;
+    clientCode = clientCode.replace(
+      /\.describe\("((?:[^"\\]|\\.)*)"\)/g,
+      (match, inner) => {
+        // If the captured "inner" still contains an unescaped " we split
+        // across multiple describe()s — that only happens when openapi-zod-client
+        // inserted unescaped example quotes. Re-escape them.
+        if (!inner.includes('"')) return match;
+        const escaped = inner.replace(/"/g, '\\"');
+        escapeCount++;
+        return `.describe("${escaped}")`;
+      }
+    );
+    // Line-by-line pass: walk EVERY `.describe("` occurrence on a line (not
+    // just the first) and repair nested quotes. Microsoft's Graph spec
+    // contains describe strings like
+    //   .describe("The description of the product (example: "Fabrikam for Business is a productivity app."). Returned by default. Read-only.")
+    // where the opening inner `"` after `example: ` ends the describe string
+    // prematurely. We find the TRUE close by scanning for `")` followed by a
+    // known zod-chain sentinel, and escape every `"` between open and close.
+    const chainSentinel = /"\)(?=(\.nullish\(\)|\.optional\(\)|\.default\(|\.describe\(|\.transform\(|\.nullable\(|,|\s*\}|\s*\)|$))/g;
+    clientCode = clientCode
+      .split('\n')
+      .map((line) => {
+        if (!line.includes('.describe("')) return line;
+        let cursor = 0;
+        let rebuilt = '';
+        while (cursor < line.length) {
+          const dIdx = line.indexOf('.describe("', cursor);
+          if (dIdx === -1) {
+            rebuilt += line.slice(cursor);
+            break;
+          }
+          rebuilt += line.slice(cursor, dIdx) + '.describe("';
+          const contentStart = dIdx + '.describe("'.length;
+          // Find the next chain-sentinel-anchored `")` after contentStart.
+          chainSentinel.lastIndex = contentStart;
+          const m = chainSentinel.exec(line);
+          if (!m) {
+            // No well-formed close on this line — bail out of this describe.
+            rebuilt += line.slice(contentStart);
+            break;
+          }
+          const closeIdx = m.index;
+          const inner = line.slice(contentStart, closeIdx);
+          if (inner.includes('"')) {
+            // Normalize: un-escape existing `\"` then re-escape every `"`.
+            const normalized = inner.replace(/\\"/g, '\0').replace(/"/g, '\\"').replace(/\0/g, '\\"');
+            rebuilt += normalized;
+            escapeCount++;
+          } else {
+            rebuilt += inner;
+          }
+          rebuilt += '")';
+          cursor = closeIdx + 2;
+        }
+        return rebuilt;
+      })
+      .join('\n');
+    if (escapeCount > 0) {
+      console.log(`Escaped nested double-quotes in ${escapeCount} describe() string(s)`);
+    }
 
     fs.writeFileSync(clientFilePath, clientCode);
 

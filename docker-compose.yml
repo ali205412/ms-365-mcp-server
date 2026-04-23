@@ -19,7 +19,7 @@ services:
       # CR-04 fix: no default — Compose fails fast (Postgres image refuses to
       # start without POSTGRES_PASSWORD) when the operator has not generated a
       # strong password. Generate one with: openssl rand -base64 32
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env (generate: openssl rand -base64 32)}
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env - generate with openssl rand -base64 32}"
       POSTGRES_DB: mcp
     volumes:
       - mcp_pg_data:/var/lib/postgresql/data
@@ -62,7 +62,7 @@ services:
       # known-weak password. For cross-VM Postgres (i.e., when this compose
       # service is replaced by an external host), append `?sslmode=require`
       # to the URL: postgres://mcp:PASSWORD@host:5432/mcp?sslmode=require
-      MS365_MCP_DATABASE_URL: postgres://mcp:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/mcp
+      MS365_MCP_DATABASE_URL: "postgres://mcp:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/mcp"
       MS365_MCP_MIGRATE_ON_STARTUP: ${MS365_MCP_MIGRATE_ON_STARTUP:-1}
       MS365_MCP_REDIS_URL: redis://redis:6379
 

@@ -2,16 +2,35 @@ name: Build
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [main, dev]
+  push:
+    branches: [dev]
   workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Phase 5/5.1: full Graph v1.0 + beta + 5 product catalogs; snapshot pinned
+  # for reproducible CI; accept upstream beta churn so minor upstream
+  # renamings don't break PRs (churn is reviewed on snapshot refresh).
+  MS365_MCP_FULL_COVERAGE: '1'
+  MS365_MCP_USE_SNAPSHOT: '1'
+  MS365_MCP_ACCEPT_BETA_CHURN: '1'
+  # Generated client.ts is ~46MB; default heap OOMs on tsup + vitest.
+  NODE_OPTIONS: --max-old-space-size=12288
 
 jobs:
   build:
+    name: Build (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     strategy:
+      fail-fast: false
       matrix:
-        node-version: [ 20.x, 22.x ]
+        node-version: [20.x, 22.x]
 
     steps:
       - uses: actions/checkout@v4
@@ -28,17 +47,28 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Generate
+      - name: Generate Graph client (full coverage)
         run: npm run generate
 
-      - name: Lint code
+      - name: Lint
         run: npm run lint
 
       - name: Check formatting
         run: npm run format:check
 
+      - name: Typecheck
+        run: npx tsc --noEmit
+
       - name: Build TypeScript
         run: npm run build
 
-      - name: Run tests
+      - name: Run unit tests
         run: npm test
+
+      - name: Upload build artifacts (Node 22 only)
+        if: matrix.node-version == '22.x'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ github.sha }}
+          path: dist/
+          retention-days: 7
