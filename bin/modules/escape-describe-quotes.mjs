@@ -63,17 +63,32 @@ function escapeNestedDescribeQuotes(source) {
 }
 
 function fixMultiParamFunctionPaths(source) {
-  // Wrap single-quoted path strings containing 2+ `=':param'` occurrences in
-  // backticks. Covers Graph function paths like
-  //   reminderView(StartDateTime=':X',EndDateTime=':Y')
+  // Wrap ANY path string containing `=':param'` occurrences in backticks.
+  // Covers paths like:
+  //   path: '/users/.../getPolicyId(type=':type',name=':name')'
+  //   path: `/users/.../getPolicyId(type=':type',name=`:name')'
+  //     ^ already-corrupted by a single-substitution pass earlier
+  // We normalize by finding any `path: [quote]...[quote]` that contains
+  // `=':` and wrapping the whole content in fresh backticks, stripping any
+  // pre-existing backticks inside the content.
   let count = 0;
-  const rebuilt = source.replace(
-    /(path:\s*)'(\/[^'\n]*(=':[\w]+'[^'\n]*){2,})'/g,
-    (_match, prefix, body) => {
-      count++;
-      return `${prefix}\`${body}\``;
-    }
-  );
+  const rebuilt = source
+    .split('\n')
+    .map((line) => {
+      if (!line.includes("=':")) return line;
+      // Match any line with path: followed by a quote-delimited string
+      // and containing =': inside.
+      return line.replace(
+        /(path:\s*)(['`])(\/[^\n]*?=':[^\n]*?)\2/,
+        (_m, prefix, _q, body) => {
+          count++;
+          // Strip stray backticks inside the body (from prior partial fixes)
+          const clean = body.replace(/`/g, '');
+          return `${prefix}\`${clean}\``;
+        }
+      );
+    })
+    .join('\n');
   return { source: rebuilt, count };
 }
 
