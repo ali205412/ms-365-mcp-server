@@ -26,6 +26,20 @@ export function generateMcpTools(openApiSpec, outputDir) {
     console.log(`Generated client code at: ${clientFilePath}`);
 
     let clientCode = fs.readFileSync(clientFilePath, 'utf-8');
+
+    // Prepend // @ts-nocheck — the makeApi([...]) union across ~40K endpoints
+    // exceeds TypeScript's complexity budget (TS2590). Runtime types are
+    // provided by src/generated/hack.ts and callers only consume the runtime
+    // `api` object; no type information is lost at the module boundary.
+    const tsNoCheckHeader =
+      '// @ts-nocheck — Zod union in makeApi([...]) exceeds TS complexity budget\n' +
+      '// (TS2590). Types are checked via src/generated/hack.ts makeApi signature\n' +
+      '// and the caller-side imports only the runtime `api` object. Regenerated\n' +
+      '// files must preserve this header; see bin/modules/generate-mcp-tools.mjs.\n';
+    if (!clientCode.startsWith('// @ts-nocheck')) {
+      clientCode = tsNoCheckHeader + clientCode;
+    }
+
     clientCode = clientCode.replace(/'@zodios\/core';/, "'./hack.js';");
 
     clientCode = clientCode.replace(/\.strict\(\)/g, '.passthrough()');
