@@ -1,24 +1,45 @@
 name: Release
 
+# Fork release flow: tags this repo on push to main. Does NOT publish to
+# npm — the upstream Softeria repo owns @softeria/ms-365-mcp-server on npm.
+# The Docker image for this fork is published by docker-image.yml separately
+# on push to main + tags.
+
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
   issues: write
   pull-requests: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  MS365_MCP_FULL_COVERAGE: '1'
+  MS365_MCP_USE_SNAPSHOT: '1'
+  MS365_MCP_ACCEPT_BETA_CHURN: '1'
+  NODE_OPTIONS: --max-old-space-size=12288
+
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: 'npm'
+
       - run: npm i -D patch-package
       - run: npm ci
       - run: npm run generate
@@ -26,7 +47,12 @@ jobs:
       - run: npm run format:check
       - run: npm run build
       - run: npm test
+
+      # Fork does not publish to npm. The NPM_TOKEN line is intentionally
+      # absent — semantic-release will skip npm publishing if no token is
+      # configured AND @semantic-release/npm is set to `npmPublish: false`
+      # in .releaserc.json. If you do want npm publishing, add NPM_TOKEN
+      # as a repo secret and enable npmPublish in .releaserc.json.
       - run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.npm_token }}
