@@ -122,13 +122,10 @@ describe('plan 05.1-06 Task 2 — product dispatch routing', () => {
       graphRequest: fakeGraphRequest,
     } as unknown as GraphClient;
 
-    const result = await executeProductTool(
-      '__spadmin__list-sites',
-      {},
-      authManager,
-      graphClient,
-      { tenantId: 'tenantA', sharepointDomain: null }
-    );
+    const result = await executeProductTool('__spadmin__list-sites', {}, authManager, graphClient, {
+      tenantId: 'tenantA',
+      sharepointDomain: null,
+    });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].type).toBe('text');
@@ -153,13 +150,10 @@ describe('plan 05.1-06 Task 2 — product dispatch routing', () => {
       graphRequest: fakeGraphRequest,
     } as unknown as GraphClient;
 
-    await executeProductTool(
-      '__spadmin__list-sites',
-      {},
-      authManager,
-      graphClient,
-      { tenantId: 'tenantA', sharepointDomain: 'contoso' }
-    );
+    await executeProductTool('__spadmin__list-sites', {}, authManager, graphClient, {
+      tenantId: 'tenantA',
+      sharepointDomain: 'contoso',
+    });
 
     expect(fakeGetTokenForProduct).toHaveBeenCalledWith('tenantA', 'sp-admin', {
       sharepointDomain: 'contoso',

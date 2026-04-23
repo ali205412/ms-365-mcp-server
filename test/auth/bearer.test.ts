@@ -85,9 +85,7 @@ describe('createBearerMiddleware (AUTH-03)', () => {
     mw(req, res, next as unknown as NextFunction);
 
     expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ error: 'tenant_mismatch' })
-    );
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'tenant_mismatch' }));
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -112,9 +110,7 @@ describe('createBearerMiddleware (AUTH-03)', () => {
     mw(req, res, next as unknown as NextFunction);
 
     expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ error: 'invalid_token' })
-    );
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'invalid_token' }));
     expect(next).not.toHaveBeenCalled();
   });
 

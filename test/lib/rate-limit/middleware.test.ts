@@ -28,12 +28,9 @@ describe('plan 06-04 — rate-limit middleware', () => {
     id: string;
     rate_limits: { request_per_min: number; graph_points_per_min: number } | null;
   }): Promise<void> {
-    const { createRateLimitMiddleware } = await import(
-      '../../../src/lib/rate-limit/middleware.js'
-    );
-    const { registerSlidingWindow, __resetRegisteredForTesting } = await import(
-      '../../../src/lib/rate-limit/sliding-window.js'
-    );
+    const { createRateLimitMiddleware } = await import('../../../src/lib/rate-limit/middleware.js');
+    const { registerSlidingWindow, __resetRegisteredForTesting } =
+      await import('../../../src/lib/rate-limit/sliding-window.js');
     __resetRegisteredForTesting();
     registerSlidingWindow(redis);
 
@@ -122,9 +119,7 @@ describe('plan 06-04 — rate-limit middleware', () => {
   });
 
   it('missing req.tenant.id returns 400', async () => {
-    const { createRateLimitMiddleware } = await import(
-      '../../../src/lib/rate-limit/middleware.js'
-    );
+    const { createRateLimitMiddleware } = await import('../../../src/lib/rate-limit/middleware.js');
     const app = express();
     app.use((_req, _res, next) => {
       // Deliberately NO tenant setup — simulates upstream bug

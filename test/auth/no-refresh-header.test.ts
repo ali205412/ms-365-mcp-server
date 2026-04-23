@@ -52,7 +52,10 @@ describe('plan 03-07 Task 2 — x-microsoft-refresh-token header read removed (S
         offenders.push(path.relative(REPO_ROOT, file));
       }
     }
-    expect(offenders, `found x-microsoft-refresh-token header reads in: ${offenders.join(', ')}`).toEqual([]);
+    expect(
+      offenders,
+      `found x-microsoft-refresh-token header reads in: ${offenders.join(', ')}`
+    ).toEqual([]);
   });
 
   it('Signal B: microsoftBearerTokenAuthMiddleware is no longer exported from src/lib/microsoft-auth.ts', async () => {

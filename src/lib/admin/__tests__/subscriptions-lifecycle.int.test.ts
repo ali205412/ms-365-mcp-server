@@ -48,12 +48,13 @@ import {
   subscriptionsList,
   registerSubscriptionTools,
 } from '../subscriptions.js';
-import { decryptWithKey, encryptWithKey, generateDek, type Envelope } from '../../crypto/envelope.js';
 import {
-  GraphAuthError,
-  GraphServerError,
-  GraphError,
-} from '../../graph-errors.js';
+  decryptWithKey,
+  encryptWithKey,
+  generateDek,
+  type Envelope,
+} from '../../crypto/envelope.js';
+import { GraphAuthError, GraphServerError, GraphError } from '../../graph-errors.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, '..', '..', '..', '..', 'migrations');
@@ -146,7 +147,9 @@ interface GraphClientStub {
   makeRequest: ReturnType<typeof vi.fn>;
 }
 
-function makeGraphClientStub(handler: (endpoint: string, options: unknown) => unknown): GraphClientStub {
+function makeGraphClientStub(
+  handler: (endpoint: string, options: unknown) => unknown
+): GraphClientStub {
   return {
     makeRequest: vi.fn(async (endpoint: string, options: unknown) => handler(endpoint, options)),
   };
@@ -238,11 +241,7 @@ describe('plan 04-08 Task 2 — subscriptions renew / delete / list / registrati
     }));
     const deps = makeDeps(pool, dek, graphClient);
 
-    await subscriptionsRenew(
-      TENANT_A,
-      { graphSubscriptionId: 'graph-sub-r2' },
-      deps as never
-    );
+    await subscriptionsRenew(TENANT_A, { graphSubscriptionId: 'graph-sub-r2' }, deps as never);
 
     const { rows } = await pool.query<{ expires_at: Date }>(
       `SELECT expires_at FROM subscriptions WHERE graph_subscription_id = $1`,
@@ -326,11 +325,7 @@ describe('plan 04-08 Task 2 — subscriptions renew / delete / list / registrati
     const deps = makeDeps(pool, dek, graphClient);
 
     await expect(
-      subscriptionsRenew(
-        TENANT_A,
-        { graphSubscriptionId: 'graph-sub-r4' },
-        deps as never
-      )
+      subscriptionsRenew(TENANT_A, { graphSubscriptionId: 'graph-sub-r4' }, deps as never)
     ).rejects.toThrow(/Graph 503/);
 
     const { rows } = await pool.query(
@@ -408,11 +403,7 @@ describe('plan 04-08 Task 2 — subscriptions renew / delete / list / registrati
     const deps = makeDeps(pool, dek, graphClient);
 
     await expect(
-      subscriptionsDelete(
-        TENANT_A,
-        { graphSubscriptionId: 'graph-sub-d3' },
-        deps as never
-      )
+      subscriptionsDelete(TENANT_A, { graphSubscriptionId: 'graph-sub-d3' }, deps as never)
     ).rejects.toThrow(/Graph 503/);
 
     const { rows } = await pool.query(
@@ -620,11 +611,7 @@ describe('plan 04-08 Task 2 — subscriptions renew / delete / list / registrati
     const deps = makeDeps(pool, dek, graphClient);
 
     await expect(
-      subscriptionsRenew(
-        TENANT_A,
-        { graphSubscriptionId: 'graph-sub-r5' },
-        deps as never
-      )
+      subscriptionsRenew(TENANT_A, { graphSubscriptionId: 'graph-sub-r5' }, deps as never)
     ).rejects.toThrow(/Weird failure/);
   });
 });

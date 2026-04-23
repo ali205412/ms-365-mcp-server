@@ -87,8 +87,7 @@ export function resolveProductDispatch(
   };
 
   try {
-    const scope =
-      typeof audience.scope === 'function' ? audience.scope(audCtx) : audience.scope;
+    const scope = typeof audience.scope === 'function' ? audience.scope(audCtx) : audience.scope;
     const baseUrl =
       typeof audience.baseUrl === 'function' ? audience.baseUrl(audCtx) : audience.baseUrl;
     return {
@@ -152,7 +151,11 @@ interface GraphClientRequestable {
       params?: Record<string, unknown>;
       [key: string]: unknown;
     }
-  ) => Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean; _meta?: unknown }>;
+  ) => Promise<{
+    content: Array<{ type: 'text'; text: string }>;
+    isError?: boolean;
+    _meta?: unknown;
+  }>;
 }
 
 /**
@@ -227,10 +230,7 @@ export async function executeProductTool(
       }
     );
 
-    logger.info(
-      { product: plan.product, alias: toolAlias, tenantId },
-      'product tool dispatched'
-    );
+    logger.info({ product: plan.product, alias: toolAlias, tenantId }, 'product tool dispatched');
 
     const out: ProductCallToolResult = {
       content: response.content.map((item) => ({ type: 'text' as const, text: item.text })),

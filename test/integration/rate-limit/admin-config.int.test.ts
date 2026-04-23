@@ -135,7 +135,8 @@ async function startServer(
     createTenantsRoutes({
       pgPool: pool,
       redis,
-      tenantPool: tenantPool as unknown as import('../../../src/lib/admin/router.js').AdminRouterDeps['tenantPool'],
+      tenantPool:
+        tenantPool as unknown as import('../../../src/lib/admin/router.js').AdminRouterDeps['tenantPool'],
       kek: KEK,
       cursorSecret: createCursorSecret(),
       adminOrigins: [],

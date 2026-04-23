@@ -16,12 +16,7 @@
  */
 
 import logger from '../logger.js';
-import {
-  buildBM25Index,
-  scoreQuery,
-  tokenize,
-  type BM25Index,
-} from './bm25.js';
+import { buildBM25Index, scoreQuery, tokenize, type BM25Index } from './bm25.js';
 
 export interface DiscoverySearchIndex {
   bm25: BM25Index;

@@ -79,7 +79,12 @@ const TENANT_A = '12345678-1234-4234-8234-1234567890ab';
 async function seedTenant(pool: Pool, id = TENANT_A): Promise<void> {
   // Write a placeholder wrapped_dek envelope so loadTenant returns the row
   // (loadTenant filters WHERE disabled_at IS NULL, not on wrapped_dek state).
-  const placeholderEnvelope = { v: 1, iv: 'aaaaaaaaaaaaaaaa', tag: 'bbbbbbbbbbbbbbbbbbbbbbbb==', ct: 'cc==' };
+  const placeholderEnvelope = {
+    v: 1,
+    iv: 'aaaaaaaaaaaaaaaa',
+    tag: 'bbbbbbbbbbbbbbbbbbbbbbbb==',
+    ct: 'cc==',
+  };
   await pool.query(
     `INSERT INTO tenants (id, mode, client_id, tenant_id, cloud_type, wrapped_dek)
        VALUES ($1, 'delegated', 'cid', 'tid', 'global', $2::jsonb)`,
@@ -107,7 +112,8 @@ async function startServer(
   const app = express();
   app.use(express.json({ limit: '1mb' }) as unknown as express.RequestHandler);
   app.use((req, _res, next) => {
-    (req as express.Request & { id?: string }).id = `req-${Math.random().toString(36).slice(2, 10)}`;
+    (req as express.Request & { id?: string }).id =
+      `req-${Math.random().toString(36).slice(2, 10)}`;
     next();
   });
   const loadTenant = createLoadTenantMiddleware({ pool });
@@ -168,14 +174,11 @@ describe('plan 04-07 Task 1 — webhook validation-token echo', () => {
     const tenantPool = makeTenantPoolStub(crypto.randomBytes(32));
     const { url, close } = await startServer(pool, redis, tenantPool);
     try {
-      const res = await fetch(
-        `${url}/t/${TENANT_A}/notifications?validationToken=hello%20world`,
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: '',
-        }
-      );
+      const res = await fetch(`${url}/t/${TENANT_A}/notifications?validationToken=hello%20world`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '',
+      });
       expect(res.status).toBe(200);
       const body = await res.text();
       expect(body).toBe('hello world');

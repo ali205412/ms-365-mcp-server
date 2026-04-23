@@ -59,18 +59,15 @@ export function generateMcpTools(openApiSpec, outputDir) {
     // trailing `")` boundary markers.
     console.log('Escaping nested double-quotes in describe() argument strings...');
     let escapeCount = 0;
-    clientCode = clientCode.replace(
-      /\.describe\("((?:[^"\\]|\\.)*)"\)/g,
-      (match, inner) => {
-        // If the captured "inner" still contains an unescaped " we split
-        // across multiple describe()s — that only happens when openapi-zod-client
-        // inserted unescaped example quotes. Re-escape them.
-        if (!inner.includes('"')) return match;
-        const escaped = inner.replace(/"/g, '\\"');
-        escapeCount++;
-        return `.describe("${escaped}")`;
-      }
-    );
+    clientCode = clientCode.replace(/\.describe\("((?:[^"\\]|\\.)*)"\)/g, (match, inner) => {
+      // If the captured "inner" still contains an unescaped " we split
+      // across multiple describe()s — that only happens when openapi-zod-client
+      // inserted unescaped example quotes. Re-escape them.
+      if (!inner.includes('"')) return match;
+      const escaped = inner.replace(/"/g, '\\"');
+      escapeCount++;
+      return `.describe("${escaped}")`;
+    });
     // Line-by-line pass: walk EVERY `.describe("` occurrence on a line (not
     // just the first) and repair nested quotes. Microsoft's Graph spec
     // contains describe strings like
@@ -78,7 +75,8 @@ export function generateMcpTools(openApiSpec, outputDir) {
     // where the opening inner `"` after `example: ` ends the describe string
     // prematurely. We find the TRUE close by scanning for `")` followed by a
     // known zod-chain sentinel, and escape every `"` between open and close.
-    const chainSentinel = /"\)(?=(\.nullish\(\)|\.optional\(\)|\.default\(|\.describe\(|\.transform\(|\.nullable\(|,|\s*\}|\s*\)|$))/g;
+    const chainSentinel =
+      /"\)(?=(\.nullish\(\)|\.optional\(\)|\.default\(|\.describe\(|\.transform\(|\.nullable\(|,|\s*\}|\s*\)|$))/g;
     clientCode = clientCode
       .split('\n')
       .map((line) => {
@@ -105,7 +103,10 @@ export function generateMcpTools(openApiSpec, outputDir) {
           const inner = line.slice(contentStart, closeIdx);
           if (inner.includes('"')) {
             // Normalize: un-escape existing `\"` then re-escape every `"`.
-            const normalized = inner.replace(/\\"/g, '\0').replace(/"/g, '\\"').replace(/\0/g, '\\"');
+            const normalized = inner
+              .replace(/\\"/g, '\0')
+              .replace(/"/g, '\\"')
+              .replace(/\0/g, '\\"');
             rebuilt += normalized;
             escapeCount++;
           } else {

@@ -56,11 +56,7 @@ interface TenantSeed {
   dek: Buffer;
 }
 
-async function seedTenant(
-  pool: Pool,
-  id: string,
-  kek: Buffer
-): Promise<TenantSeed> {
+async function seedTenant(pool: Pool, id: string, kek: Buffer): Promise<TenantSeed> {
   const { dek, wrappedDek } = generateTenantDek(kek);
   await pool.query(
     `INSERT INTO tenants (id, mode, client_id, tenant_id, cloud_type, wrapped_dek)
@@ -102,7 +98,9 @@ describe('plan 03-04 Task 2 — bin/rotate-kek.mjs', () => {
       );
       const stored = r.rows[0]!.wrapped_dek;
       const env =
-        typeof stored === 'string' ? JSON.parse(stored) : (stored as Parameters<typeof unwrapTenantDek>[0]);
+        typeof stored === 'string'
+          ? JSON.parse(stored)
+          : (stored as Parameters<typeof unwrapTenantDek>[0]);
       const recovered = unwrapTenantDek(env, newKek);
       expect(recovered.equals(seed.dek)).toBe(true);
     }
@@ -144,12 +142,12 @@ describe('plan 03-04 Task 2 — bin/rotate-kek.mjs', () => {
     const badKey = Buffer.alloc(16, 0).toString('base64');
     const okKey = crypto.randomBytes(32).toString('base64');
 
-    await expect(
-      rotateKekMain([`--old=${badKey}`, `--new=${okKey}`], { pool })
-    ).rejects.toThrow(/32 bytes/);
-    await expect(
-      rotateKekMain([`--old=${okKey}`, `--new=${badKey}`], { pool })
-    ).rejects.toThrow(/32 bytes/);
+    await expect(rotateKekMain([`--old=${badKey}`, `--new=${okKey}`], { pool })).rejects.toThrow(
+      /32 bytes/
+    );
+    await expect(rotateKekMain([`--old=${okKey}`, `--new=${badKey}`], { pool })).rejects.toThrow(
+      /32 bytes/
+    );
   });
 
   it('rejects missing flags', async () => {
@@ -176,7 +174,9 @@ describe('plan 03-04 Task 2 — bin/rotate-kek.mjs', () => {
     );
     const stored = r.rows[0]!.wrapped_dek;
     const env =
-      typeof stored === 'string' ? JSON.parse(stored) : (stored as Parameters<typeof unwrapTenantDek>[0]);
+      typeof stored === 'string'
+        ? JSON.parse(stored)
+        : (stored as Parameters<typeof unwrapTenantDek>[0]);
     expect(unwrapTenantDek(env, newKek).equals(dek)).toBe(true);
   });
 });

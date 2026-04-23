@@ -139,7 +139,8 @@ async function startServer(
     createTenantsRoutes({
       pgPool: pool,
       redis,
-      tenantPool: tenantPool as unknown as import('../../src/lib/admin/router.js').AdminRouterDeps['tenantPool'],
+      tenantPool:
+        tenantPool as unknown as import('../../src/lib/admin/router.js').AdminRouterDeps['tenantPool'],
       kek: KEK,
       cursorSecret: createCursorSecret(),
       adminOrigins: [],
@@ -287,11 +288,9 @@ describe('plan 05-03 task 2 — /admin/tenants preset_version plumbing', () => {
       expect(created.status).toBe(201);
       expect(created.body.preset_version).toBe('essentials-v1');
 
-      const patched = await doJson(
-        'PATCH',
-        `${url}/admin/tenants/${created.body.id}`,
-        { preset_version: 'essentials-v2' }
-      );
+      const patched = await doJson('PATCH', `${url}/admin/tenants/${created.body.id}`, {
+        preset_version: 'essentials-v2',
+      });
       expect(patched.status).toBe(200);
       expect(patched.body.preset_version).toBe('essentials-v2');
 

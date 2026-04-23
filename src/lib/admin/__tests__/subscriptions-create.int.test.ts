@@ -115,10 +115,7 @@ interface GraphClientStub {
  * POST /subscriptions success body by default. Call sites may override the
  * mock per-test to simulate errors.
  */
-function makeGraphClientStub(options?: {
-  response?: unknown;
-  error?: Error;
-}): GraphClientStub {
+function makeGraphClientStub(options?: { response?: unknown; error?: Error }): GraphClientStub {
   const defaultResponse = {
     id: 'graph-sub-abc',
     expirationDateTime: '2026-06-01T00:00:00Z',
@@ -370,11 +367,7 @@ describe('plan 04-08 Task 1 — subscriptions-create MCP tool', () => {
     const deps = makeDeps(pool, dek, graphClient);
 
     await expect(
-      subscriptionsCreate(
-        TENANT_A,
-        { resource: '', changeType: 'created' },
-        deps as never
-      )
+      subscriptionsCreate(TENANT_A, { resource: '', changeType: 'created' }, deps as never)
     ).rejects.toThrow();
 
     expect(graphClient.makeRequest).not.toHaveBeenCalled();

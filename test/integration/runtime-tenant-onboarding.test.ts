@@ -121,12 +121,9 @@ describe('plan 03-08 — runtime tenant onboarding (SC#1)', () => {
       getDekForTenant: vi.fn(() => Buffer.alloc(32, 7)),
     };
 
-    const { createAuthorizeHandler, createTenantTokenHandler } = await import(
-      '../../src/server.js'
-    );
-    const { createLoadTenantMiddleware } = await import(
-      '../../src/lib/tenant/load-tenant.js'
-    );
+    const { createAuthorizeHandler, createTenantTokenHandler } =
+      await import('../../src/server.js');
+    const { createLoadTenantMiddleware } = await import('../../src/lib/tenant/load-tenant.js');
 
     const loadTenant = createLoadTenantMiddleware({ pool });
 

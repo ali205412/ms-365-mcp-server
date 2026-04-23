@@ -52,19 +52,17 @@ function makeRow(id: string, overrides: Partial<TenantRow> = {}): TenantRow {
 }
 
 function makeMockPool(rows: TenantRow[]): Pool {
-  const query = vi.fn(
-    async (sql: string, params: unknown[]): Promise<QueryResult<TenantRow>> => {
-      const id = params[0] as string;
-      const found = rows.find((r) => r.id === id && r.disabled_at === null);
-      return {
-        rows: found ? [found] : [],
-        rowCount: found ? 1 : 0,
-        command: 'SELECT',
-        oid: 0,
-        fields: [],
-      };
-    }
-  );
+  const query = vi.fn(async (sql: string, params: unknown[]): Promise<QueryResult<TenantRow>> => {
+    const id = params[0] as string;
+    const found = rows.find((r) => r.id === id && r.disabled_at === null);
+    return {
+      rows: found ? [found] : [],
+      rowCount: found ? 1 : 0,
+      command: 'SELECT',
+      oid: 0,
+      fields: [],
+    };
+  });
   return { query } as unknown as Pool;
 }
 
@@ -116,9 +114,7 @@ describe('plan 03-08 — loadTenant middleware', () => {
 
   describe('GUID regex guard (D-13)', () => {
     it('returns 404 tenant_not_found for non-GUID tenantId (no DB lookup attempted)', async () => {
-      const { createLoadTenantMiddleware } = await import(
-        '../../src/lib/tenant/load-tenant.js'
-      );
+      const { createLoadTenantMiddleware } = await import('../../src/lib/tenant/load-tenant.js');
       const pool = makeMockPool([]);
       const mw = createLoadTenantMiddleware({ pool });
 
@@ -132,9 +128,7 @@ describe('plan 03-08 — loadTenant middleware', () => {
     });
 
     it('returns 404 for tenantId that looks GUID-shaped but has invalid hex', async () => {
-      const { createLoadTenantMiddleware } = await import(
-        '../../src/lib/tenant/load-tenant.js'
-      );
+      const { createLoadTenantMiddleware } = await import('../../src/lib/tenant/load-tenant.js');
       const pool = makeMockPool([]);
       const mw = createLoadTenantMiddleware({ pool });
 
@@ -148,9 +142,7 @@ describe('plan 03-08 — loadTenant middleware', () => {
     });
 
     it('returns 404 for missing tenantId', async () => {
-      const { createLoadTenantMiddleware } = await import(
-        '../../src/lib/tenant/load-tenant.js'
-      );
+      const { createLoadTenantMiddleware } = await import('../../src/lib/tenant/load-tenant.js');
       const pool = makeMockPool([]);
       const mw = createLoadTenantMiddleware({ pool });
 
@@ -162,9 +154,7 @@ describe('plan 03-08 — loadTenant middleware', () => {
     });
 
     it('accepts lowercase and uppercase GUID representations', async () => {
-      const { createLoadTenantMiddleware } = await import(
-        '../../src/lib/tenant/load-tenant.js'
-      );
+      const { createLoadTenantMiddleware } = await import('../../src/lib/tenant/load-tenant.js');
       const UPPER = VALID_GUID_A.toUpperCase();
       const row = makeRow(UPPER);
       const pool = makeMockPool([row]);
@@ -180,9 +170,7 @@ describe('plan 03-08 — loadTenant middleware', () => {
 
   describe('DB lookup', () => {
     it('populates req.tenant on happy path and calls next()', async () => {
-      const { createLoadTenantMiddleware } = await import(
-        '../../src/lib/tenant/load-tenant.js'
-      );
+      const { createLoadTenantMiddleware } = await import('../../src/lib/tenant/load-tenant.js');
       const row = makeRow(VALID_GUID_A);
       const pool = makeMockPool([row]);
       const mw = createLoadTenantMiddleware({ pool });
@@ -196,9 +184,7 @@ describe('plan 03-08 — loadTenant middleware', () => {
     });
 
     it('returns 404 tenant_not_found when row does not exist', async () => {
-      const { createLoadTenantMiddleware } = await import(
-        '../../src/lib/tenant/load-tenant.js'
-      );
+      const { createLoadTenantMiddleware } = await import('../../src/lib/tenant/load-tenant.js');
       const pool = makeMockPool([]);
       const mw = createLoadTenantMiddleware({ pool });
 
@@ -212,9 +198,7 @@ describe('plan 03-08 — loadTenant middleware', () => {
     });
 
     it('returns 404 when tenant is disabled (WHERE disabled_at IS NULL filter)', async () => {
-      const { createLoadTenantMiddleware } = await import(
-        '../../src/lib/tenant/load-tenant.js'
-      );
+      const { createLoadTenantMiddleware } = await import('../../src/lib/tenant/load-tenant.js');
       const row = makeRow(VALID_GUID_A, { disabled_at: new Date() });
       const pool = makeMockPool([row]);
       const mw = createLoadTenantMiddleware({ pool });
@@ -226,9 +210,7 @@ describe('plan 03-08 — loadTenant middleware', () => {
     });
 
     it('returns 503 database_unavailable on pool failure', async () => {
-      const { createLoadTenantMiddleware } = await import(
-        '../../src/lib/tenant/load-tenant.js'
-      );
+      const { createLoadTenantMiddleware } = await import('../../src/lib/tenant/load-tenant.js');
       const pool = {
         query: vi.fn(async () => {
           throw new Error('connection refused');
@@ -246,9 +228,7 @@ describe('plan 03-08 — loadTenant middleware', () => {
 
   describe('LRU cache (1000 max / 60s TTL)', () => {
     it('second lookup with same tenantId hits cache (no second DB call)', async () => {
-      const { createLoadTenantMiddleware } = await import(
-        '../../src/lib/tenant/load-tenant.js'
-      );
+      const { createLoadTenantMiddleware } = await import('../../src/lib/tenant/load-tenant.js');
       const row = makeRow(VALID_GUID_A);
       const pool = makeMockPool([row]);
       const mw = createLoadTenantMiddleware({ pool });
@@ -264,9 +244,7 @@ describe('plan 03-08 — loadTenant middleware', () => {
     });
 
     it('different tenantIds each miss the cache', async () => {
-      const { createLoadTenantMiddleware } = await import(
-        '../../src/lib/tenant/load-tenant.js'
-      );
+      const { createLoadTenantMiddleware } = await import('../../src/lib/tenant/load-tenant.js');
       const rowA = makeRow(VALID_GUID_A);
       const rowB = makeRow(VALID_GUID_B);
       const pool = makeMockPool([rowA, rowB]);
@@ -281,9 +259,7 @@ describe('plan 03-08 — loadTenant middleware', () => {
     });
 
     it('evict(tenantId) forces next lookup to re-query DB', async () => {
-      const { createLoadTenantMiddleware } = await import(
-        '../../src/lib/tenant/load-tenant.js'
-      );
+      const { createLoadTenantMiddleware } = await import('../../src/lib/tenant/load-tenant.js');
       const row = makeRow(VALID_GUID_A);
       const pool = makeMockPool([row]);
       const mw = createLoadTenantMiddleware({ pool });
@@ -310,9 +286,8 @@ describe('plan 03-08 — tenant-invalidation pub/sub subscriber', () => {
   });
 
   it('subscribes to mcp:tenant-invalidate and evicts on message', async () => {
-    const { subscribeToTenantInvalidation } = await import(
-      '../../src/lib/tenant/tenant-invalidation.js'
-    );
+    const { subscribeToTenantInvalidation } =
+      await import('../../src/lib/tenant/tenant-invalidation.js');
     const evictMock = vi.fn();
 
     await subscribeToTenantInvalidation(redis, { evict: evictMock });
@@ -326,9 +301,8 @@ describe('plan 03-08 — tenant-invalidation pub/sub subscriber', () => {
   });
 
   it('ignores non-GUID messages (safety)', async () => {
-    const { subscribeToTenantInvalidation } = await import(
-      '../../src/lib/tenant/tenant-invalidation.js'
-    );
+    const { subscribeToTenantInvalidation } =
+      await import('../../src/lib/tenant/tenant-invalidation.js');
     const evictMock = vi.fn();
 
     await subscribeToTenantInvalidation(redis, { evict: evictMock });
@@ -340,9 +314,8 @@ describe('plan 03-08 — tenant-invalidation pub/sub subscriber', () => {
   });
 
   it('does not react to messages on other channels', async () => {
-    const { subscribeToTenantInvalidation } = await import(
-      '../../src/lib/tenant/tenant-invalidation.js'
-    );
+    const { subscribeToTenantInvalidation } =
+      await import('../../src/lib/tenant/tenant-invalidation.js');
     const evictMock = vi.fn();
 
     await subscribeToTenantInvalidation(redis, { evict: evictMock });

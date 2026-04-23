@@ -129,10 +129,7 @@ describe('plan 03-01 + 03-04 — bin/create-tenant.mjs', () => {
       deps
     );
     await expect(
-      createTenantMain(
-        [`--id=${id}`, '--client-id=c', '--tenant-id=t', '--mode=delegated'],
-        deps
-      )
+      createTenantMain([`--id=${id}`, '--client-id=c', '--tenant-id=t', '--mode=delegated'], deps)
     ).rejects.toThrow(/tenant_already_exists/);
   });
 

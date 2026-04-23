@@ -44,10 +44,7 @@ async function makePool(): Promise<Pool> {
   for (const f of files) {
     const sql = readFileSync(path.join(MIGRATIONS_DIR, f), 'utf8');
     const up = stripPgcryptoExtensionStmts(
-      (sql.split(/^--\s*Down Migration\s*$/m)[0] ?? '').replace(
-        /^--\s*Up Migration\s*$/m,
-        ''
-      )
+      (sql.split(/^--\s*Down Migration\s*$/m)[0] ?? '').replace(/^--\s*Up Migration\s*$/m, '')
     );
     await pool.query(up);
   }
@@ -77,11 +74,7 @@ function withTransactionFactory(pool: Pool) {
   };
 }
 
-function makeTenantRow(
-  id: string,
-  kek: Buffer,
-  overrides: Partial<TenantRow> = {}
-): TenantRow {
+function makeTenantRow(id: string, kek: Buffer, overrides: Partial<TenantRow> = {}): TenantRow {
   const { wrappedDek } = generateTenantDek(kek);
   return {
     id,
@@ -147,17 +140,13 @@ describe('plan 03-05 Task 3 — bin/disable-tenant.mjs cascade (SC#4, TENANT-07)
     expect(result.pkceKeysDeleted).toBe(1);
 
     // DB assertions
-    const tRows = await pool.query(
-      `SELECT wrapped_dek, disabled_at FROM tenants WHERE id = $1`,
-      [id]
-    );
+    const tRows = await pool.query(`SELECT wrapped_dek, disabled_at FROM tenants WHERE id = $1`, [
+      id,
+    ]);
     expect(tRows.rows[0].wrapped_dek).toBeNull();
     expect(tRows.rows[0].disabled_at).not.toBeNull();
 
-    const kRows = await pool.query(
-      `SELECT revoked_at FROM api_keys WHERE tenant_id = $1`,
-      [id]
-    );
+    const kRows = await pool.query(`SELECT revoked_at FROM api_keys WHERE tenant_id = $1`, [id]);
     expect(kRows.rows[0].revoked_at).not.toBeNull();
 
     // Redis cleanup

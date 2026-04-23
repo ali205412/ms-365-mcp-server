@@ -44,7 +44,8 @@ describe('Plan 03-10 — PKCE Redis handoff (SC#6)', () => {
     // lingers in A that would help a take on B).
     // @ts-expect-error — intentional null for the simulation
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const _forgottenA = (() => null)(); void replicaA;
+    const _forgottenA = (() => null)();
+    void replicaA;
 
     // Replica B reads the SAME shared Redis facade.
     const taken = await replicaB.takeByChallenge(TENANT_ID, challenge);

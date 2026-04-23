@@ -186,10 +186,7 @@ describe('plan 06-06 — two-tenant token isolation (TENANT-04, TENANT-06, SC#4)
   });
 
   it('cross-tenant lookup — tenant A key read under tenant B prefix returns null', async () => {
-    await redis.set(
-      `mcp:cache:${TENANT_A_ID}:cidA:oid1:sh1`,
-      JSON.stringify({ ciphertext: 'A' })
-    );
+    await redis.set(`mcp:cache:${TENANT_A_ID}:cidA:oid1:sh1`, JSON.stringify({ ciphertext: 'A' }));
 
     // Attempt to read tenant A's cache using tenant B's prefix — must miss.
     const crossLookup = await redis.get(`mcp:cache:${TENANT_B_ID}:cidA:oid1:sh1`);

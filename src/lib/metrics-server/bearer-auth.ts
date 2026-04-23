@@ -32,9 +32,7 @@ import type { Request, Response, NextFunction, RequestHandler } from 'express';
  * @returns Express RequestHandler that either short-circuits with 401 or
  *   invokes `next()`.
  */
-export function createBearerAuthMiddleware(
-  bearerToken: string | null | undefined
-): RequestHandler {
+export function createBearerAuthMiddleware(bearerToken: string | null | undefined): RequestHandler {
   const gateActive = typeof bearerToken === 'string' && bearerToken.length > 0;
 
   return (req: Request, res: Response, next: NextFunction): void => {

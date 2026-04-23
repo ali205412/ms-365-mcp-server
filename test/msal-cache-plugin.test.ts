@@ -93,10 +93,7 @@ describe('plan 03-05 Task 1 — msal-cache-plugin', () => {
     await pluginB.afterCacheAccess(ctxB as never);
 
     const keys = await redis.keys('mcp:cache:*');
-    expect(keys.sort()).toEqual([
-      'mcp:cache:T-A:c:user-1:abc123',
-      'mcp:cache:T-B:c:user-1:abc123',
-    ]);
+    expect(keys.sort()).toEqual(['mcp:cache:T-A:c:user-1:abc123', 'mcp:cache:T-B:c:user-1:abc123']);
   });
 
   it('cross-user key distinctness within the same tenant', async () => {
@@ -122,10 +119,7 @@ describe('plan 03-05 Task 1 — msal-cache-plugin', () => {
     await pB.afterCacheAccess(makeCtx({ hasChanged: true }) as never);
 
     const keys = await redis.keys('mcp:cache:T:*');
-    expect(keys.sort()).toEqual([
-      'mcp:cache:T:c:userA:hash',
-      'mcp:cache:T:c:userB:hash',
-    ]);
+    expect(keys.sort()).toEqual(['mcp:cache:T:c:userA:hash', 'mcp:cache:T:c:userB:hash']);
   });
 
   it('app-only userOid literal is used verbatim in the key', async () => {
@@ -223,12 +217,7 @@ describe('plan 03-05 Task 1 — msal-cache-plugin', () => {
       tag: Buffer.alloc(16, 0).toString('base64'),
       ct: Buffer.alloc(32, 0).toString('base64'),
     };
-    await redis.set(
-      'mcp:cache:T:c:u:sh',
-      JSON.stringify(corruptEnvelope),
-      'EX',
-      3600
-    );
+    await redis.set('mcp:cache:T:c:u:sh', JSON.stringify(corruptEnvelope), 'EX', 3600);
 
     const ctx = makeCtx({ hasChanged: false });
     await expect(plugin.beforeCacheAccess(ctx as never)).resolves.toBeUndefined();

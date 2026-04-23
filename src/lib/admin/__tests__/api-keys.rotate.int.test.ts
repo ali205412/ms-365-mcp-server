@@ -53,7 +53,7 @@ vi.mock('../../postgres.js', async () => {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (client as any).query = async (sqlOrCfg: any, params?: any) => {
             const sqlText =
-              typeof sqlOrCfg === 'string' ? sqlOrCfg : sqlOrCfg?.text ?? String(sqlOrCfg);
+              typeof sqlOrCfg === 'string' ? sqlOrCfg : (sqlOrCfg?.text ?? String(sqlOrCfg));
             if (!sawUpdate && /UPDATE api_keys SET revoked_at/i.test(sqlText)) {
               sawUpdate = true;
               return origQuery(sqlOrCfg, params);
@@ -82,10 +82,7 @@ vi.mock('../../postgres.js', async () => {
   };
 });
 
-import {
-  createApiKeyRoutes,
-  __resetApiKeyCacheForTesting,
-} from '../api-keys.js';
+import { createApiKeyRoutes, __resetApiKeyCacheForTesting } from '../api-keys.js';
 import { MemoryRedisFacade } from '../../redis-facade.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -142,7 +139,8 @@ async function startServer(
   app.use(express.json() as unknown as express.RequestHandler);
   app.use((req, _res, next) => {
     (req as unknown as { admin?: AdminContext }).admin = admin;
-    (req as express.Request & { id?: string }).id = `req-${Math.random().toString(36).slice(2, 10)}`;
+    (req as express.Request & { id?: string }).id =
+      `req-${Math.random().toString(36).slice(2, 10)}`;
     next();
   });
   app.use('/admin/api-keys', createApiKeyRoutes({ pgPool: pool, redis }));
@@ -243,9 +241,7 @@ describe('plan 04-03 Task 2 — /admin/api-keys/:id/rotate', () => {
       );
       expect(auditRows.length).toBe(1);
       const meta =
-        typeof auditRows[0].meta === 'string'
-          ? JSON.parse(auditRows[0].meta)
-          : auditRows[0].meta;
+        typeof auditRows[0].meta === 'string' ? JSON.parse(auditRows[0].meta) : auditRows[0].meta;
       expect(meta.oldKeyId).toBe(oldId);
       expect(meta.newKeyId).toBe(rotate.body.new.id);
       expect(meta.displaySuffixes.old).toBe(oldDisplaySuffix);
@@ -293,10 +289,9 @@ describe('plan 04-03 Task 2 — /admin/api-keys/:id/rotate', () => {
       expect(auditRows.length).toBe(0);
 
       // And no new api_keys row beyond the original
-      const { rows: keyRows } = await pool.query(
-        `SELECT id FROM api_keys WHERE tenant_id = $1`,
-        [TENANT_A]
-      );
+      const { rows: keyRows } = await pool.query(`SELECT id FROM api_keys WHERE tenant_id = $1`, [
+        TENANT_A,
+      ]);
       expect(keyRows.length).toBe(1);
       expect(keyRows[0].id).toBe(oldId);
     } finally {

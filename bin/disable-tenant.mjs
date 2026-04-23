@@ -150,18 +150,14 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       await redis.connect().catch(() => {});
     }
     if (redis.status !== 'ready' && redis.status !== 'wait') {
-      throw new Error(
-        `Redis not ready (status=${redis.status}); retry disable (Pitfall 6)`
-      );
+      throw new Error(`Redis not ready (status=${redis.status}); retry disable (Pitfall 6)`);
     }
   }
 
   const pool = pgMod.getPool();
 
   // Pre-check existence so the error message is nicer than "0 rows affected".
-  const { rows: pre } = await pool.query('SELECT id FROM tenants WHERE id = $1', [
-    tenantId,
-  ]);
+  const { rows: pre } = await pool.query('SELECT id FROM tenants WHERE id = $1', [tenantId]);
   if (pre.length === 0) {
     throw new Error(`tenant_not_found: ${tenantId}`);
   }

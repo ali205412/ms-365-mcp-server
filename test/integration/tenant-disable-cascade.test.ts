@@ -137,10 +137,7 @@ describe('Plan 03-10 — tenant disable cascade (SC#4)', () => {
     const app = express();
     app.use(express.urlencoded({ extended: true }));
     app.use('/t/:tenantId', loadTenant);
-    app.get(
-      '/t/:tenantId/authorize',
-      createAuthorizeHandler({ pkceStore, pgPool: pool })
-    );
+    app.get('/t/:tenantId/authorize', createAuthorizeHandler({ pkceStore, pgPool: pool }));
 
     await new Promise<void>((resolve) => {
       server = http.createServer(app).listen(0, () => {

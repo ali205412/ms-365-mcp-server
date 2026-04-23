@@ -77,15 +77,9 @@ describe('plan 05-03 task 1 — compileEssentialsPreset', () => {
     const extras = Array.from({ length: 10 }, (_, i) => `extra-${i}`);
     const registry = [...realPreset.ops, ...extras];
     fs.writeFileSync(path.join(tmp, 'generated', 'client.ts'), makeFakeClient(registry));
-    fs.writeFileSync(
-      path.join(tmp, 'presets', 'essentials-v1.json'),
-      JSON.stringify(realPreset)
-    );
+    fs.writeFileSync(path.join(tmp, 'presets', 'essentials-v1.json'), JSON.stringify(realPreset));
 
-    const result = compileEssentialsPreset(
-      path.join(tmp, 'generated'),
-      path.join(tmp, 'presets')
-    );
+    const result = compileEssentialsPreset(path.join(tmp, 'generated'), path.join(tmp, 'presets'));
 
     expect(result.count).toBe(150);
 
@@ -107,10 +101,7 @@ describe('plan 05-03 task 1 — compileEssentialsPreset', () => {
     const dropped = realPreset.ops[0];
     const registry = realPreset.ops.filter((op) => op !== dropped);
     fs.writeFileSync(path.join(tmp, 'generated', 'client.ts'), makeFakeClient(registry));
-    fs.writeFileSync(
-      path.join(tmp, 'presets', 'essentials-v1.json'),
-      JSON.stringify(realPreset)
-    );
+    fs.writeFileSync(path.join(tmp, 'presets', 'essentials-v1.json'), JSON.stringify(realPreset));
 
     expect(() =>
       compileEssentialsPreset(path.join(tmp, 'generated'), path.join(tmp, 'presets'))
@@ -144,10 +135,7 @@ describe('plan 05-03 task 1 — compileEssentialsPreset', () => {
   });
 
   it('throws when generated/client.ts is missing (dev invariant)', () => {
-    fs.writeFileSync(
-      path.join(tmp, 'presets', 'essentials-v1.json'),
-      JSON.stringify(realPreset)
-    );
+    fs.writeFileSync(path.join(tmp, 'presets', 'essentials-v1.json'), JSON.stringify(realPreset));
 
     expect(() =>
       compileEssentialsPreset(path.join(tmp, 'generated'), path.join(tmp, 'presets'))
@@ -155,10 +143,7 @@ describe('plan 05-03 task 1 — compileEssentialsPreset', () => {
   });
 
   it('throws when essentials-v1.json is missing', () => {
-    fs.writeFileSync(
-      path.join(tmp, 'generated', 'client.ts'),
-      makeFakeClient(realPreset.ops)
-    );
+    fs.writeFileSync(path.join(tmp, 'generated', 'client.ts'), makeFakeClient(realPreset.ops));
 
     expect(() =>
       compileEssentialsPreset(path.join(tmp, 'generated'), path.join(tmp, 'presets'))
@@ -168,10 +153,7 @@ describe('plan 05-03 task 1 — compileEssentialsPreset', () => {
   it('Test 7: emits TS whose ESSENTIALS_V1_OPS Set is Object.isFrozen at runtime', async () => {
     const registry = realPreset.ops;
     fs.writeFileSync(path.join(tmp, 'generated', 'client.ts'), makeFakeClient(registry));
-    fs.writeFileSync(
-      path.join(tmp, 'presets', 'essentials-v1.json'),
-      JSON.stringify(realPreset)
-    );
+    fs.writeFileSync(path.join(tmp, 'presets', 'essentials-v1.json'), JSON.stringify(realPreset));
 
     compileEssentialsPreset(path.join(tmp, 'generated'), path.join(tmp, 'presets'));
 

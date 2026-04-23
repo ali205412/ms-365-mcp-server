@@ -192,9 +192,7 @@ describe('plan 05.1-03 — Power Apps generator (Task 1 + 2)', () => {
   }, 60_000);
 
   it('Test 5: permissive churn — removal without env throws', async () => {
-    const { runProductChurnGuard } = await import(
-      '../../bin/modules/run-product-pipeline.mjs'
-    );
+    const { runProductChurnGuard } = await import('../../bin/modules/run-product-pipeline.mjs');
     const snapshotPath = path.join(tmpDir, 'bin', '.last-pwrapps-snapshot.json');
     fs.writeFileSync(
       snapshotPath,
@@ -224,9 +222,7 @@ describe('plan 05.1-03 — Power Apps generator (Task 1 + 2)', () => {
   });
 
   it('Test 6: permissive churn — removal WITH env passes and rewrites snapshot', async () => {
-    const { runProductChurnGuard } = await import(
-      '../../bin/modules/run-product-pipeline.mjs'
-    );
+    const { runProductChurnGuard } = await import('../../bin/modules/run-product-pipeline.mjs');
     const snapshotPath = path.join(tmpDir, 'bin', '.last-pwrapps-snapshot.json');
     fs.writeFileSync(
       snapshotPath,
@@ -257,9 +253,7 @@ describe('plan 05.1-03 — Power Apps generator (Task 1 + 2)', () => {
   });
 
   it('Test 7: permissive churn — additions without env pass (silent)', async () => {
-    const { runProductChurnGuard } = await import(
-      '../../bin/modules/run-product-pipeline.mjs'
-    );
+    const { runProductChurnGuard } = await import('../../bin/modules/run-product-pipeline.mjs');
     const snapshotPath = path.join(tmpDir, 'bin', '.last-pwrapps-snapshot.json');
     fs.writeFileSync(
       snapshotPath,
@@ -290,9 +284,7 @@ describe('plan 05.1-03 — Power Apps generator (Task 1 + 2)', () => {
   });
 
   it('Test 8: fresh-checkout — absent snapshot file creates initial snapshot', async () => {
-    const { runProductChurnGuard } = await import(
-      '../../bin/modules/run-product-pipeline.mjs'
-    );
+    const { runProductChurnGuard } = await import('../../bin/modules/run-product-pipeline.mjs');
     const snapshotPath = path.join(tmpDir, 'bin', '.last-pwrapps-snapshot.json');
     if (fs.existsSync(snapshotPath)) fs.unlinkSync(snapshotPath);
     vi.stubEnv('MS365_MCP_ACCEPT_PWRAPPS_CHURN', '0');
@@ -388,9 +380,7 @@ describe('plan 05.1-03 — Power Apps generator (Task 1 + 2)', () => {
     }));
 
     const { runPowerAppsPipeline } = await import('../../bin/modules/power-apps.mjs');
-    const { runProductPipeline } = await import(
-      '../../bin/modules/run-product-pipeline.mjs'
-    );
+    const { runProductPipeline } = await import('../../bin/modules/run-product-pipeline.mjs');
 
     const openapiDir = '/test/openapi';
     const generatedDir = '/test/src/generated';
@@ -401,9 +391,7 @@ describe('plan 05.1-03 — Power Apps generator (Task 1 + 2)', () => {
     expect(runProductPipeline).toHaveBeenCalledTimes(1);
     const actualOpts = runProductPipeline.mock.calls[0][0];
     expect(actualOpts.specPath).toBe(path.join(openapiDir, 'openapi-pwrapps.yaml'));
-    expect(actualOpts.snapshotPath).toBe(
-      path.join(rootDir, 'bin', '.last-pwrapps-snapshot.json')
-    );
+    expect(actualOpts.snapshotPath).toBe(path.join(rootDir, 'bin', '.last-pwrapps-snapshot.json'));
   });
 
   it('Test 13: runPowerAppsPipeline passes specUrl: null to runProductPipeline', async () => {
@@ -414,9 +402,7 @@ describe('plan 05.1-03 — Power Apps generator (Task 1 + 2)', () => {
     }));
 
     const { runPowerAppsPipeline } = await import('../../bin/modules/power-apps.mjs');
-    const { runProductPipeline } = await import(
-      '../../bin/modules/run-product-pipeline.mjs'
-    );
+    const { runProductPipeline } = await import('../../bin/modules/run-product-pipeline.mjs');
 
     await runPowerAppsPipeline({
       openapiDir: '/test/openapi',
@@ -439,9 +425,7 @@ describe('plan 05.1-03 — Power Apps generator (Task 1 + 2)', () => {
     }));
 
     const { runPowerAppsPipeline } = await import('../../bin/modules/power-apps.mjs');
-    const { runProductPipeline } = await import(
-      '../../bin/modules/run-product-pipeline.mjs'
-    );
+    const { runProductPipeline } = await import('../../bin/modules/run-product-pipeline.mjs');
 
     await runPowerAppsPipeline({
       openapiDir: '/test/openapi',

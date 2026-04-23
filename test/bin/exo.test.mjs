@@ -71,12 +71,7 @@ const EXO_FIXTURE = path.resolve(__dirname, 'fixtures', 'mini-exo.yaml');
 // Walk up two levels from test/bin/ to the project root.
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 const REAL_EXO_SPEC = path.join(PROJECT_ROOT, 'openapi', 'openapi-exo.yaml');
-const REAL_GAP_FILE = path.join(
-  PROJECT_ROOT,
-  '.planning',
-  'research',
-  'GAP-EXCHANGE-ADMIN.md'
-);
+const REAL_GAP_FILE = path.join(PROJECT_ROOT, '.planning', 'research', 'GAP-EXCHANGE-ADMIN.md');
 
 function makeTmpDir() {
   const dir = path.join(os.tmpdir(), `plan-05.1-05-exo-${crypto.randomUUID()}`);
@@ -323,9 +318,7 @@ describe('plan 05.1-05 — Exchange Admin REST v2 generator (Task 1 + 2)', () =>
     const doc = yaml.load(raw);
     expect(Array.isArray(doc.servers)).toBe(true);
     expect(doc.servers.length).toBeGreaterThanOrEqual(1);
-    expect(doc.servers[0].url).toBe(
-      'https://outlook.office365.com/adminapi/beta/{tenantId}'
-    );
+    expect(doc.servers[0].url).toBe('https://outlook.office365.com/adminapi/beta/{tenantId}');
     const tenantIdVar = doc.servers[0].variables?.tenantId;
     expect(tenantIdVar).toBeDefined();
     // Documentation must reference the Zod UUID shape that plan 5.1-06 will
@@ -361,9 +354,7 @@ describe('plan 05.1-05 — Exchange Admin REST v2 generator (Task 1 + 2)', () =>
   });
 
   it('Test 12: fresh-checkout — absent snapshot file creates initial snapshot', async () => {
-    const { runProductChurnGuard } = await import(
-      '../../bin/modules/run-product-pipeline.mjs'
-    );
+    const { runProductChurnGuard } = await import('../../bin/modules/run-product-pipeline.mjs');
     const snapshotPath = path.join(tmpDir, 'bin', '.last-exo-snapshot.json');
     if (fs.existsSync(snapshotPath)) fs.unlinkSync(snapshotPath);
     vi.stubEnv('MS365_MCP_ACCEPT_EXO_CHURN', '0');
@@ -371,12 +362,7 @@ describe('plan 05.1-05 — Exchange Admin REST v2 generator (Task 1 + 2)', () =>
     // Fresh checkout: no snapshot on disk. Strict policy still creates the
     // initial snapshot without throwing — first runs are always safe.
     expect(() =>
-      runProductChurnGuard(
-        ['__exo__alpha'],
-        snapshotPath,
-        'strict',
-        'MS365_MCP_ACCEPT_EXO_CHURN'
-      )
+      runProductChurnGuard(['__exo__alpha'], snapshotPath, 'strict', 'MS365_MCP_ACCEPT_EXO_CHURN')
     ).not.toThrow();
     expect(fs.existsSync(snapshotPath)).toBe(true);
     const snap = JSON.parse(fs.readFileSync(snapshotPath, 'utf-8'));
@@ -386,9 +372,7 @@ describe('plan 05.1-05 — Exchange Admin REST v2 generator (Task 1 + 2)', () =>
   // ─── Strict churn matrix (Tests 13-17) ─────────────────────────────────────
 
   it('Test 13: strict churn — addition without env throws', async () => {
-    const { runProductChurnGuard } = await import(
-      '../../bin/modules/run-product-pipeline.mjs'
-    );
+    const { runProductChurnGuard } = await import('../../bin/modules/run-product-pipeline.mjs');
     const snapshotPath = path.join(tmpDir, 'bin', '.last-exo-snapshot.json');
     fs.writeFileSync(
       snapshotPath,
@@ -420,9 +404,7 @@ describe('plan 05.1-05 — Exchange Admin REST v2 generator (Task 1 + 2)', () =>
   });
 
   it('Test 14: strict churn — addition with env=1 passes and rewrites snapshot', async () => {
-    const { runProductChurnGuard } = await import(
-      '../../bin/modules/run-product-pipeline.mjs'
-    );
+    const { runProductChurnGuard } = await import('../../bin/modules/run-product-pipeline.mjs');
     const snapshotPath = path.join(tmpDir, 'bin', '.last-exo-snapshot.json');
     fs.writeFileSync(
       snapshotPath,
@@ -453,9 +435,7 @@ describe('plan 05.1-05 — Exchange Admin REST v2 generator (Task 1 + 2)', () =>
   });
 
   it('Test 15: strict churn — removal without env throws', async () => {
-    const { runProductChurnGuard } = await import(
-      '../../bin/modules/run-product-pipeline.mjs'
-    );
+    const { runProductChurnGuard } = await import('../../bin/modules/run-product-pipeline.mjs');
     const snapshotPath = path.join(tmpDir, 'bin', '.last-exo-snapshot.json');
     fs.writeFileSync(
       snapshotPath,
@@ -472,12 +452,7 @@ describe('plan 05.1-05 — Exchange Admin REST v2 generator (Task 1 + 2)', () =>
     vi.stubEnv('MS365_MCP_ACCEPT_EXO_CHURN', '0');
 
     expect(() =>
-      runProductChurnGuard(
-        ['__exo__a'],
-        snapshotPath,
-        'strict',
-        'MS365_MCP_ACCEPT_EXO_CHURN'
-      )
+      runProductChurnGuard(['__exo__a'], snapshotPath, 'strict', 'MS365_MCP_ACCEPT_EXO_CHURN')
     ).toThrow(/strict/i);
 
     // Snapshot MUST NOT be rewritten on throw.
@@ -486,9 +461,7 @@ describe('plan 05.1-05 — Exchange Admin REST v2 generator (Task 1 + 2)', () =>
   });
 
   it('Test 16: strict churn — removal with env=1 passes and rewrites snapshot', async () => {
-    const { runProductChurnGuard } = await import(
-      '../../bin/modules/run-product-pipeline.mjs'
-    );
+    const { runProductChurnGuard } = await import('../../bin/modules/run-product-pipeline.mjs');
     const snapshotPath = path.join(tmpDir, 'bin', '.last-exo-snapshot.json');
     fs.writeFileSync(
       snapshotPath,
@@ -505,12 +478,7 @@ describe('plan 05.1-05 — Exchange Admin REST v2 generator (Task 1 + 2)', () =>
     vi.stubEnv('MS365_MCP_ACCEPT_EXO_CHURN', '1');
 
     expect(() =>
-      runProductChurnGuard(
-        ['__exo__a'],
-        snapshotPath,
-        'strict',
-        'MS365_MCP_ACCEPT_EXO_CHURN'
-      )
+      runProductChurnGuard(['__exo__a'], snapshotPath, 'strict', 'MS365_MCP_ACCEPT_EXO_CHURN')
     ).not.toThrow();
 
     const snap = JSON.parse(fs.readFileSync(snapshotPath, 'utf-8'));
@@ -519,9 +487,7 @@ describe('plan 05.1-05 — Exchange Admin REST v2 generator (Task 1 + 2)', () =>
   });
 
   it('Test 17: strict churn — no-change passes without env', async () => {
-    const { runProductChurnGuard } = await import(
-      '../../bin/modules/run-product-pipeline.mjs'
-    );
+    const { runProductChurnGuard } = await import('../../bin/modules/run-product-pipeline.mjs');
     const snapshotPath = path.join(tmpDir, 'bin', '.last-exo-snapshot.json');
     fs.writeFileSync(
       snapshotPath,
@@ -569,9 +535,7 @@ describe('plan 05.1-05 — Exchange Admin REST v2 generator (Task 1 + 2)', () =>
     expect(runProductPipeline).toHaveBeenCalledTimes(1);
     const actualOpts = runProductPipeline.mock.calls[0][0];
     expect(actualOpts.specPath).toBe(path.join(openapiDir, 'openapi-exo.yaml'));
-    expect(actualOpts.snapshotPath).toBe(
-      path.join(rootDir, 'bin', '.last-exo-snapshot.json')
-    );
+    expect(actualOpts.snapshotPath).toBe(path.join(rootDir, 'bin', '.last-exo-snapshot.json'));
   });
 
   it('Test 19: runExoAdminPipeline passes specUrl: null to runProductPipeline', async () => {

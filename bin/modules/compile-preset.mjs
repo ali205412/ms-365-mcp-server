@@ -180,7 +180,8 @@ function loadAndValidatePreset(spec, presetJsonPath, registry) {
   if (missing.length > 0) {
     const previewCount = Math.min(10, missing.length);
     const preview = missing.slice(0, previewCount).join(', ');
-    const tail = missing.length > previewCount ? ` (and ${missing.length - previewCount} more)` : '';
+    const tail =
+      missing.length > previewCount ? ` (and ${missing.length - previewCount} more)` : '';
     // T-05-06 / T-5.1-04 mitigation: a preset op that cannot be resolved
     // against the fresh registry is almost always a typo or a stale alias.
     // Failing codegen loudly is cheaper than shipping a preset whose
@@ -207,9 +208,7 @@ function loadAndValidatePreset(spec, presetJsonPath, registry) {
  * @returns {Set<string>}
  */
 function extractRegistry(clientTsContent) {
-  return new Set(
-    [...clientTsContent.matchAll(/alias:\s*["']([^"']+)["']/g)].map((m) => m[1])
-  );
+  return new Set([...clientTsContent.matchAll(/alias:\s*["']([^"']+)["']/g)].map((m) => m[1]));
 }
 
 /**

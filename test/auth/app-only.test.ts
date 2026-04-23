@@ -88,9 +88,7 @@ async function startApp(
     evict: vi.fn(),
   };
 
-  const { createAuthSelectorMiddleware } = await import(
-    '../../src/lib/auth-selector.js'
-  );
+  const { createAuthSelectorMiddleware } = await import('../../src/lib/auth-selector.js');
 
   const app = express();
   app.use(express.json());

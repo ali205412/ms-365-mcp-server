@@ -20,11 +20,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import crypto from 'node:crypto';
 import { MemoryRedisFacade } from '../../src/lib/redis-facade.js';
-import {
-  SessionStore,
-  hashAccessToken,
-  type SessionRecord,
-} from '../../src/lib/session-store.js';
+import { SessionStore, hashAccessToken, type SessionRecord } from '../../src/lib/session-store.js';
 import type { Envelope } from '../../src/lib/crypto/envelope.js';
 
 vi.mock('../../src/logger.js', () => ({

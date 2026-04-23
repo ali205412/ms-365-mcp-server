@@ -364,18 +364,16 @@ describe('plan 05-07 Task 2 — enabled-tools RBAC', () => {
         source: 'api-key',
         tenantScoped: tenantB_id,
       });
-      const resScoped = await doPatch(
-        `${server.url}/admin/tenants/${tenantB_id}/enabled-tools`,
-        { add: ['users.list'] }
-      );
+      const resScoped = await doPatch(`${server.url}/admin/tenants/${tenantB_id}/enabled-tools`, {
+        add: ['users.list'],
+      });
       expect(resScoped.status).toBe(200);
 
       // Global admin PATCH (different enabled-tools change)
       server.setAdmin({ actor: 'global@example.com', source: 'entra', tenantScoped: null });
-      const resGlobal = await doPatch(
-        `${server.url}/admin/tenants/${tenantB_id}/enabled-tools`,
-        { add: ['mail.messages.send'] }
-      );
+      const resGlobal = await doPatch(`${server.url}/admin/tenants/${tenantB_id}/enabled-tools`, {
+        add: ['mail.messages.send'],
+      });
       expect(resGlobal.status).toBe(200);
 
       // Both audit rows captured with the correct actor

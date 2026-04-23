@@ -44,10 +44,7 @@ function escapeNestedDescribeQuotes(source) {
         const closeIdx = m.index;
         const inner = line.slice(contentStart, closeIdx);
         if (inner.includes('"')) {
-          const normalized = inner
-            .replace(/\\"/g, '\0')
-            .replace(/"/g, '\\"')
-            .replace(/\0/g, '\\"');
+          const normalized = inner.replace(/\\"/g, '\0').replace(/"/g, '\\"').replace(/\0/g, '\\"');
           out += normalized;
           escapeCount++;
         } else {
@@ -106,7 +103,8 @@ function fixMultiParamFunctionPaths(source) {
       // Multi-field inline pattern: path AND following field on same line.
       // Also matches end-of-line pattern where path is on its own line and
       // ends with a trailing `,` (next zodios field is on the next line).
-      const fieldSep = /,\s*(method|alias|requestFormat|parameters|response|errors|description)\s*:|,\s*$/g;
+      const fieldSep =
+        /,\s*(method|alias|requestFormat|parameters|response|errors|description)\s*:|,\s*$/g;
       fieldSep.lastIndex = openIdx + 1;
       const m = fieldSep.exec(line);
       if (!m) return line;
@@ -119,11 +117,7 @@ function fixMultiParamFunctionPaths(source) {
       const clean = rawBody.replace(/`/g, '');
       count++;
       return (
-        line.slice(0, openIdx) +
-        '`' +
-        clean +
-        '`' +
-        line.slice(sepIdx) // keep the `, method: ...` continuation intact
+        line.slice(0, openIdx) + '`' + clean + '`' + line.slice(sepIdx) // keep the `, method: ...` continuation intact
       );
     })
     .join('\n');

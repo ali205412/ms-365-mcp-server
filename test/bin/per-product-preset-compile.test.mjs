@@ -20,10 +20,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import {
-  compileEssentialsPreset,
-  getPresetSpecs,
-} from '../../bin/modules/compile-preset.mjs';
+import { compileEssentialsPreset, getPresetSpecs } from '../../bin/modules/compile-preset.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..');
 const REAL_PRESETS_DIR = path.join(REPO_ROOT, 'src', 'presets');
@@ -119,10 +116,7 @@ describe('plan 05.1-07 — compile-preset 6-preset pipeline', () => {
       copyPreset(tmp, f);
     }
 
-    const result = compileEssentialsPreset(
-      path.join(tmp, 'generated'),
-      path.join(tmp, 'presets')
-    );
+    const result = compileEssentialsPreset(path.join(tmp, 'generated'), path.join(tmp, 'presets'));
 
     expect(result.count).toBe(150);
     const out = fs.readFileSync(path.join(tmp, 'presets', 'generated-index.ts'), 'utf-8');
@@ -159,17 +153,11 @@ describe('plan 05.1-07 — compile-preset 6-preset pipeline', () => {
 
   it('per-product presets absent from the directory are silently skipped', () => {
     const essentials = loadPresetJson('essentials-v1.json');
-    fs.writeFileSync(
-      path.join(tmp, 'generated', 'client.ts'),
-      makeFakeClient(essentials.ops)
-    );
+    fs.writeFileSync(path.join(tmp, 'generated', 'client.ts'), makeFakeClient(essentials.ops));
     copyPreset(tmp, 'essentials-v1.json');
     // Do NOT copy the 5 per-product files.
 
-    const result = compileEssentialsPreset(
-      path.join(tmp, 'generated'),
-      path.join(tmp, 'presets')
-    );
+    const result = compileEssentialsPreset(path.join(tmp, 'generated'), path.join(tmp, 'presets'));
     expect(result.count).toBe(150);
 
     const out = fs.readFileSync(path.join(tmp, 'presets', 'generated-index.ts'), 'utf-8');
@@ -190,7 +178,11 @@ describe('plan 05.1-07 — compile-preset 6-preset pipeline', () => {
     };
     fs.writeFileSync(
       path.join(tmp, 'generated', 'client.ts'),
-      makeFakeClient([...essentials.ops, 'Admin_GetActivityEvents', '__powerbi__Apps_GetAppsAsAdmin'])
+      makeFakeClient([
+        ...essentials.ops,
+        'Admin_GetActivityEvents',
+        '__powerbi__Apps_GetAppsAsAdmin',
+      ])
     );
     copyPreset(tmp, 'essentials-v1.json');
     fs.writeFileSync(
@@ -208,10 +200,7 @@ describe('plan 05.1-07 — compile-preset 6-preset pipeline', () => {
     const powerbi = loadPresetJson('powerbi-essentials.json');
     // Drop one Power BI op from the registry to force a miss.
     const dropped = powerbi.ops[0];
-    const registry = [
-      ...essentials.ops,
-      ...powerbi.ops.filter((op) => op !== dropped),
-    ];
+    const registry = [...essentials.ops, ...powerbi.ops.filter((op) => op !== dropped)];
     fs.writeFileSync(path.join(tmp, 'generated', 'client.ts'), makeFakeClient(registry));
     copyPreset(tmp, 'essentials-v1.json');
     copyPreset(tmp, 'powerbi-essentials.json');
@@ -234,10 +223,7 @@ describe('plan 05.1-07 — compile-preset 6-preset pipeline', () => {
       makeFakeClient([...essentials.ops, '__exo__get-mailbox'])
     );
     copyPreset(tmp, 'essentials-v1.json');
-    fs.writeFileSync(
-      path.join(tmp, 'presets', 'exo-essentials.json'),
-      JSON.stringify(brokenExo)
-    );
+    fs.writeFileSync(path.join(tmp, 'presets', 'exo-essentials.json'), JSON.stringify(brokenExo));
 
     expect(() =>
       compileEssentialsPreset(path.join(tmp, 'generated'), path.join(tmp, 'presets'))
@@ -252,15 +238,9 @@ describe('plan 05.1-07 — compile-preset 6-preset pipeline', () => {
       prefix: '__pwrapps__',
       ops: [],
     };
-    fs.writeFileSync(
-      path.join(tmp, 'generated', 'client.ts'),
-      makeFakeClient(essentials.ops)
-    );
+    fs.writeFileSync(path.join(tmp, 'generated', 'client.ts'), makeFakeClient(essentials.ops));
     copyPreset(tmp, 'essentials-v1.json');
-    fs.writeFileSync(
-      path.join(tmp, 'presets', 'pwrapps-essentials.json'),
-      JSON.stringify(empty)
-    );
+    fs.writeFileSync(path.join(tmp, 'presets', 'pwrapps-essentials.json'), JSON.stringify(empty));
 
     expect(() =>
       compileEssentialsPreset(path.join(tmp, 'generated'), path.join(tmp, 'presets'))
@@ -313,9 +293,7 @@ describe('plan 05.1-07 — compile-preset 6-preset pipeline', () => {
 
     // Extract the POWERBI_ESSENTIALS_OPS Set literal body and confirm it is
     // emitted in lex-sorted order.
-    const match = out.match(
-      /POWERBI_ESSENTIALS_OPS[\s\S]*?new Set<string>\(\[([\s\S]*?)\]\)\)/
-    );
+    const match = out.match(/POWERBI_ESSENTIALS_OPS[\s\S]*?new Set<string>\(\[([\s\S]*?)\]\)\)/);
     expect(match).not.toBeNull();
     const body = match[1];
     const emittedOps = [...body.matchAll(/"([^"]+)"/g)].map((m) => m[1]);

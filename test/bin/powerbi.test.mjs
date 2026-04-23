@@ -174,8 +174,8 @@ describe('plan 05.1-02 — Power BI generator (Task 1 + 2)', () => {
     // The openapi-zod-client generator lowercases the first character of
     // operationIds (Wave 1 pipeline's regex anchor is `[a-z]`), so the alias
     // appears as `__powerbi__workspacesGetDatasetsInGroupAsAdmin` (48 chars).
-    const safeShortAlias = result.aliases.find(
-      (a) => a.toLowerCase().includes('workspacesgetdatasetsingroupasadmin')
+    const safeShortAlias = result.aliases.find((a) =>
+      a.toLowerCase().includes('workspacesgetdatasetsingroupasadmin')
     );
     expect(safeShortAlias).toBeDefined();
     // Verbatim: prefix (11) + operationId (37 for lowercase variant) = 48 chars.
@@ -211,9 +211,7 @@ describe('plan 05.1-02 — Power BI generator (Task 1 + 2)', () => {
   }, 60_000);
 
   it('Test 5: permissive churn — removal without env throws', async () => {
-    const { runProductChurnGuard } = await import(
-      '../../bin/modules/run-product-pipeline.mjs'
-    );
+    const { runProductChurnGuard } = await import('../../bin/modules/run-product-pipeline.mjs');
     const snapshotPath = path.join(tmpDir, 'bin', '.last-powerbi-snapshot.json');
     fs.writeFileSync(
       snapshotPath,
@@ -243,9 +241,7 @@ describe('plan 05.1-02 — Power BI generator (Task 1 + 2)', () => {
   });
 
   it('Test 6: permissive churn — removal WITH env passes and rewrites snapshot', async () => {
-    const { runProductChurnGuard } = await import(
-      '../../bin/modules/run-product-pipeline.mjs'
-    );
+    const { runProductChurnGuard } = await import('../../bin/modules/run-product-pipeline.mjs');
     const snapshotPath = path.join(tmpDir, 'bin', '.last-powerbi-snapshot.json');
     fs.writeFileSync(
       snapshotPath,
@@ -276,9 +272,7 @@ describe('plan 05.1-02 — Power BI generator (Task 1 + 2)', () => {
   });
 
   it('Test 7: permissive churn — additions without env pass (additions silent)', async () => {
-    const { runProductChurnGuard } = await import(
-      '../../bin/modules/run-product-pipeline.mjs'
-    );
+    const { runProductChurnGuard } = await import('../../bin/modules/run-product-pipeline.mjs');
     const snapshotPath = path.join(tmpDir, 'bin', '.last-powerbi-snapshot.json');
     fs.writeFileSync(
       snapshotPath,
@@ -309,9 +303,7 @@ describe('plan 05.1-02 — Power BI generator (Task 1 + 2)', () => {
   });
 
   it('Test 8: fresh-checkout creates initial snapshot regardless of policy', async () => {
-    const { runProductChurnGuard } = await import(
-      '../../bin/modules/run-product-pipeline.mjs'
-    );
+    const { runProductChurnGuard } = await import('../../bin/modules/run-product-pipeline.mjs');
     const snapshotPath = path.join(tmpDir, 'bin', '.last-powerbi-snapshot.json');
     if (fs.existsSync(snapshotPath)) fs.unlinkSync(snapshotPath);
     vi.stubEnv('MS365_MCP_ACCEPT_POWERBI_CHURN', '0');
@@ -378,9 +370,7 @@ describe('plan 05.1-02 — Power BI generator (Task 1 + 2)', () => {
     }));
 
     const { runPowerBIPipeline } = await import('../../bin/modules/power-bi.mjs');
-    const { runProductPipeline } = await import(
-      '../../bin/modules/run-product-pipeline.mjs'
-    );
+    const { runProductPipeline } = await import('../../bin/modules/run-product-pipeline.mjs');
 
     const openapiDir = '/test/openapi';
     const generatedDir = '/test/src/generated';
@@ -391,9 +381,7 @@ describe('plan 05.1-02 — Power BI generator (Task 1 + 2)', () => {
     expect(runProductPipeline).toHaveBeenCalledTimes(1);
     const actualOpts = runProductPipeline.mock.calls[0][0];
     expect(actualOpts.specPath).toBe(path.join(openapiDir, 'openapi-powerbi.yaml'));
-    expect(actualOpts.snapshotPath).toBe(
-      path.join(rootDir, 'bin', '.last-powerbi-snapshot.json')
-    );
+    expect(actualOpts.snapshotPath).toBe(path.join(rootDir, 'bin', '.last-powerbi-snapshot.json'));
   });
 
   it('Test 12: runPowerBIPipeline delegates with the expected deps bag', async () => {
@@ -403,12 +391,8 @@ describe('plan 05.1-02 — Power BI generator (Task 1 + 2)', () => {
       runProductChurnGuard: vi.fn(),
     }));
 
-    const { runPowerBIPipeline, POWERBI_SPEC_URL } = await import(
-      '../../bin/modules/power-bi.mjs'
-    );
-    const { runProductPipeline } = await import(
-      '../../bin/modules/run-product-pipeline.mjs'
-    );
+    const { runPowerBIPipeline, POWERBI_SPEC_URL } = await import('../../bin/modules/power-bi.mjs');
+    const { runProductPipeline } = await import('../../bin/modules/run-product-pipeline.mjs');
 
     await runPowerBIPipeline({
       openapiDir: '/test/openapi',

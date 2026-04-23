@@ -13,11 +13,7 @@ import type { Pool } from 'pg';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  createTenantFixture,
-  cleanupTenantFixture,
-  makeTenantId,
-} from '../setup/fixtures.js';
+import { createTenantFixture, cleanupTenantFixture, makeTenantId } from '../setup/fixtures.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, '..', '..', 'migrations');
@@ -77,9 +73,7 @@ describe('plan 03-01 — tenant onboarding (Wave 1)', () => {
   it('supports multiple concurrent fixtures without collision', async () => {
     const ids = [makeTenantId(), makeTenantId(), makeTenantId()];
     await Promise.all(ids.map((id) => createTenantFixture(pool, { id })));
-    const r = await pool.query<{ id: string }>(
-      `SELECT id FROM tenants ORDER BY id`
-    );
+    const r = await pool.query<{ id: string }>(`SELECT id FROM tenants ORDER BY id`);
     const found = new Set(r.rows.map((row) => row.id));
     for (const id of ids) {
       expect(found.has(id)).toBe(true);

@@ -312,10 +312,7 @@ function parseNotifications(
  * overloads when combining EX + NX; we cast via `unknown` (same pattern as
  * RedisPkceStore) so the facade + real ioredis both accept the call shape.
  */
-async function setDedupKeyFirstWins(
-  redis: RedisClient,
-  dedupKey: string
-): Promise<boolean> {
+async function setDedupKeyFirstWins(redis: RedisClient, dedupKey: string): Promise<boolean> {
   const result = await (
     redis as unknown as {
       set: (
@@ -397,10 +394,7 @@ export function createWebhookHandler(deps: WebhookDeps): RequestHandler {
     // Resolve DEK for decrypting subscription client_state envelopes.
     const dek = resolveTenantDek(tenant, deps);
     if (!dek) {
-      logger.warn(
-        { tenantId: tenant.id, requestId },
-        'webhook: tenant DEK unavailable'
-      );
+      logger.warn({ tenantId: tenant.id, requestId }, 'webhook: tenant DEK unavailable');
       res.status(503).json({ error: 'tenant_dek_unavailable' });
       return;
     }

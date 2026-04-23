@@ -32,30 +32,32 @@ v2 is a clean break from v1's single-user CLI model. Same project, new runtime: 
 
 ## What's new in v2
 
-| Capability | v1 | v2 |
-|---|---|---|
-| **Deployment** | `npx` per user | Docker Compose with Postgres + Redis |
-| **Tenancy** | One user per process | Many tenants per gateway, onboarded at runtime |
-| **Identity** | Device code + BYOT | Delegated OAuth + app-only client-credentials + bearer pass-through + device code, all concurrent, per-tenant isolated |
-| **Token storage** | OS keychain / file (plaintext) | AES-GCM encrypted in Postgres with KEK rotation |
-| **Admin surface** | None | REST API dual-secured by Entra OAuth (group check) OR rotatable API keys |
-| **Rate limiting** | None | Per-tenant sliding-window Redis limiter (request count + Graph point budget) |
-| **Observability** | Winston file logs | OTel traces via OTLP/HTTP + Prometheus `/metrics` on port 9464 |
-| **Graph coverage** | ~200 tools | Full v1.0 + curated beta (5,000+ ops) with per-tenant enablement |
-| **Transports** | stdio OR HTTP (mutually exclusive) | stdio + Streamable HTTP + legacy HTTP+SSE concurrently |
-| **Tool surface control** | `--enabled-tools` regex / `--preset` | Per-tenant enabled-tools stored in Postgres + ~150-op "essentials" preset |
+| Capability               | v1                                   | v2                                                                                                                     |
+| ------------------------ | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| **Deployment**           | `npx` per user                       | Docker Compose with Postgres + Redis                                                                                   |
+| **Tenancy**              | One user per process                 | Many tenants per gateway, onboarded at runtime                                                                         |
+| **Identity**             | Device code + BYOT                   | Delegated OAuth + app-only client-credentials + bearer pass-through + device code, all concurrent, per-tenant isolated |
+| **Token storage**        | OS keychain / file (plaintext)       | AES-GCM encrypted in Postgres with KEK rotation                                                                        |
+| **Admin surface**        | None                                 | REST API dual-secured by Entra OAuth (group check) OR rotatable API keys                                               |
+| **Rate limiting**        | None                                 | Per-tenant sliding-window Redis limiter (request count + Graph point budget)                                           |
+| **Observability**        | Winston file logs                    | OTel traces via OTLP/HTTP + Prometheus `/metrics` on port 9464                                                         |
+| **Graph coverage**       | ~200 tools                           | Full v1.0 + curated beta (5,000+ ops) with per-tenant enablement                                                       |
+| **Transports**           | stdio OR HTTP (mutually exclusive)   | stdio + Streamable HTTP + legacy HTTP+SSE concurrently                                                                 |
+| **Tool surface control** | `--enabled-tools` regex / `--preset` | Per-tenant enabled-tools stored in Postgres + ~150-op "essentials" preset                                              |
 
 ---
 
 ## When to use v2 vs v1
 
 **Use v2 if you:**
+
 - Run MCP as infrastructure for multiple users or tenants
 - Need audit trails, rate limits, and observability
 - Want a single deployment that serves Claude Desktop, Claude Code, Cursor, Continue, and bespoke integrations
 - Need production-grade token security (encrypted at rest, per-tenant isolation)
 
 **Use v1 (single-user CLI) if you:**
+
 - Just want to hook one personal or work account into Claude Desktop
 - Don't need Docker / Postgres / Redis
 - Are happy with OS keychain token storage
@@ -78,14 +80,14 @@ docker compose up -d
 
 Once up, the gateway exposes:
 
-| Endpoint | Purpose |
-|---|---|
-| `/mcp` (Streamable HTTP) | Primary MCP transport for modern clients |
-| `/sse` + `/messages` | Legacy MCP transport (Claude Desktop < 0.8) |
-| `/admin/tenants` | Tenant CRUD (dual-secured) |
-| `/admin/api-keys` | API-key rotation (dual-secured) |
-| `/metrics` (port 9464) | Prometheus scrape target (optionally Bearer-gated) |
-| `/health` | Liveness + readiness |
+| Endpoint                 | Purpose                                            |
+| ------------------------ | -------------------------------------------------- |
+| `/mcp` (Streamable HTTP) | Primary MCP transport for modern clients           |
+| `/sse` + `/messages`     | Legacy MCP transport (Claude Desktop < 0.8)        |
+| `/admin/tenants`         | Tenant CRUD (dual-secured)                         |
+| `/admin/api-keys`        | API-key rotation (dual-secured)                    |
+| `/metrics` (port 9464)   | Prometheus scrape target (optionally Bearer-gated) |
+| `/health`                | Liveness + readiness                               |
 
 Full deployment guide with reverse-proxy (Caddy / nginx / Traefik) SSE buffering directives, TLS termination, and production hardening: **[docs/deployment.md](docs/deployment.md)** and **[docs/observability/](docs/observability/)**.
 
@@ -157,12 +159,12 @@ Detailed architecture: **[CLAUDE.md](CLAUDE.md)** (codebase conventions) and **[
 
 All four flows run concurrently and are correctly isolated per tenant. The gateway picks the right one per incoming request.
 
-| Flow | Who uses it | How the gateway receives credentials |
-|---|---|---|
-| **Delegated OAuth 2.1 + PKCE** | End-users authenticating through a modern MCP client | Client redirects through `/authorize` → `/token`; server stores refresh token AES-GCM-encrypted in Postgres |
-| **App-only client credentials** | Daemons / background automation | Tenant registration supplies client secret or cert; gateway caches the access token per tenant |
-| **Bearer pass-through** | Systems that already hold a Graph token | `Authorization: Bearer <token>` on `/mcp` request; gateway validates `tid` claim matches the URL tenant |
-| **Device code** | Interactive CLI / stdio mode | `npx @softeria/ms-365-mcp-server --login` |
+| Flow                            | Who uses it                                          | How the gateway receives credentials                                                                        |
+| ------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| **Delegated OAuth 2.1 + PKCE**  | End-users authenticating through a modern MCP client | Client redirects through `/authorize` → `/token`; server stores refresh token AES-GCM-encrypted in Postgres |
+| **App-only client credentials** | Daemons / background automation                      | Tenant registration supplies client secret or cert; gateway caches the access token per tenant              |
+| **Bearer pass-through**         | Systems that already hold a Graph token              | `Authorization: Bearer <token>` on `/mcp` request; gateway validates `tid` claim matches the URL tenant     |
+| **Device code**                 | Interactive CLI / stdio mode                         | `npx @softeria/ms-365-mcp-server --login`                                                                   |
 
 Per-tenant isolation is the security foundation: token cache, PKCE state, rate-limit counters, and audit log are all keyed by `tenantId`. Cross-tenant leak is a P0 bug, not a feature.
 
@@ -187,6 +189,7 @@ curl -X POST https://gateway.example.com/admin/tenants \
 ```
 
 The Admin API is **dual-secured**:
+
 - **Entra OAuth** (admin app registration + group membership check) for humans via the admin portal
 - **Rotatable API keys** for automation (`Authorization: Bearer mcpk_...`)
 
@@ -228,15 +231,15 @@ Every Graph request emits a span with `{tenant.id, tool.name, tool.alias, http.s
 
 Scrape `/metrics` on port 9464 (configurable via `MS365_MCP_METRICS_PORT`):
 
-| Metric | Type | Labels |
-|---|---|---|
-| `mcp_tool_calls_total` | Counter | `tenant`, `tool` (workload prefix), `status` |
-| `mcp_tool_duration_seconds` | Histogram | `tenant`, `tool` |
-| `mcp_graph_throttled_total` | Counter | `tenant` |
-| `mcp_rate_limit_blocked_total` | Counter | `tenant`, `reason` |
-| `mcp_oauth_pkce_store_size` | Gauge | — |
-| `mcp_token_cache_hit_ratio` | Gauge | `tenant` |
-| `mcp_active_streams` | Gauge | `tenant` |
+| Metric                         | Type      | Labels                                       |
+| ------------------------------ | --------- | -------------------------------------------- |
+| `mcp_tool_calls_total`         | Counter   | `tenant`, `tool` (workload prefix), `status` |
+| `mcp_tool_duration_seconds`    | Histogram | `tenant`, `tool`                             |
+| `mcp_graph_throttled_total`    | Counter   | `tenant`                                     |
+| `mcp_rate_limit_blocked_total` | Counter   | `tenant`, `reason`                           |
+| `mcp_oauth_pkce_store_size`    | Gauge     | —                                            |
+| `mcp_token_cache_hit_ratio`    | Gauge     | `tenant`                                     |
+| `mcp_active_streams`           | Gauge     | `tenant`                                     |
 
 Label cardinality is bounded: the `tool` label is the **workload prefix** (~40 values), not the full alias (~14k values). Full aliases appear as span attributes only.
 
@@ -255,10 +258,10 @@ A starter Grafana dashboard (5 panels: request rate, p50/p95/p99 latency, 429 ra
 
 ## Supported clouds
 
-| Cloud | Description | Auth endpoint | Graph endpoint |
-|---|---|---|---|
-| **Global** (default) | Worldwide Microsoft 365 | `login.microsoftonline.com` | `graph.microsoft.com` |
-| **China** (21Vianet) | Microsoft 365 operated by 21Vianet | `login.chinacloudapi.cn` | `microsoftgraph.chinacloudapi.cn` |
+| Cloud                | Description                        | Auth endpoint               | Graph endpoint                    |
+| -------------------- | ---------------------------------- | --------------------------- | --------------------------------- |
+| **Global** (default) | Worldwide Microsoft 365            | `login.microsoftonline.com` | `graph.microsoft.com`             |
+| **China** (21Vianet) | Microsoft 365 operated by 21Vianet | `login.chinacloudapi.cn`    | `microsoftgraph.chinacloudapi.cn` |
 
 Set via `--cloud china` or `MS365_MCP_CLOUD_TYPE=china`. Per-tenant cloud override is supported via the admin API.
 

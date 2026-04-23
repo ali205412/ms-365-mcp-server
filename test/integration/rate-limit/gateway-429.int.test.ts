@@ -71,15 +71,12 @@ describe('plan 06-04 Task 3 — gateway 429 roundtrip (OPS-08)', () => {
     redis = new (Redis as unknown as new () => import('ioredis').Redis)();
     pool = await makePool();
 
-    const { registerSlidingWindow, __resetRegisteredForTesting } = await import(
-      '../../../src/lib/rate-limit/sliding-window.js'
-    );
+    const { registerSlidingWindow, __resetRegisteredForTesting } =
+      await import('../../../src/lib/rate-limit/sliding-window.js');
     __resetRegisteredForTesting();
     registerSlidingWindow(redis);
 
-    const { createRateLimitMiddleware } = await import(
-      '../../../src/lib/rate-limit/middleware.js'
-    );
+    const { createRateLimitMiddleware } = await import('../../../src/lib/rate-limit/middleware.js');
 
     // Seed two tenants with different budgets. Use minimal schema columns —
     // pg-mem accepts any columns the migration defined; we only need id +
@@ -102,9 +99,7 @@ describe('plan 06-04 Task 3 — gateway 429 roundtrip (OPS-08)', () => {
     // Simulate loadTenant — read the row directly and attach to req.tenant.
     app.use('/t/:tenantId/mcp', async (req, _res, next) => {
       const tid = req.params.tenantId;
-      const { rows } = await pool.query('SELECT id, rate_limits FROM tenants WHERE id = $1', [
-        tid,
-      ]);
+      const { rows } = await pool.query('SELECT id, rate_limits FROM tenants WHERE id = $1', [tid]);
       if (rows.length === 0) {
         next();
         return;

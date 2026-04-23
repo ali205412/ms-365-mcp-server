@@ -42,8 +42,7 @@ function makeTenant(id: string, overrides: Partial<TenantRow> = {}): TenantRow {
     client_secret_resolved: overrides.client_secret_resolved ?? 'resolved-secret',
     tenant_id: overrides.tenant_id ?? id,
     cloud_type: overrides.cloud_type ?? 'global',
-    redirect_uri_allowlist:
-      overrides.redirect_uri_allowlist ?? ['http://localhost:3000/callback'],
+    redirect_uri_allowlist: overrides.redirect_uri_allowlist ?? ['http://localhost:3000/callback'],
     cors_origins: overrides.cors_origins ?? [],
     allowed_scopes: overrides.allowed_scopes ?? ['User.Read'],
     enabled_tools: overrides.enabled_tools ?? null,
@@ -83,12 +82,8 @@ async function buildHarness(): Promise<{
   };
 
   // Dynamic imports keep vi.mock('../../src/logger.js') effective.
-  const { createAuthorizeHandler, createTenantTokenHandler } = await import(
-    '../../src/server.js'
-  );
-  const { createLoadTenantMiddleware } = await import(
-    '../../src/lib/tenant/load-tenant.js'
-  );
+  const { createAuthorizeHandler, createTenantTokenHandler } = await import('../../src/server.js');
+  const { createLoadTenantMiddleware } = await import('../../src/lib/tenant/load-tenant.js');
   const { createPerTenantCorsMiddleware } = await import('../../src/lib/cors.js');
 
   // Inline mock pool that resolves from the in-memory map.
@@ -112,10 +107,13 @@ async function buildHarness(): Promise<{
   // Per-tenant CORS — requires loadTenant to have populated req.tenant first.
   // Fall back to global allowlist when tenant.cors_origins is empty.
   app.use('/t/:tenantId', loadTenant);
-  app.use('/t/:tenantId', createPerTenantCorsMiddleware({
-    mode: 'prod',
-    fallbackAllowlist: ['https://fallback.example.com'],
-  }));
+  app.use(
+    '/t/:tenantId',
+    createPerTenantCorsMiddleware({
+      mode: 'prod',
+      fallbackAllowlist: ['https://fallback.example.com'],
+    })
+  );
 
   app.get('/t/:tenantId/authorize', createAuthorizeHandler({ pkceStore }));
   app.post(
@@ -268,9 +266,7 @@ describe('plan 03-08 — /t/:tenantId/* routing', () => {
         },
       });
       expect(res.status).toBe(204);
-      expect(res.headers.get('access-control-allow-origin')).toBe(
-        'https://app-a.example.com'
-      );
+      expect(res.headers.get('access-control-allow-origin')).toBe('https://app-a.example.com');
     });
 
     it('rejects tenant A origin when requesting tenant B path (isolation)', async () => {
@@ -291,9 +287,8 @@ describe('plan 03-08 — /t/:tenantId/* routing', () => {
       // Our per-tenant CORS middleware falls back to fallbackAllowlist when empty.
       // The loadTenant LRU could be stale; evict first to pick up the change.
       // In real production admin mutations publish to mcp:tenant-invalidate.
-      const { createLoadTenantMiddleware: _reload } = await import(
-        '../../src/lib/tenant/load-tenant.js'
-      );
+      const { createLoadTenantMiddleware: _reload } =
+        await import('../../src/lib/tenant/load-tenant.js');
       // Re-build harness is simpler.
       await harness.close();
       // Replacement: build a harness where tenant A has empty cors_origins.
@@ -303,9 +298,7 @@ describe('plan 03-08 — /t/:tenantId/* routing', () => {
         [TENANT_A, makeTenant(TENANT_A, { cors_origins: [] })],
       ]);
       const { createAuthorizeHandler } = await import('../../src/server.js');
-      const { createLoadTenantMiddleware } = await import(
-        '../../src/lib/tenant/load-tenant.js'
-      );
+      const { createLoadTenantMiddleware } = await import('../../src/lib/tenant/load-tenant.js');
       const { createPerTenantCorsMiddleware } = await import('../../src/lib/cors.js');
       const pool = {
         query: vi.fn(async (_sql: string, params: unknown[]) => ({
@@ -341,9 +334,7 @@ describe('plan 03-08 — /t/:tenantId/* routing', () => {
         },
       });
       expect(res.status).toBe(204);
-      expect(res.headers.get('access-control-allow-origin')).toBe(
-        'https://fallback.example.com'
-      );
+      expect(res.headers.get('access-control-allow-origin')).toBe('https://fallback.example.com');
 
       // Not in global fallback either:
       const resBad = await fetch(`${baseUrl2}/t/${TENANT_A}/authorize`, {

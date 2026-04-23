@@ -120,7 +120,8 @@ async function startServer(
   app.use(express.json() as unknown as express.RequestHandler);
   app.use((req, _res, next) => {
     (req as unknown as { admin?: AdminContext }).admin = admin;
-    (req as express.Request & { id?: string }).id = `req-${Math.random().toString(36).slice(2, 10)}`;
+    (req as express.Request & { id?: string }).id =
+      `req-${Math.random().toString(36).slice(2, 10)}`;
     next();
   });
   app.use('/admin/api-keys', createApiKeyRoutes({ pgPool: pool, redis }));

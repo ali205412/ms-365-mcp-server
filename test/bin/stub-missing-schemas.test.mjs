@@ -40,17 +40,9 @@ function makeClientWith({ consts = [], refs = [] }) {
   const constLines = consts
     .map((n) => `const ${n}: z.ZodTypeAny = z.object({}).passthrough();`)
     .join('\n');
-  const refLines = refs
-    .map((n, i) => `const __consumer_${i} = z.array(${n});`)
-    .join('\n');
+  const refLines = refs.map((n, i) => `const __consumer_${i} = z.array(${n});`).join('\n');
   return (
-    HEADER +
-    '\n' +
-    constLines +
-    '\n\n' +
-    refLines +
-    '\n\n' +
-    'const endpoints = makeApi([]);\n'
+    HEADER + '\n' + constLines + '\n\n' + refLines + '\n\n' + 'const endpoints = makeApi([]);\n'
   );
 }
 
@@ -77,17 +69,12 @@ describe('stubMissingSchemas', () => {
 
     expect(result.stubbed).toEqual(['microsoft_graph_accessReview']);
     const patched = fs.readFileSync(clientPath, 'utf-8');
-    expect(patched).toContain(
-      'const microsoft_graph_accessReview: z.ZodTypeAny = z.any();'
-    );
+    expect(patched).toContain('const microsoft_graph_accessReview: z.ZodTypeAny = z.any();');
   });
 
   it('injects stubs after `import { z } from "zod"` so forward refs resolve', () => {
     const clientPath = path.join(tmpDir, 'client.ts');
-    fs.writeFileSync(
-      clientPath,
-      makeClientWith({ consts: [], refs: ['microsoft_graph_missing'] })
-    );
+    fs.writeFileSync(clientPath, makeClientWith({ consts: [], refs: ['microsoft_graph_missing'] }));
 
     stubMissingSchemas(clientPath);
 
@@ -153,7 +140,7 @@ describe('stubMissingSchemas', () => {
     const clientPath = path.join(tmpDir, 'client.ts');
     const source =
       HEADER +
-      "\nlet microsoft_graph_cycle: z.ZodTypeAny;\n" +
+      '\nlet microsoft_graph_cycle: z.ZodTypeAny;\n' +
       'microsoft_graph_cycle = z.lazy(() => z.object({}).passthrough());\n' +
       'const __consumer_0 = z.array(microsoft_graph_cycle);\n' +
       'const endpoints = makeApi([]);\n';

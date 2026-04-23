@@ -22,10 +22,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import crypto from 'node:crypto';
-import {
-  ConfidentialClientApplication,
-  PublicClientApplication,
-} from '@azure/msal-node';
+import { ConfidentialClientApplication, PublicClientApplication } from '@azure/msal-node';
 import { MemoryRedisFacade } from '../../src/lib/redis-facade.js';
 import { generateTenantDek } from '../../src/lib/crypto/dek.js';
 import type { TenantRow } from '../../src/lib/tenant/tenant-row.js';
@@ -134,9 +131,7 @@ describe('plan 03-05 Task 2 — TenantPool', () => {
   it('missing wrapped_dek throws with a clear message', async () => {
     const { TenantPool } = await import('../../src/lib/tenant/tenant-pool.js');
     const pool = new TenantPool(new MemoryRedisFacade(), KEK);
-    await expect(
-      pool.acquire(makeTenantRow({ wrapped_dek: null }))
-    ).rejects.toThrow(/wrapped_dek/);
+    await expect(pool.acquire(makeTenantRow({ wrapped_dek: null }))).rejects.toThrow(/wrapped_dek/);
     await pool.drain();
   });
 

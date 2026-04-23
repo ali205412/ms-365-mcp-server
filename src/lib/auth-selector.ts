@@ -64,11 +64,9 @@ function isAppOnlyClient(client: unknown): client is AppOnlyClient {
 
 const DEFAULT_APP_ONLY_SCOPE = 'https://graph.microsoft.com/.default';
 
-export function createAuthSelectorMiddleware(deps: AuthSelectorDeps): (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => Promise<void> {
+export function createAuthSelectorMiddleware(
+  deps: AuthSelectorDeps
+): (req: Request, res: Response, next: NextFunction) => Promise<void> {
   const bearer = createBearerMiddleware();
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {

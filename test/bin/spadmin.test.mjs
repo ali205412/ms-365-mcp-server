@@ -156,9 +156,7 @@ describe('plan 05.1-06 task 1 — SharePoint Tenant Admin generator', () => {
   }, 60_000);
 
   it('Test 3: strict churn — addition without env throws', async () => {
-    const { runProductChurnGuard } = await import(
-      '../../bin/modules/run-product-pipeline.mjs'
-    );
+    const { runProductChurnGuard } = await import('../../bin/modules/run-product-pipeline.mjs');
     const snapshotPath = path.join(tmpDir, 'bin', '.last-spadmin-snapshot.json');
     fs.writeFileSync(
       snapshotPath,
@@ -190,9 +188,7 @@ describe('plan 05.1-06 task 1 — SharePoint Tenant Admin generator', () => {
   });
 
   it('Test 4: strict churn — addition with env=1 passes and rewrites snapshot', async () => {
-    const { runProductChurnGuard } = await import(
-      '../../bin/modules/run-product-pipeline.mjs'
-    );
+    const { runProductChurnGuard } = await import('../../bin/modules/run-product-pipeline.mjs');
     const snapshotPath = path.join(tmpDir, 'bin', '.last-spadmin-snapshot.json');
     fs.writeFileSync(
       snapshotPath,
@@ -223,9 +219,7 @@ describe('plan 05.1-06 task 1 — SharePoint Tenant Admin generator', () => {
   });
 
   it('Test 5: fresh-checkout — absent snapshot creates initial snapshot under strict policy', async () => {
-    const { runProductChurnGuard } = await import(
-      '../../bin/modules/run-product-pipeline.mjs'
-    );
+    const { runProductChurnGuard } = await import('../../bin/modules/run-product-pipeline.mjs');
     const snapshotPath = path.join(tmpDir, 'bin', '.last-spadmin-snapshot.json');
     if (fs.existsSync(snapshotPath)) fs.unlinkSync(snapshotPath);
     vi.stubEnv('MS365_MCP_ACCEPT_SPADMIN_CHURN', '0');

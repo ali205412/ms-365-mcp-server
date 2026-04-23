@@ -124,7 +124,8 @@ async function startServer(
   app.use(express.json() as unknown as express.RequestHandler);
   app.use((req, _res, next) => {
     (req as unknown as { admin?: AdminContext }).admin = admin;
-    (req as express.Request & { id?: string }).id = `req-${Math.random().toString(36).slice(2, 10)}`;
+    (req as express.Request & { id?: string }).id =
+      `req-${Math.random().toString(36).slice(2, 10)}`;
     next();
   });
   app.use('/admin/api-keys', createApiKeyRoutes({ pgPool: pool, redis }));
@@ -204,10 +205,7 @@ describe('plan 04-03 Task 2 — /admin/api-keys/:id/revoke', () => {
       expect(typeof rev.body.revoked_at).toBe('string');
 
       // DB state
-      const { rows } = await pool.query(
-        `SELECT revoked_at FROM api_keys WHERE id = $1`,
-        [keyId]
-      );
+      const { rows } = await pool.query(`SELECT revoked_at FROM api_keys WHERE id = $1`, [keyId]);
       expect(rows[0].revoked_at).not.toBeNull();
 
       // Audit row written
@@ -216,9 +214,7 @@ describe('plan 04-03 Task 2 — /admin/api-keys/:id/revoke', () => {
       );
       expect(auditRows.length).toBe(1);
       const meta =
-        typeof auditRows[0].meta === 'string'
-          ? JSON.parse(auditRows[0].meta)
-          : auditRows[0].meta;
+        typeof auditRows[0].meta === 'string' ? JSON.parse(auditRows[0].meta) : auditRows[0].meta;
       expect(meta.keyId).toBe(keyId);
       expect(meta.tenantId).toBe(TENANT_A);
 
@@ -314,10 +310,7 @@ describe('plan 04-03 Task 2 — /admin/api-keys/:id/revoke', () => {
       expect(res.body.type).toContain('/forbidden');
 
       // DB confirms no revoked_at was set
-      const { rows } = await pool.query(
-        `SELECT revoked_at FROM api_keys WHERE id = $1`,
-        [keyId]
-      );
+      const { rows } = await pool.query(`SELECT revoked_at FROM api_keys WHERE id = $1`, [keyId]);
       expect(rows[0].revoked_at).toBeNull();
     } finally {
       await scoped.close();

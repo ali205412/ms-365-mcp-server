@@ -29,8 +29,7 @@ import logger from '../../logger.js';
 import type { RedisClient } from '../redis.js';
 
 /** Match the regex in load-tenant.ts — guard against log injection / spoofs. */
-const TENANT_GUID_REGEX =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const TENANT_GUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const TENANT_INVALIDATE_CHANNEL = 'mcp:tenant-invalidate';
 

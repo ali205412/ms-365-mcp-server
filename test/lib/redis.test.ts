@@ -19,12 +19,7 @@ vi.mock('ioredis', async () => {
   return { default: mod.default };
 });
 
-import {
-  getRedis,
-  shutdown,
-  readinessCheck,
-  __setRedisForTesting,
-} from '../../src/lib/redis.js';
+import { getRedis, shutdown, readinessCheck, __setRedisForTesting } from '../../src/lib/redis.js';
 import { MemoryRedisFacade } from '../../src/lib/redis-facade.js';
 
 describe('plan 03-02 — src/lib/redis', () => {

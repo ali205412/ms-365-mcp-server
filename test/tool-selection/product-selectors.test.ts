@@ -74,9 +74,8 @@ describe('plan 05.1-08 Task 1 — product-aware selector validation', () => {
 
   describe('V1: getWorkloadPrefixes() auto-expansion', () => {
     it('V1: returns a Set containing the 5 product prefixes + existing Graph workloads', async () => {
-      const { getWorkloadPrefixes } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
+      const { getWorkloadPrefixes } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
       const prefixes = getWorkloadPrefixes();
       // All 5 products present (derived from __<product>__ aliases)
       expect(prefixes.has('powerbi')).toBe(true);
@@ -95,17 +94,15 @@ describe('plan 05.1-08 Task 1 — product-aware selector validation', () => {
 
   describe('V2-V3: product workload selectors', () => {
     it('V2: validateSelectors([powerbi:*]) returns {ok: true}', async () => {
-      const { validateSelectors } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
+      const { validateSelectors } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
       const r = validateSelectors(['powerbi:*']);
       expect(r.ok).toBe(true);
     });
 
     it('V3: all 4 other product workload selectors valid', async () => {
-      const { validateSelectors } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
+      const { validateSelectors } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
       const r = validateSelectors(['pwrapps:*', 'pwrauto:*', 'exo:*', 'sp-admin:*']);
       expect(r.ok).toBe(true);
     });
@@ -113,9 +110,8 @@ describe('plan 05.1-08 Task 1 — product-aware selector validation', () => {
 
   describe('V4: Levenshtein suggestions for typo product prefix', () => {
     it('V4: validateSelectors([powerbj:*]) returns {ok: false} with powerbi suggestion', async () => {
-      const { validateSelectors } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
+      const { validateSelectors } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
       const r = validateSelectors(['powerbj:*']);
       expect(r.ok).toBe(false);
       if (r.ok) throw new Error('unreachable');
@@ -127,17 +123,15 @@ describe('plan 05.1-08 Task 1 — product-aware selector validation', () => {
 
   describe('V5-V7: product preset selectors', () => {
     it('V5: preset:powerbi-essentials is valid', async () => {
-      const { validateSelectors } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
+      const { validateSelectors } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
       const r = validateSelectors(['preset:powerbi-essentials']);
       expect(r.ok).toBe(true);
     });
 
     it('V6: all 4 other product preset selectors valid', async () => {
-      const { validateSelectors } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
+      const { validateSelectors } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
       const r = validateSelectors([
         'preset:pwrapps-essentials',
         'preset:pwrauto-essentials',
@@ -148,9 +142,8 @@ describe('plan 05.1-08 Task 1 — product-aware selector validation', () => {
     });
 
     it('V7: unknown preset name gets Levenshtein suggestion from expanded preset pool', async () => {
-      const { validateSelectors } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
+      const { validateSelectors } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
       const r = validateSelectors(['preset:powerbi-essentials-v2']);
       expect(r.ok).toBe(false);
       if (r.ok) throw new Error('unreachable');
@@ -162,17 +155,15 @@ describe('plan 05.1-08 Task 1 — product-aware selector validation', () => {
 
   describe('V8-V9: product op selectors', () => {
     it('V8: concrete product alias is valid as an op selector', async () => {
-      const { validateSelectors } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
+      const { validateSelectors } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
       const r = validateSelectors(['__powerbi__GroupsGetGroups']);
       expect(r.ok).toBe(true);
     });
 
     it('V9: unknown product alias surfaces op-pool suggestions', async () => {
-      const { validateSelectors } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
+      const { validateSelectors } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
       // Distance-3 typo of __powerbi__GroupsGetGroups.
       const r = validateSelectors(['__powerbi__GroupsGetGroup']);
       expect(r.ok).toBe(false);
@@ -187,14 +178,9 @@ describe('plan 05.1-08 Task 1 — product-aware selector validation', () => {
 
   describe('V10: composite selector list', () => {
     it('V10: mixed preset + workload composition validates clean', async () => {
-      const { validateSelectors } = await import(
-        '../../src/lib/tool-selection/registry-validator.js'
-      );
-      const r = validateSelectors([
-        'preset:essentials-v1',
-        'preset:powerbi-essentials',
-        'exo:*',
-      ]);
+      const { validateSelectors } =
+        await import('../../src/lib/tool-selection/registry-validator.js');
+      const r = validateSelectors(['preset:essentials-v1', 'preset:powerbi-essentials', 'exo:*']);
       expect(r.ok).toBe(true);
     });
   });

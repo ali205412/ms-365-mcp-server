@@ -22,9 +22,8 @@ describe('plan 06-04 — sliding-window primitive', () => {
   beforeEach(async () => {
     vi.resetModules();
     redis = new (Redis as unknown as new () => import('ioredis').Redis)();
-    const { registerSlidingWindow, __resetRegisteredForTesting } = await import(
-      '../../../src/lib/rate-limit/sliding-window.js'
-    );
+    const { registerSlidingWindow, __resetRegisteredForTesting } =
+      await import('../../../src/lib/rate-limit/sliding-window.js');
     __resetRegisteredForTesting();
     registerSlidingWindow(redis);
   });
@@ -116,9 +115,8 @@ describe('plan 06-04 — sliding-window primitive', () => {
 
   describe('registerSlidingWindow — idempotent', () => {
     it('calling twice on the same client does not throw', async () => {
-      const { registerSlidingWindow } = await import(
-        '../../../src/lib/rate-limit/sliding-window.js'
-      );
+      const { registerSlidingWindow } =
+        await import('../../../src/lib/rate-limit/sliding-window.js');
       expect(() => {
         registerSlidingWindow(redis);
         registerSlidingWindow(redis);
@@ -128,37 +126,27 @@ describe('plan 06-04 — sliding-window primitive', () => {
 
   describe('parseResourceUnit — defensive parsing', () => {
     it('null → 1 (default when header absent)', async () => {
-      const { parseResourceUnit } = await import(
-        '../../../src/lib/rate-limit/sliding-window.js'
-      );
+      const { parseResourceUnit } = await import('../../../src/lib/rate-limit/sliding-window.js');
       expect(parseResourceUnit(null)).toBe(1);
     });
 
     it('"5" → 5', async () => {
-      const { parseResourceUnit } = await import(
-        '../../../src/lib/rate-limit/sliding-window.js'
-      );
+      const { parseResourceUnit } = await import('../../../src/lib/rate-limit/sliding-window.js');
       expect(parseResourceUnit('5')).toBe(5);
     });
 
     it('"999" → 100 (capped at 100 per A1)', async () => {
-      const { parseResourceUnit } = await import(
-        '../../../src/lib/rate-limit/sliding-window.js'
-      );
+      const { parseResourceUnit } = await import('../../../src/lib/rate-limit/sliding-window.js');
       expect(parseResourceUnit('999')).toBe(100);
     });
 
     it('"-1" → 1 (negative rejected)', async () => {
-      const { parseResourceUnit } = await import(
-        '../../../src/lib/rate-limit/sliding-window.js'
-      );
+      const { parseResourceUnit } = await import('../../../src/lib/rate-limit/sliding-window.js');
       expect(parseResourceUnit('-1')).toBe(1);
     });
 
     it('"abc" → 1 (non-numeric rejected)', async () => {
-      const { parseResourceUnit } = await import(
-        '../../../src/lib/rate-limit/sliding-window.js'
-      );
+      const { parseResourceUnit } = await import('../../../src/lib/rate-limit/sliding-window.js');
       expect(parseResourceUnit('abc')).toBe(1);
     });
   });

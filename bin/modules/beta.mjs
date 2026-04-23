@@ -131,11 +131,7 @@ export async function runBetaPipeline(openapiDir, generatedDir, opts = {}) {
     // ops). Truncation is deterministic; hash suffix closes the collision risk.
     code = code.replace(/alias:\s*["']([^"']+)["']/g, (full, alias) => {
       if (alias.length <= MCP_TOOL_NAME_MAX) return full;
-      const suffix = crypto
-        .createHash('sha1')
-        .update(alias)
-        .digest('hex')
-        .slice(0, 8);
+      const suffix = crypto.createHash('sha1').update(alias).digest('hex').slice(0, 8);
       const keep = MCP_TOOL_NAME_MAX - suffix.length - 1; // reserve dash
       const truncated = `${alias.slice(0, keep)}-${suffix}`;
       return `alias: '${truncated}'`;
@@ -255,10 +251,7 @@ export function mergeBetaFragmentIntoClient(mainPath, fragmentPath) {
     }
   );
   if (betaSchemaBlock.length > 0) {
-    merged = merged.replace(
-      /(const\s+endpoints\s*=\s*makeApi\()/,
-      `${betaSchemaBlock}\n$1`
-    );
+    merged = merged.replace(/(const\s+endpoints\s*=\s*makeApi\()/, `${betaSchemaBlock}\n$1`);
   }
 
   fs.writeFileSync(mainPath, merged);

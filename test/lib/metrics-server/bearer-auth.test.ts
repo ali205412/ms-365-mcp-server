@@ -131,8 +131,7 @@ describe('plan 06-03 — createBearerAuthMiddleware', () => {
       // Longer token — same defensive short-circuit path
       const long = await fetch(`${url}/protected`, {
         headers: {
-          Authorization:
-            'Bearer much-longer-than-the-configured-secret-token-123-that-is-expected',
+          Authorization: 'Bearer much-longer-than-the-configured-secret-token-123-that-is-expected',
         },
       });
       expect(long.status).toBe(401);
