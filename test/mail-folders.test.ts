@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-global.fetch = vi.fn();
+// Per-test vi.stubGlobal (inside beforeEach below) registers the override
+// with vitest so it is automatically un-stubbed after each test via the
+// `unstubGlobals: true` vitest config — plain `global.fetch = vi.fn()`
+// leaked across files under the singleThread pool and broke every other
+// test that relied on native fetch (bearer-auth, rate-limit middleware,
+// transports/streamable-http, etc.). The module-level stub was wiped
+// before the first test ran (because unstubGlobals runs in beforeEach),
+// so the stub must live INSIDE beforeEach.
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 const MOCK_TOKEN = 'mock-access-token';
@@ -42,7 +49,7 @@ async function graphDelete(path: string) {
 
 describe('Mail Folder Tools', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.stubGlobal('fetch', vi.fn());
     (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
       ok: true,
       status: 200,

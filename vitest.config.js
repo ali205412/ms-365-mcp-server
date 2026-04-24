@@ -39,6 +39,14 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     setupFiles: ['./test/setup.ts'],
+    // Auto-unstub vi.stubGlobal('fetch', ...) between tests and files so
+    // mail-folders.test.ts (and siblings) cannot leak their mocked fetch
+    // onto bearer-auth / rate-limit / transports tests that rely on the
+    // native fetch. Observed before this setting: `await fetch(...)`
+    // returned undefined in those tests → `Cannot read properties of
+    // undefined (reading 'status')`. Paired with the stubGlobal rewrite
+    // of every `global.fetch = vi.fn()` raw assignment.
+    unstubGlobals: true,
     // Plan 06-05 (D-07): vitest globalSetup that boots Postgres + Redis
     // Testcontainers once per process and hands URLs to .int.test.ts files
     // via project.provide() / vitest.inject(). Gated by the same

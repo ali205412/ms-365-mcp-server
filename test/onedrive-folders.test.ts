@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-global.fetch = vi.fn();
-
+// Per-test vi.stubGlobal + vitest `unstubGlobals: true` prevents this
+// mocked fetch from leaking onto other test files under singleThread.
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 const MOCK_TOKEN = 'mock-access-token';
 const DRIVE_ID = 'drive-abc123';
@@ -36,7 +36,7 @@ async function graphPost(path: string, body: object) {
 
 describe('OneDrive Folder Tools', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.stubGlobal('fetch', vi.fn());
     (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
       ok: true,
       status: 200,

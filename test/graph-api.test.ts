@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-global.fetch = vi.fn();
-
+// Per-test vi.stubGlobal + vitest `unstubGlobals: true` prevents this
+// mocked fetch from leaking onto other test files under singleThread.
 describe('Graph API Functions', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.stubGlobal('fetch', vi.fn());
     (global.fetch as jest.Mock).mockImplementation(async () => ({
       ok: true,
       status: 200,

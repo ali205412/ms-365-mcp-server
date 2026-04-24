@@ -258,7 +258,14 @@ async function executeGraphToolInner(
     // Skip in OAuth/HTTP mode — let the request context drive token selection via GraphClient.
     // Also skip when a request-context token exists (HTTP/OAuth flow where token comes from middleware).
     let accountAccessToken: string | undefined;
-    if (authManager && !authManager.isOAuthModeEnabled() && !getRequestTokens()) {
+    // Gate reads `.accessToken` specifically — getRequestTokens() now always
+    // returns a truthy frame after Plan 06-02 (OPS-05) added the toolAlias
+    // wrapper at the entrance to executeGraphTool. Treating frame-presence
+    // as "tokens populated" skipped the MSAL path in stdio mode where only
+    // toolAlias is set. Checking the field keeps the HTTP/OAuth skip
+    // (middleware populates accessToken) while letting stdio mode reach
+    // getTokenForAccount.
+    if (authManager && !authManager.isOAuthModeEnabled() && !getRequestTokens()?.accessToken) {
       const accountParam = params.account as string | undefined;
       try {
         accountAccessToken = await authManager.getTokenForAccount(accountParam);

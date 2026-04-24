@@ -71,12 +71,14 @@ describe('GraphClient binary response handling', () => {
     ]);
     const expectedBase64 = Buffer.from(jpegBytes).toString('base64');
 
-    const originalFetch = global.fetch;
-    global.fetch = (async () =>
-      new Response(jpegBytes, {
-        status: 200,
-        headers: { 'content-type': 'image/jpeg' },
-      })) as typeof fetch;
+    vi.stubGlobal(
+      'fetch',
+      (async () =>
+        new Response(jpegBytes, {
+          status: 200,
+          headers: { 'content-type': 'image/jpeg' },
+        })) as typeof fetch
+    );
 
     try {
       const mockAuth = {
@@ -101,7 +103,7 @@ describe('GraphClient binary response handling', () => {
       expect(result.contentLength).toBe(jpegBytes.byteLength);
       expect(result.contentBytes).toBe(expectedBase64);
     } finally {
-      global.fetch = originalFetch;
+      vi.unstubAllGlobals();
     }
   });
 });
