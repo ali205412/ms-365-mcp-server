@@ -1035,7 +1035,16 @@ class MicrosoftGraphServer {
     // to our LRU. Failure to subscribe (Redis partition) logs + continues —
     // the 60s TTL still bounds staleness.
     try {
-      await subscribeToTenantInvalidation(redis, {
+      // Same .duplicate() pattern as tool-selection below — subscribe must
+      // run on a dedicated connection; ioredis refuses regular commands on a
+      // client in subscriber mode, which caused rate-limit middleware to
+      // throw "Connection in subscriber mode" on every /t/:tenantId/mcp call
+      // when this subscription was run on the shared client.
+      const tenantSubscriberClient =
+        'duplicate' in redis && typeof (redis as { duplicate: unknown }).duplicate === 'function'
+          ? (redis as { duplicate: () => typeof redis }).duplicate()
+          : redis;
+      await subscribeToTenantInvalidation(tenantSubscriberClient, {
         evict: (tenantId: string) => {
           loadTenant.evict(tenantId);
           tenantPool.evict(tenantId);
