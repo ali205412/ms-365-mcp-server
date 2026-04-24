@@ -50,10 +50,10 @@ const OAUTH_LINE_RANGES = [
   { fn: 'createTokenHandler', start: 185, end: 376 },
   { fn: 'createAuthorizeHandler', start: 471, end: 618 },
   { fn: 'createTenantTokenHandler', start: 667, end: 810 },
-  { fn: 'wellKnownAuthServerTenant', start: 1138, end: 1163 },
-  { fn: 'wellKnownProtectedResourceTenant', start: 1165, end: 1185 },
-  { fn: 'wellKnownAuthServer', start: 1494, end: 1518 },
-  { fn: 'wellKnownProtectedResource', start: 1521, end: 1535 },
+  { fn: 'wellKnownAuthServerTenant', start: 1147, end: 1172 },
+  { fn: 'wellKnownProtectedResourceTenant', start: 1174, end: 1194 },
+  { fn: 'wellKnownAuthServer', start: 1503, end: 1527 },
+  { fn: 'wellKnownProtectedResource', start: 1530, end: 1544 },
 ];
 
 // D-10 target threshold is 70%. Effective threshold is temporarily lowered
