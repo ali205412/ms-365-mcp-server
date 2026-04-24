@@ -1,6 +1,10 @@
 # ms-365-mcp-server v2
 
-[![npm version](https://img.shields.io/npm/v/@softeria/ms-365-mcp-server.svg)](https://www.npmjs.com/package/@softeria/ms-365-mcp-server) [![build status](https://github.com/softeria/ms-365-mcp-server/actions/workflows/build.yml/badge.svg)](https://github.com/softeria/ms-365-mcp-server/actions/workflows/build.yml) [![license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/softeria/ms-365-mcp-server/blob/main/LICENSE)
+[![build](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/build.yml) [![integration](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/integration.yml/badge.svg?branch=main)](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/integration.yml) [![docker](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/docker-image.yml/badge.svg?branch=main)](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/docker-image.yml) [![codeql](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/codeql.yml) [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+
+Maintained by **[Ali Abdelaal (@ali205412)](https://github.com/ali205412)** at [ali205412/ms-365-mcp-server](https://github.com/ali205412/ms-365-mcp-server). The v2 multi-tenant gateway runtime — Postgres + Redis substrate, all four identity flows, per-tenant rate limiting, OTel + Prometheus observability, 5,000+ Graph operations — is the work of this repo. Container image at `ghcr.io/ali205412/ms-365-mcp-server`. Issues + PRs belong [here](https://github.com/ali205412/ms-365-mcp-server/issues).
+
+> Originally forked from [softeria/ms-365-mcp-server](https://github.com/softeria/ms-365-mcp-server), which owns the `@softeria/ms-365-mcp-server` npm name and the v1 single-user CLI. Upstream issues: [softeria tracker](https://github.com/softeria/ms-365-mcp-server/issues).
 
 **Enterprise multi-tenant Microsoft 365 MCP gateway.** One Docker Compose deployment that gives AI assistants full, governed access to Microsoft Graph across many Azure AD tenants — with tenant isolation, resilient Graph transport, all four identity flows, and per-tenant observability + rate limiting.
 
@@ -71,23 +75,31 @@ v1 continues to work via the same `npx @softeria/ms-365-mcp-server` entry point 
 v2's reference deployment is a single Docker Compose stack on one VM. No Kubernetes, no Azure-native services required.
 
 ```bash
-git clone https://github.com/softeria/ms-365-mcp-server.git
+git clone https://github.com/ali205412/ms-365-mcp-server.git
 cd ms-365-mcp-server
 cp .env.example .env
 # Edit .env — set at minimum: MS365_MCP_ADMIN_GROUP_ID, MS365_MCP_KEK, database URL, Redis URL
 docker compose up -d
 ```
 
+Or pull the pre-built image directly:
+
+```bash
+docker pull ghcr.io/ali205412/ms-365-mcp-server:latest
+```
+
 Once up, the gateway exposes:
 
-| Endpoint                 | Purpose                                            |
-| ------------------------ | -------------------------------------------------- |
-| `/mcp` (Streamable HTTP) | Primary MCP transport for modern clients           |
-| `/sse` + `/messages`     | Legacy MCP transport (Claude Desktop < 0.8)        |
-| `/admin/tenants`         | Tenant CRUD (dual-secured)                         |
-| `/admin/api-keys`        | API-key rotation (dual-secured)                    |
-| `/metrics` (port 9464)   | Prometheus scrape target (optionally Bearer-gated) |
-| `/health`                | Liveness + readiness                               |
+| Endpoint                                     | Purpose                                                   |
+| -------------------------------------------- | --------------------------------------------------------- |
+| `/mcp`, `/t/:tenantId/mcp` (Streamable HTTP) | Primary MCP transport for modern clients                  |
+| `/t/:tenantId/sse` + `/t/:tenantId/messages` | Legacy MCP transport (older Claude Desktop, SSE clients)  |
+| `/.well-known/oauth-authorization-server`    | OAuth 2.1 metadata (consumed by Claude connectors et al.) |
+| `/authorize`, `/token`                       | OAuth PKCE flow endpoints                                 |
+| `/admin/tenants`                             | Tenant CRUD (dual-secured)                                |
+| `/admin/api-keys`                            | API-key rotation (dual-secured)                           |
+| `/metrics` (port 9464)                       | Prometheus scrape target (optionally Bearer-gated)        |
+| `/healthz`, `/readyz`                        | Liveness + readiness (Kubernetes conventions)             |
 
 Full deployment guide with reverse-proxy (Caddy / nginx / Traefik) SSE buffering directives, TLS termination, and production hardening: **[docs/deployment.md](docs/deployment.md)** and **[docs/observability/](docs/observability/)**.
 
@@ -116,6 +128,42 @@ In Claude Desktop (`settings → Developer → Edit Config`):
 ```
 
 See the [CLI reference](#cli-reference) for the full stdio flag list.
+
+---
+
+## Quickstart — Claude connector (Claude.ai web / Claude Desktop OAuth)
+
+Claude.ai's custom-connector feature speaks MCP over Streamable HTTP with OAuth 2.1. To plug this server in:
+
+1. **Expose the gateway publicly.** `localhost` is not reachable from Claude.ai's browser origin. Use ngrok / Cloudflare Tunnel / your own reverse proxy.
+
+   ```bash
+   cloudflared tunnel --url http://localhost:3000
+   # copy the resulting https://<name>.trycloudflare.com
+   ```
+
+2. **Set the public URL** in `.env` **and restart** — Claude reads this from `/.well-known/oauth-authorization-server`, so it must be the URL Claude will hit, not `localhost`.
+
+   ```env
+   MS365_MCP_PUBLIC_URL=https://<name>.trycloudflare.com
+   MS365_MCP_CORS_ORIGINS=https://claude.ai,https://<name>.trycloudflare.com
+   ```
+
+3. **Add `https://<name>.trycloudflare.com/mcp` as a custom connector in Claude.** Claude will:
+   - Fetch `/.well-known/oauth-authorization-server` (OAuth AS discovery)
+   - Open a browser window to `/authorize` → Microsoft login
+   - POST the returned code to `/token` and cache the bearer
+   - Call `/mcp` with `Authorization: Bearer …` on every MCP request
+
+4. **Verify** with the dev Inspector before trusting the connector:
+
+   ```bash
+   npx @modelcontextprotocol/inspector \
+     --url https://<name>.trycloudflare.com/mcp \
+     --transport streamable-http
+   ```
+
+Known limitations: Claude Desktop's native MCP stdio is simpler — no OAuth needed, just point it at the binary (see above). Reach for connectors when the server must be shared across browsers / users.
 
 ---
 
@@ -195,7 +243,7 @@ The Admin API is **dual-secured**:
 
 Tenant disable triggers a cryptoshred cascade: MSAL cache evicted, Redis keys flushed, DEK destroyed. Tokens cannot be recovered post-disable.
 
-Full admin API reference: **[docs/admin-api.md](docs/admin-api.md)** (generated from OpenAPI).
+Full admin API reference lives in the OpenAPI spec shipped with the server (generated doc: TODO).
 
 ---
 
@@ -397,9 +445,15 @@ Before submitting a PR, `npm run verify` must pass. For a full developer workflo
 
 ## Support & license
 
+**This repo (v2 multi-tenant gateway — Ali Abdelaal / @ali205412):**
+
+- Issues + PRs: https://github.com/ali205412/ms-365-mcp-server/issues
+- Container image: `ghcr.io/ali205412/ms-365-mcp-server:latest`
+
+**Upstream (v1 single-user CLI, npm package):**
+
 - Issues: https://github.com/softeria/ms-365-mcp-server/issues
 - Discussions: https://github.com/softeria/ms-365-mcp-server/discussions
 - Discord: https://discord.gg/WvGVNScrAZ
-- Email: eirikb@eirikb.no
 
-MIT © 2026 Softeria
+MIT — original work © 2026 Softeria, v2 additions © 2026 Ali Abdelaal. See [LICENSE](./LICENSE).
