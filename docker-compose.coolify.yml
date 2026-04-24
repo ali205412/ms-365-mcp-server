@@ -1,0 +1,91 @@
+# Coolify-friendly compose for the v2 multi-tenant gateway.
+#
+# Differences from the root docker-compose.yml (which is tuned for local
+# developer use):
+#   - No 127.0.0.1: port bindings — Coolify's Traefik discovers services by
+#     docker-compose label, it cannot reach loopback. Just `expose:` the ports
+#     and let Coolify wire them.
+#   - Uses the pre-built image from GHCR instead of `build: .` so Coolify
+#     can pull on each redeploy rather than rebuilding.
+#   - Leaves env vars unset; operators wire them in Coolify's Environment
+#     Variables panel (secrets live in Coolify, not in git).
+#
+# Point your Coolify "Docker Compose" resource at this filename
+# (docker-compose.coolify.yml) instead of the default docker-compose.yml.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mcp
+      POSTGRES_PASSWORD: '${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in Coolify}'
+      POSTGRES_DB: mcp
+    volumes:
+      - mcp_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U mcp -d mcp']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes:
+      - mcp_redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mcp:
+    # Pin to :latest (tracks main) or a specific tag / digest for reproducibility.
+    # Coolify redeploys re-pull this on every /deploy API call.
+    image: ghcr.io/ali205412/ms-365-mcp-server:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      MS365_MCP_DATABASE_URL: 'postgres://mcp:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/mcp'
+      MS365_MCP_MIGRATE_ON_STARTUP: ${MS365_MCP_MIGRATE_ON_STARTUP:-1}
+      MS365_MCP_REDIS_URL: redis://redis:6379
+      MS365_MCP_PROMETHEUS_ENABLED: ${MS365_MCP_PROMETHEUS_ENABLED:-1}
+      MS365_MCP_METRICS_PORT: '9464'
+      # MUST be the exact public HTTPS URL Coolify assigns to this service —
+      # Claude connectors fetch /.well-known/oauth-authorization-server and
+      # redirect the browser to the URL this declares.
+      MS365_MCP_PUBLIC_URL: '${MS365_MCP_PUBLIC_URL:?set to your Coolify-assigned https://… URL}'
+      # Include https://claude.ai for the Claude custom-connector flow.
+      MS365_MCP_CORS_ORIGINS: '${MS365_MCP_CORS_ORIGINS:-https://claude.ai}'
+      MS365_MCP_KEK: '${MS365_MCP_KEK:?MS365_MCP_KEK must be set - generate with openssl rand -base64 32}'
+      MS365_MCP_CLIENT_ID: ${MS365_MCP_CLIENT_ID:-}
+      MS365_MCP_CLIENT_SECRET: ${MS365_MCP_CLIENT_SECRET:-}
+      MS365_MCP_TENANT_ID: ${MS365_MCP_TENANT_ID:-common}
+      # Admin API (optional) — set these to mount /admin/* routes for
+      # tenant onboarding via REST. Omit to run with direct SQL onboarding.
+      MS365_MCP_ADMIN_APP_CLIENT_ID: ${MS365_MCP_ADMIN_APP_CLIENT_ID:-}
+      MS365_MCP_ADMIN_GROUP_ID: ${MS365_MCP_ADMIN_GROUP_ID:-}
+      NODE_ENV: production
+    command: ['--http', '3000', '--org-mode']
+    expose:
+      - '3000'
+      - '9464'
+    healthcheck:
+      test: ['CMD', 'node', 'bin/check-health.cjs']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    # Coolify discovers which port to proxy via this label. Set the primary
+    # service port — the metrics port stays internal unless you explicitly
+    # expose it with a second label + domain.
+    labels:
+      - 'coolify.managed=true'
+      - 'coolify.proxy.port=3000'
+
+volumes:
+  mcp_pg_data:
+  mcp_redis_data:

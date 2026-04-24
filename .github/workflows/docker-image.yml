@@ -136,3 +136,50 @@ jobs:
             -e MS365_MCP_TENANT_ID=common \
             ghcr.io/${{ github.repository }}:sha-$(echo ${{ github.sha }} | cut -c1-7) \
             --help
+
+  deploy-coolify:
+    name: Deploy to Coolify
+    runs-on: ubuntu-latest
+    needs: [build-push, smoke-test]
+    # Only from main + only when the three deploy secrets are configured.
+    # Gated by `if: vars.COOLIFY_DEPLOY_ENABLED == 'true'` so forks that
+    # don't run their own Coolify deploy get a silent skip instead of a
+    # failing workflow.
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'push' &&
+      vars.COOLIFY_DEPLOY_ENABLED == 'true'
+    timeout-minutes: 10
+    steps:
+      - name: Trigger Coolify redeploy
+        env:
+          COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+          COOLIFY_RESOURCE_UUID: ${{ secrets.COOLIFY_RESOURCE_UUID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${COOLIFY_URL:-}" ] || [ -z "${COOLIFY_TOKEN:-}" ] || [ -z "${COOLIFY_RESOURCE_UUID:-}" ]; then
+            echo "One of COOLIFY_URL / COOLIFY_TOKEN / COOLIFY_RESOURCE_UUID secrets is unset." >&2
+            echo "Add them under Settings → Secrets and Variables → Actions, or disable this" >&2
+            echo "job by setting repository variable COOLIFY_DEPLOY_ENABLED to anything other" >&2
+            echo "than 'true'." >&2
+            exit 1
+          fi
+
+          resp=$(curl --fail-with-body --silent --show-error \
+            -H "Authorization: Bearer ${COOLIFY_TOKEN}" \
+            "${COOLIFY_URL}/api/v1/deploy?uuid=${COOLIFY_RESOURCE_UUID}&force=false")
+
+          echo "Coolify response: ${resp}"
+
+          deployment_uuid=$(echo "${resp}" | jq -r '(.deployments[0].deployment_uuid // .deployment_uuid // empty)')
+          if [ -z "${deployment_uuid}" ] || [ "${deployment_uuid}" = "null" ]; then
+            echo "::error::Coolify did not return a deployment_uuid — deploy not started."
+            exit 1
+          fi
+
+          echo "✅ Started Coolify deployment ${deployment_uuid}"
+          echo "## Coolify deploy" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- deployment_uuid: \`${deployment_uuid}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- resource_uuid:   \`${COOLIFY_RESOURCE_UUID}\`" >> "$GITHUB_STEP_SUMMARY"
