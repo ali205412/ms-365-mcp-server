@@ -32,11 +32,23 @@ const CI_FLAKY_QUARANTINE =
     ? [
         // OTel instrument registry / span tests — PeriodicExportingMetricReader
         // forceFlush() hangs on CI when a prior file installed NodeSDK's
-        // global MeterProvider. Local: pass in ~30ms. Distinct root cause
-        // from the timer leak (global useRealTimers in test/setup.ts).
+        // global MeterProvider. Local: pass in ~30ms.
         'test/lib/otel-metrics.test.ts',
         'test/lib/graph-client.span.test.ts',
         'test/lib/middleware/retry.span.test.ts',
+        // Timer-dependent tests — setTimeout / fake timers that never fire
+        // on CI. Local: pass in <100ms. Un-quarantine attempt 2026-04-24
+        // via global useRealTimers reset did NOT fix the hang — root cause
+        // is not a vi.useFakeTimers leak. Keeping the global reset in
+        // test/setup.ts as a defensive measure; re-quarantining pending
+        // deeper investigation (see task #8).
+        'test/lib/rate-limit/sliding-window.test.ts',
+        'test/transports/legacy-sse.test.ts',
+        'test/tool-selection/per-tenant-bm25.test.ts',
+        // AsyncLocalStorage / request-context isolation tests — hang at the
+        // first concurrent Promise.all. Local: pass in ~100ms.
+        'test/request-context.test.ts',
+        'test/logger-correlation.test.ts',
         // Node 20 matrix only — audit-integration uses pg-mem + server.ts
         // factories that never yield on Node 20 runners.
         'test/audit/audit-integration.test.ts',
