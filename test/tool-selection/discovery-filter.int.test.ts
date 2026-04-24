@@ -40,16 +40,18 @@ const TENANT_A = '11111111-1111-1111-1111-111111111111';
 const TENANT_B = '22222222-2222-2222-2222-222222222222';
 
 /**
- * Aliases we know exist in `api.endpoints` — the discovery search targets
- * these tools when driven by the real registry. `send-mail`, `list-users`,
- * and `create-event` are stable entries from the v1 golden-query test set
- * (see test/discovery-search.test.ts).
+ * Aliases we know exist in `api.endpoints` — the discovery registry uses the
+ * generator-emitted dot-cased aliases (not the endpoints.json `toolName`
+ * kebab-case form). The v1 golden-query test set in
+ * test/discovery-search.test.ts uses the same shape. Mail-send + messages
+ * for tenant A; users list + get for tenant B so `send mail` ranks mail ops
+ * for A but not for B.
  */
 const ENABLED_A: ReadonlySet<string> = Object.freeze(
-  new Set(['send-mail', 'list-mail-messages'])
+  new Set(['me.sendMail', 'me.ListMessages'])
 ) as ReadonlySet<string>;
 const ENABLED_B: ReadonlySet<string> = Object.freeze(
-  new Set(['list-users', 'get-user'])
+  new Set(['users.user.ListUser', 'users.user.GetUserByUserPrincipalName'])
 ) as ReadonlySet<string>;
 
 interface CallToolResult {
@@ -145,10 +147,10 @@ describe('plan 05-06 Task 2 — discovery per-tenant filter + pub/sub invalidati
     };
 
     const namesA = bodyA.tools.map((t) => t.name);
-    expect(namesA).toContain('send-mail');
+    expect(namesA).toContain('me.sendMail');
     // Tenant A enabled set excludes list-users / create-event — they MUST NOT appear.
-    expect(namesA).not.toContain('list-users');
-    expect(namesA).not.toContain('create-event');
+    expect(namesA).not.toContain('users.user.ListUser');
+    expect(namesA).not.toContain('me.CreateEvents');
     // Every returned tool must be in tenant A's enabled set — T-05-12 isolation.
     for (const name of namesA) {
       expect(ENABLED_A.has(name)).toBe(true);
@@ -177,8 +179,8 @@ describe('plan 05-06 Task 2 — discovery per-tenant filter + pub/sub invalidati
     };
     const namesB = bodyB.tools.map((t) => t.name);
     // Tenant B MUST NOT see send-mail (not in its enabled set).
-    expect(namesB).not.toContain('send-mail');
-    expect(namesB).not.toContain('list-mail-messages');
+    expect(namesB).not.toContain('me.sendMail');
+    expect(namesB).not.toContain('me.ListMessages');
     for (const name of namesB) {
       expect(ENABLED_B.has(name)).toBe(true);
     }
@@ -192,7 +194,7 @@ describe('plan 05-06 Task 2 — discovery per-tenant filter + pub/sub invalidati
         enabledToolsSet: ENABLED_A,
         presetVersion: 'test-A',
       },
-      () => callDiscoveryTool(server, 'get-tool-schema', { tool_name: 'list-users' })
+      () => callDiscoveryTool(server, 'get-tool-schema', { tool_name: 'users.user.ListUser' })
     );
 
     expect(respA.isError).toBe(true);
@@ -206,7 +208,7 @@ describe('plan 05-06 Task 2 — discovery per-tenant filter + pub/sub invalidati
         enabledToolsSet: ENABLED_A,
         presetVersion: 'test-A',
       },
-      () => callDiscoveryTool(server, 'get-tool-schema', { tool_name: 'send-mail' })
+      () => callDiscoveryTool(server, 'get-tool-schema', { tool_name: 'me.sendMail' })
     );
 
     expect(respOk.isError).toBeFalsy();
