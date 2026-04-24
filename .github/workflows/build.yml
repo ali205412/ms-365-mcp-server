@@ -25,7 +25,12 @@ jobs:
   build:
     name: Build (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 35 min — leaves headroom for install (~6 min), generate full-coverage
+    # (~7 min), TypeScript build (~1 min), and the full unit test tier
+    # (~13 min after 2026-04-24 unquarantine of the 13 previously-flaky
+    # files). Prior 20-min budget was tight only because the quarantine
+    # was skipping tests; see commit retiring CI_FLAKY_QUARANTINE.
+    timeout-minutes: 35
 
     strategy:
       fail-fast: false
