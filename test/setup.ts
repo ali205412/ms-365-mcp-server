@@ -18,7 +18,21 @@
 // test/tool-selection/dispatch-guard.test.ts + dispatch-enforcement.int
 // .test.ts) explicitly calls `setStdioFallback(undefined)` in its
 // beforeEach to drop the permissive seed.
+import { beforeEach, vi } from 'vitest';
 import { setStdioFallback } from '../src/lib/tool-selection/dispatch-guard.js';
+
+// Global timer reset — every test starts with real timers regardless of
+// whatever a prior test file left behind. Vitest's per-file VM isolation
+// SHOULD keep fake timers bounded to the file that installed them, but the
+// singleThread pool + vitest 3.2.4 shows leakage on GitHub Actions runners
+// (observed 2026-04-24: tests using a real `setTimeout(r, 100)` hang for 45 s
+// on CI while passing in <100 ms locally). A global `useRealTimers()` in
+// beforeEach is the defensive fix — afterEach in the leaking file still
+// runs, but if it fails to fully reset, we catch it before the next test
+// inherits the fake clock.
+beforeEach(() => {
+  vi.useRealTimers();
+});
 
 // Universal permissive fallback: every tool alias is always allowed.
 // Subclass Set so `.has()` returns true for every key while the other
