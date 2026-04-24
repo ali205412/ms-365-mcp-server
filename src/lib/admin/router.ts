@@ -185,10 +185,19 @@ export function createAdminRouter(deps: AdminRouterDeps): Router {
   r.use('/audit', createAuditRoutes(deps));
 
   // Kick off the pub/sub subscriber for cross-replica API-key revocation
-  // propagation (04-03, D-15). Fire-and-forget: subscription failure does not
-  // block router mount — the 60s in-process LRU TTL is the fallback. Any
-  // failure is logged so operators catch a misconfigured Redis connection.
-  void subscribeToApiKeyRevoke(deps.redis).catch((err) => {
+  // propagation (04-03, D-15). Must run on a DUPLICATED ioredis connection —
+  // ioredis forbids regular commands on a subscriber-mode client, and the
+  // rate-limit middleware's sliding-window EVALSHA shares deps.redis with
+  // the commander. Passing deps.redis directly here put it into subscriber
+  // mode → every /t/:tenantId/mcp tool call threw 503 rate_limit_error.
+  // Fire-and-forget: subscription failure does not block router mount — the
+  // 60s in-process LRU TTL is the fallback.
+  const apiKeyRevokeSubscriber =
+    'duplicate' in deps.redis &&
+    typeof (deps.redis as { duplicate: unknown }).duplicate === 'function'
+      ? (deps.redis as { duplicate: () => typeof deps.redis }).duplicate()
+      : deps.redis;
+  void subscribeToApiKeyRevoke(apiKeyRevokeSubscriber).catch((err) => {
     logger.error({ err: (err as Error).message }, 'admin: api-key revoke subscription failed');
   });
 
