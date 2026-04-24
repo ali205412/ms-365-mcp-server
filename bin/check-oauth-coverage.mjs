@@ -70,10 +70,8 @@ const OAUTH_LINE_RANGES = [
 // Without those tests, only test/integration/oauth-surface/*.int.test.ts
 // contributes; register + token get good coverage, everything else stays at
 // 0–1%. Ratchet back to 70 once the quarantine is retired.
-const COVERAGE_THRESHOLD_PERCENT = process.env.MS365_MCP_SKIP_CI_FLAKY === '1' ||
-  process.env.CI === 'true'
-  ? 25
-  : 70;
+const COVERAGE_THRESHOLD_PERCENT =
+  process.env.MS365_MCP_SKIP_CI_FLAKY === '1' || process.env.CI === 'true' ? 25 : 70;
 
 /**
  * Re-read src/server.ts and confirm each OAUTH_LINE_RANGES entry's start
