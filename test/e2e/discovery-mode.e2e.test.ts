@@ -1,11 +1,26 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { Server } from 'node:http';
+import crypto, { randomBytes } from 'node:crypto';
+import express from 'express';
+import http, { type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { DataType, newDb } from 'pg-mem';
+import type { Pool } from 'pg';
 import {
   DISCOVERY_META_TOOL_NAMES,
   DISCOVERY_PRESET_VERSION,
 } from '../../src/lib/tenant-surface/surface.js';
 import { resolveDiscoveryCatalog } from '../../src/lib/discovery-catalog/catalog.js';
 import { presetFor } from '../../src/lib/tool-selection/preset-loader.js';
+import MicrosoftGraphServer from '../../src/server.js';
+import type { TenantRow } from '../../src/lib/tenant/tenant-row.js';
+import { MemoryRedisFacade } from '../../src/lib/redis-facade.js';
+import { __setPoolForTesting } from '../../src/lib/postgres.js';
+import { __setRedisForTesting } from '../../src/lib/redis.js';
+import { createStreamableHttpHandler } from '../../src/lib/transports/streamable-http.js';
+import { createSeedTenantContextMiddleware } from '../../src/lib/tool-selection/tenant-context-middleware.js';
+import { createTenantsRoutes } from '../../src/lib/admin/tenants.js';
+import { createCursorSecret } from '../../src/lib/admin/cursor.js';
+import { AGENTIC_EVENTS_CHANNEL } from '../../src/lib/mcp-notifications/events.js';
 
 const RUN_E2E = process.env.MS365_MCP_E2E === '1';
 const describeE2E = RUN_E2E ? describe : describe.skip;
@@ -38,7 +53,7 @@ vi.mock('../../src/generated/client.js', () => ({
   api: {
     endpoints: [
       {
-        alias: GRAPH_ALIAS,
+        alias: 'me.messages.ListMessages',
         method: 'get',
         path: '/me/messages',
         description: 'List messages in the signed-in user mailbox.',
@@ -59,7 +74,7 @@ vi.mock('../../src/generated/client.js', () => ({
         parameters: [],
       },
       {
-        alias: PRODUCT_ALIAS,
+        alias: '__powerbi__Groups_GetGroups',
         method: 'get',
         path: '/groups',
         description: 'List Power BI workspaces.',
@@ -84,6 +99,11 @@ interface DiscoveryE2EHarness {
   waitForEvent(type: string, predicate: (event: Record<string, unknown>) => boolean): Promise<number>;
   patchTenantPreset(tenantId: string, presetVersion: string): Promise<void>;
   close(): Promise<void>;
+}
+
+interface RecordedEvent {
+  event: Record<string, unknown>;
+  seenAt: number;
 }
 
 describeE2E('Phase 7 Plan 07-10 discovery-mode E2E smoke (set MS365_MCP_E2E=1 to run)', () => {
@@ -212,14 +232,13 @@ describeE2E('Phase 7 Plan 07-10 discovery-mode E2E smoke (set MS365_MCP_E2E=1 to
     const bookmarks = await harness.callTool(sessionId, 'list-bookmarks', {});
     expect(bookmarks.content[0]!.text).toContain(GRAPH_ALIAS);
 
-    await expect(
-      harness.callTool(sessionId, 'save-recipe', {
-        name: 'list recent mail',
-        alias: GRAPH_ALIAS,
-        params: {},
-        note: 'E2E recipe',
-      })
-    ).resolves.toMatchObject({ isError: undefined });
+    const savedRecipe = await harness.callTool(sessionId, 'save-recipe', {
+      name: 'list recent mail',
+      alias: GRAPH_ALIAS,
+      params: {},
+      note: 'E2E recipe',
+    });
+    expect(savedRecipe.isError).toBeFalsy();
     const runRecipe = await harness.callTool(sessionId, 'run-recipe', {
       name: 'list recent mail',
     });
@@ -249,7 +268,327 @@ describeE2E('Phase 7 Plan 07-10 discovery-mode E2E smoke (set MS365_MCP_E2E=1 to
 });
 
 async function createDiscoveryE2EHarness(): Promise<DiscoveryE2EHarness> {
-  throw new Error('discovery E2E harness not implemented');
+  const pool = makePool();
+  await installSchema(pool);
+  __setPoolForTesting(pool);
+
+  const redis = new MemoryRedisFacade();
+  __setRedisForTesting(redis);
+  const events: RecordedEvent[] = [];
+  redis.on('message', (channel, message) => {
+    if (channel !== AGENTIC_EVENTS_CHANNEL) return;
+    events.push({ event: JSON.parse(message) as Record<string, unknown>, seenAt: Date.now() });
+  });
+  await redis.subscribe(AGENTIC_EVENTS_CHANNEL);
+
+  const graphRequests: unknown[] = [];
+  const graphClient = {
+    graphRequest: vi.fn(async (path: string, options: unknown) => {
+      graphRequests.push({ path, options });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              value: [{ id: 'msg-1', subject: 'Mocked Graph message' }],
+              path,
+            }),
+          },
+        ],
+      };
+    }),
+  };
+
+  const authManager = {
+    isMultiAccount: vi.fn(async () => false),
+    listAccounts: vi.fn(async () => []),
+    isOAuthModeEnabled: vi.fn(() => true),
+  };
+  const graphServer = new MicrosoftGraphServer(authManager as never, { http: true, orgMode: true });
+  (graphServer as unknown as { graphClient: unknown }).graphClient = graphClient;
+
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    (req as express.Request & { id?: string }).id = `e2e-${Date.now()}`;
+    next();
+  });
+  app.use('/t/:tenantId', (req, _res, next) => {
+    (req as express.Request & { tenant?: TenantRow & { enabled_tools_set: ReadonlySet<string> } })
+      .tenant = tenantFor(req.params.tenantId);
+    next();
+  });
+  app.use('/t/:tenantId', createSeedTenantContextMiddleware());
+  const mcpHandler = createStreamableHttpHandler({
+    buildMcpServer: (tenant) => graphServer.createMcpServer(tenant),
+  });
+  app.post('/t/:tenantId/mcp', mcpHandler);
+  app.get('/t/:tenantId/mcp', mcpHandler);
+
+  app.use('/admin/tenants', (req, _res, next) => {
+    (
+      req as express.Request & {
+        admin?: { actor: string; source: 'entra'; tenantScoped: string | null };
+      }
+    ).admin = { actor: 'admin@example.com', source: 'entra', tenantScoped: null };
+    next();
+  });
+  app.use(
+    '/admin/tenants',
+    createTenantsRoutes({
+      pgPool: pool,
+      redis,
+      tenantPool: { evict: vi.fn(), invalidate: vi.fn() },
+      kek: randomBytes(32),
+      cursorSecret: createCursorSecret(),
+      adminOrigins: [],
+      entraConfig: { appClientId: 'admin-app', groupId: 'admin-group' },
+    } as never)
+  );
+
+  const server = await new Promise<Server>((resolve) => {
+    const started = http.createServer(app).listen(0, () => resolve(started));
+  });
+  const { port } = server.address() as AddressInfo;
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const sessions = new Map<string, { tenantId: string; header?: string }>();
+  let rpcId = 1;
+
+  async function postRpc<T>(
+    tenantId: string,
+    sessionHeader: string | undefined,
+    method: string,
+    params: unknown
+  ): Promise<{ result: T; sessionHeader?: string }> {
+    const response = await fetch(`${baseUrl}/t/${tenantId}/mcp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        ...(sessionHeader ? { 'Mcp-Session-Id': sessionHeader } : {}),
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: rpcId++,
+        method,
+        params,
+      }),
+    });
+    const result = await parseJsonRpcResponse<T>(response);
+    return {
+      result,
+      sessionHeader: response.headers.get('mcp-session-id') ?? undefined,
+    };
+  }
+
+  const harness: DiscoveryE2EHarness = {
+    server,
+    baseUrl,
+    graphRequests,
+    async initialize(tenantId = DISCOVERY_TENANT_ID): Promise<string> {
+      const { sessionHeader } = await postRpc(tenantId, undefined, 'initialize', {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'phase-07-e2e', version: '1.0.0' },
+      });
+      const sessionId = sessionHeader ?? `stateless:${tenantId}:${rpcId++}`;
+      sessions.set(sessionId, { tenantId, header: sessionHeader });
+      return sessionId;
+    },
+    async rpc<T = unknown>(sessionId: string, method: string, params?: unknown): Promise<T> {
+      const session = sessions.get(sessionId);
+      if (!session) throw new Error(`unknown test session ${sessionId}`);
+      const { result } = await postRpc<T>(session.tenantId, session.header, method, params ?? {});
+      return result;
+    },
+    async callTool(
+      sessionId: string,
+      name: string,
+      args: Record<string, unknown> = {}
+    ): Promise<JsonRpcToolResult> {
+      return harness.rpc<JsonRpcToolResult>(sessionId, 'tools/call', {
+        name,
+        arguments: args,
+      });
+    },
+    async waitForEvent(
+      type: string,
+      predicate: (event: Record<string, unknown>) => boolean
+    ): Promise<number> {
+      const started = Date.now();
+      const deadline = started + 2_000;
+      while (Date.now() < deadline) {
+        const found = events.find((record) => record.event.type === type && predicate(record.event));
+        if (found) return Math.max(0, found.seenAt - started);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      throw new Error(`timed out waiting for ${type}`);
+    },
+    async patchTenantPreset(tenantId: string, presetVersion: string): Promise<void> {
+      const response = await fetch(`${baseUrl}/admin/tenants/${tenantId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preset_version: presetVersion }),
+      });
+      if (response.status !== 200) {
+        throw new Error(`admin PATCH failed: ${response.status} ${await response.text()}`);
+      }
+    },
+    async close(): Promise<void> {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      __setPoolForTesting(null);
+      __setRedisForTesting(null);
+      redis.disconnect();
+      await pool.end();
+    },
+  };
+
+  return harness;
 }
 
-void presetFor;
+function makePool(): Pool {
+  const db = newDb();
+  db.public.registerFunction({
+    name: 'gen_random_uuid',
+    returns: DataType.uuid,
+    impure: true,
+    implementation: () => crypto.randomUUID(),
+  });
+  const { Pool: PgMemPool } = db.adapters.createPg();
+  return new PgMemPool() as Pool;
+}
+
+async function installSchema(pool: Pool): Promise<void> {
+  await pool.query(`
+    CREATE TABLE tenants (
+      id uuid PRIMARY KEY,
+      mode text NOT NULL,
+      client_id text NOT NULL,
+      client_secret_ref text,
+      tenant_id text NOT NULL,
+      cloud_type text NOT NULL DEFAULT 'global',
+      redirect_uri_allowlist jsonb NOT NULL DEFAULT '[]'::jsonb,
+      cors_origins jsonb NOT NULL DEFAULT '[]'::jsonb,
+      allowed_scopes jsonb NOT NULL DEFAULT '[]'::jsonb,
+      enabled_tools text,
+      preset_version text NOT NULL DEFAULT 'discovery-v1',
+      sharepoint_domain text,
+      rate_limits jsonb,
+      slug text UNIQUE,
+      disabled_at timestamptz,
+      wrapped_dek jsonb,
+      created_at timestamptz NOT NULL DEFAULT NOW(),
+      updated_at timestamptz NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE audit_log (
+      id text PRIMARY KEY,
+      tenant_id uuid NOT NULL,
+      actor text NOT NULL,
+      action text NOT NULL,
+      target text,
+      ip text,
+      request_id text NOT NULL,
+      result text NOT NULL,
+      meta jsonb NOT NULL DEFAULT '{}'::jsonb,
+      ts timestamptz NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE tenant_tool_bookmarks (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id uuid NOT NULL,
+      alias text NOT NULL,
+      label text,
+      note text,
+      last_used_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT NOW(),
+      UNIQUE (tenant_id, alias)
+    );
+
+    CREATE TABLE tenant_tool_recipes (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id uuid NOT NULL,
+      name text NOT NULL,
+      alias text NOT NULL,
+      params jsonb NOT NULL DEFAULT '{}'::jsonb,
+      note text,
+      last_run_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT NOW(),
+      UNIQUE (tenant_id, name)
+    );
+
+    CREATE TABLE tenant_facts (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id uuid NOT NULL,
+      scope text NOT NULL,
+      content text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT NOW(),
+      updated_at timestamptz NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(
+    `INSERT INTO tenants (
+       id, mode, client_id, tenant_id, cloud_type,
+       redirect_uri_allowlist, cors_origins, allowed_scopes, preset_version
+     ) VALUES
+       ($1, 'delegated', 'client-discovery', 'aad-discovery', 'global', '[]'::jsonb, '[]'::jsonb, '["Mail.Read"]'::jsonb, 'discovery-v1'),
+       ($2, 'delegated', 'client-static', 'aad-static', 'global', '[]'::jsonb, '[]'::jsonb, '["Mail.Read"]'::jsonb, 'essentials-v1')`,
+    [DISCOVERY_TENANT_ID, STATIC_TENANT_ID]
+  );
+}
+
+function tenantFor(tenantId: string): TenantRow & { enabled_tools_set: ReadonlySet<string> } {
+  const discovery = tenantId === DISCOVERY_TENANT_ID;
+  return {
+    id: tenantId,
+    mode: 'delegated',
+    client_id: discovery ? 'client-discovery' : 'client-static',
+    client_secret_ref: null,
+    tenant_id: discovery ? 'aad-discovery' : 'aad-static',
+    cloud_type: 'global',
+    redirect_uri_allowlist: [],
+    cors_origins: [],
+    allowed_scopes: ['Mail.Read'],
+    enabled_tools: null,
+    preset_version: discovery ? DISCOVERY_PRESET_VERSION : 'essentials-v1',
+    enabled_tools_set: discovery ? DISCOVERY_META_TOOL_NAMES : presetFor('essentials-v1'),
+    sharepoint_domain: null,
+    rate_limits: null,
+    wrapped_dek: null,
+    slug: null,
+    disabled_at: null,
+    created_at: new Date(),
+    updated_at: new Date(),
+  } as TenantRow & { enabled_tools_set: ReadonlySet<string> };
+}
+
+async function parseJsonRpcResponse<T>(response: Response): Promise<T> {
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${text}`);
+  }
+  if (response.status === 202 || text.trim().length === 0) {
+    return undefined as T;
+  }
+
+  const contentType = response.headers.get('content-type') ?? '';
+  const payloadText = contentType.includes('text/event-stream')
+    ? parseSseData(text)
+    : text;
+  const payload = JSON.parse(payloadText) as {
+    result?: T;
+    error?: { code?: number; message?: string };
+  };
+  if (payload.error) {
+    throw new Error(payload.error.message ?? `JSON-RPC error ${payload.error.code}`);
+  }
+  return payload.result as T;
+}
+
+function parseSseData(text: string): string {
+  const dataLine = text.split('\n').find((line) => line.startsWith('data:'));
+  if (!dataLine) {
+    throw new Error(`SSE response missing data line: ${text}`);
+  }
+  return dataLine.slice('data:'.length).trim();
+}
