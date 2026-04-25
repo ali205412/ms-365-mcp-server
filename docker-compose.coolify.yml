@@ -75,6 +75,12 @@ services:
       MS365_MCP_ADMIN_APP_CLIENT_ID: ${MS365_MCP_ADMIN_APP_CLIENT_ID:-}
       MS365_MCP_ADMIN_GROUP_ID: ${MS365_MCP_ADMIN_GROUP_ID:-}
       NODE_ENV: production
+      # V8 heap cap: the per-request registration of the 42k-tool generated
+      # catalog peaks well above Node's ~2GB default x64 heap. Bumping to
+      # 8GB is comfortably under the host cgroup limit. Reduce when the
+      # tools/list pre-build refactor lands (per-tenant cached server
+      # instance instead of per-request createMcpServer).
+      NODE_OPTIONS: ${NODE_OPTIONS:---max-old-space-size=8192}
     command: ['--http', '3000', '--org-mode']
     expose:
       - '3000'

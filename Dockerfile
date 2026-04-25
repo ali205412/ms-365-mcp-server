@@ -53,6 +53,12 @@ COPY --from=builder --chown=nodejs:nodejs /app/package*.json ./
 COPY --from=builder --chown=nodejs:nodejs /app/bin/check-health.cjs ./bin/check-health.cjs
 
 ENV NODE_ENV=production
+# V8 heap cap for the release stage. Default Node x64 cap is ~2GB which
+# is tight for the per-request registration of the ~42k-tool generated
+# catalog. Operators can override at runtime (compose env / Coolify env)
+# without rebuilding the image. Reduce after the per-tenant cached
+# MCP server refactor lands.
+ENV NODE_OPTIONS=--max-old-space-size=8192
 
 USER nodejs
 
