@@ -19,10 +19,14 @@ function makeRedis() {
 
 async function makePool(): Promise<Pool> {
   const db = newDb();
+  let generated = 0;
   db.public.registerFunction({
     name: 'gen_random_uuid',
     returns: 'uuid',
-    implementation: () => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    implementation: () => {
+      generated += 1;
+      return `aaaaaaaa-aaaa-4aaa-8aaa-${String(generated).padStart(12, '0')}`;
+    },
   });
   const { Pool: PgMemPool } = db.adapters.createPg();
   const pool = new PgMemPool() as Pool;
@@ -44,6 +48,7 @@ async function makePool(): Promise<Pool> {
       actor text NOT NULL,
       action text NOT NULL,
       target text,
+      ip text,
       request_id text NOT NULL,
       result text NOT NULL,
       meta jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -182,6 +187,19 @@ describe('plan 07-10 — opt-in discovery migration CLI', () => {
       'mcp:agentic-events',
     ]);
     expect(redis.published[2]!.message).toContain('tools/list_changed');
+
+    const audit = await pool.query<{ actor: string; action: string; target: string; meta: unknown }>(
+      `SELECT actor, action, target, meta
+       FROM audit_log
+       WHERE tenant_id = $1 AND action = 'tenant.discovery-migrate'`,
+      [TENANT_ID]
+    );
+    expect(audit.rows).toHaveLength(1);
+    expect(audit.rows[0]!).toMatchObject({
+      actor: 'cli',
+      action: 'tenant.discovery-migrate',
+      target: TENANT_ID,
+    });
   });
 
   it('Test 4: existing tenants stay essentials-v1 until the CLI targets them', async () => {
