@@ -1144,12 +1144,16 @@ class MicrosoftGraphServer {
     // segment so downstream clients bind the right issuer. publicBase
     // (MS365_MCP_PUBLIC_URL) is the browser-facing origin for the authorize
     // endpoint; token endpoint stays on the request origin for s2s clients.
-    app.get('/t/:tenantId/.well-known/oauth-authorization-server', async (req, res) => {
-      const tenant = (req as Request & { tenant?: TenantRow }).tenant;
-      if (!tenant) {
-        res.status(404).json({ error: 'tenant_not_found' });
-        return;
-      }
+    //
+    // We expose BOTH discovery shapes for each metadata document:
+    //   - /t/:tenantId/.well-known/<suffix>     (OIDC-discovery shape, well-known
+    //                                            after path)
+    //   - /.well-known/<suffix>/t/:tenantId     (RFC 8414 §3.1 shape, well-known
+    //                                            between host and path)
+    // Different MCP clients try different forms; Claude.ai connectors follow
+    // RFC 8414 strictly. Both routes serve the same body via the same
+    // builders below.
+    const buildAuthServerMetadata = (tenant: TenantRow, req: Request): Record<string, unknown> => {
       const protocol = req.secure ? 'https' : 'http';
       const requestOrigin = `${protocol}://${req.get('host')}`;
       const browserBase = publicBase ?? requestOrigin;
@@ -1158,7 +1162,7 @@ class MicrosoftGraphServer {
       const scopes = tenant.allowed_scopes.length
         ? tenant.allowed_scopes
         : buildScopesFromEndpoints(this.options.orgMode, this.options.enabledTools);
-      res.json({
+      const metadata: Record<string, unknown> = {
         issuer: tenantBase,
         authorization_endpoint: `${tenantBase}/authorize`,
         token_endpoint: `${tokenBase}/token`,
@@ -1168,7 +1172,43 @@ class MicrosoftGraphServer {
         token_endpoint_auth_methods_supported: ['none'],
         code_challenge_methods_supported: ['S256'],
         scopes_supported: scopes,
-      });
+      };
+      // Advertise DCR (RFC 7591). The /register endpoint is mounted globally
+      // (not per-tenant) so we point at the requestOrigin's /register.
+      if (this.options.enableDynamicRegistration) {
+        metadata.registration_endpoint = `${requestOrigin}/register`;
+      }
+      return metadata;
+    };
+
+    const buildProtectedResourceMetadata = (
+      tenant: TenantRow,
+      req: Request
+    ): Record<string, unknown> => {
+      const protocol = req.secure ? 'https' : 'http';
+      const requestOrigin = `${protocol}://${req.get('host')}`;
+      const browserBase = publicBase ?? requestOrigin;
+      const tenantBase = `${browserBase}/t/${tenant.id}`;
+      const scopes = tenant.allowed_scopes.length
+        ? tenant.allowed_scopes
+        : buildScopesFromEndpoints(this.options.orgMode, this.options.enabledTools);
+      return {
+        resource: `${requestOrigin}/t/${tenant.id}/mcp`,
+        authorization_servers: [tenantBase],
+        scopes_supported: scopes,
+        bearer_methods_supported: ['header'],
+        resource_documentation: tenantBase,
+      };
+    };
+
+    // OIDC-discovery shape (well-known after path).
+    app.get('/t/:tenantId/.well-known/oauth-authorization-server', async (req, res) => {
+      const tenant = (req as Request & { tenant?: TenantRow }).tenant;
+      if (!tenant) {
+        res.status(404).json({ error: 'tenant_not_found' });
+        return;
+      }
+      res.json(buildAuthServerMetadata(tenant, req));
     });
 
     app.get('/t/:tenantId/.well-known/oauth-protected-resource', async (req, res) => {
@@ -1177,20 +1217,29 @@ class MicrosoftGraphServer {
         res.status(404).json({ error: 'tenant_not_found' });
         return;
       }
-      const protocol = req.secure ? 'https' : 'http';
-      const requestOrigin = `${protocol}://${req.get('host')}`;
-      const browserBase = publicBase ?? requestOrigin;
-      const tenantBase = `${browserBase}/t/${tenant.id}`;
-      const scopes = tenant.allowed_scopes.length
-        ? tenant.allowed_scopes
-        : buildScopesFromEndpoints(this.options.orgMode, this.options.enabledTools);
-      res.json({
-        resource: `${requestOrigin}/t/${tenant.id}/mcp`,
-        authorization_servers: [tenantBase],
-        scopes_supported: scopes,
-        bearer_methods_supported: ['header'],
-        resource_documentation: tenantBase,
-      });
+      res.json(buildProtectedResourceMetadata(tenant, req));
+    });
+
+    // RFC 8414 shape (well-known between host and path). These routes do NOT
+    // go through the `/t/:tenantId/*` prefix where loadTenant is mounted at
+    // line 1134, so we apply loadTenant inline. Both routes serve the same
+    // body as the OIDC-discovery-shape variants above.
+    app.get('/.well-known/oauth-authorization-server/t/:tenantId', loadTenant, async (req, res) => {
+      const tenant = (req as Request & { tenant?: TenantRow }).tenant;
+      if (!tenant) {
+        res.status(404).json({ error: 'tenant_not_found' });
+        return;
+      }
+      res.json(buildAuthServerMetadata(tenant, req));
+    });
+
+    app.get('/.well-known/oauth-protected-resource/t/:tenantId', loadTenant, async (req, res) => {
+      const tenant = (req as Request & { tenant?: TenantRow }).tenant;
+      if (!tenant) {
+        res.status(404).json({ error: 'tenant_not_found' });
+        return;
+      }
+      res.json(buildProtectedResourceMetadata(tenant, req));
     });
 
     // /t/:tenantId/authorize + /t/:tenantId/token — tenant-scoped OAuth from 03-06.
@@ -1473,6 +1522,16 @@ class MicrosoftGraphServer {
       const publicUrlHost = publicBase ? new URL(publicBase).hostname : null;
       const isProdMode = process.env.NODE_ENV === 'production';
 
+      // Plan 06+ DCR: third-party MCP connectors (Claude.ai, etc.) register
+      // redirect_uris on their own domain via /register. Without an explicit
+      // allowlist, the prod-mode validator rejects anything outside
+      // publicUrlHost. Operators set this CSV env to the hosts they trust
+      // for DCR (e.g. `claude.ai,chatgpt.com`).
+      const oauthRedirectHosts = (process.env.MS365_MCP_OAUTH_REDIRECT_HOSTS ?? '')
+        .split(',')
+        .map((h) => h.trim().toLowerCase())
+        .filter((h) => h.length > 0);
+
       // CORS policy (plan 01-07 / D-02 / SECUR-04). Dev mode echoes ACAO to
       // any http(s)://localhost:* / http(s)://127.0.0.1:* origin; prod mode
       // requires an exact allowlist match against MS365_MCP_CORS_ORIGINS
@@ -1547,11 +1606,14 @@ class MicrosoftGraphServer {
         // Plan 01-06: validate redirect_uris against the D-02 allowlist, use
         // crypto.randomBytes for client IDs, and scrub the info log body.
         // Factory documentation lives at src/server.ts createRegisterHandler.
+        // Plan 06+ DCR: extraAllowedHosts opens the validator to third-party
+        // MCP connectors whose redirect_uri lives off-host (Claude.ai etc.).
         app.post(
           '/register',
           createRegisterHandler({
             mode: isProdMode ? 'prod' : 'dev',
             publicUrlHost,
+            extraAllowedHosts: oauthRedirectHosts,
           })
         );
       }

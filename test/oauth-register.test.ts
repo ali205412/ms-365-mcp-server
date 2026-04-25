@@ -128,3 +128,85 @@ describe('validateRedirectUri — malformed input', () => {
     expect(result.ok).toBe(false);
   });
 });
+
+// ── extraAllowedHosts (DCR for third-party MCP connectors) ──────────────
+//
+// MCP DCR (RFC 7591) callers like the Claude.ai connector register
+// redirect_uri values on their OWN domain (e.g. claude.ai), not on the
+// gateway. Without an explicit per-host allowlist, prod mode rejects them.
+// `extraAllowedHosts` is the operator's escape hatch — a set of trusted
+// off-host DCR callbacks. Populated from MS365_MCP_OAUTH_REDIRECT_HOSTS.
+
+describe('validateRedirectUri — extraAllowedHosts (DCR)', () => {
+  const policy_prod_with_claude = {
+    mode: 'prod' as const,
+    publicUrlHost: 'mcp.example.com',
+    extraAllowedHosts: ['claude.ai'],
+  };
+
+  it('permits https://claude.ai/api/mcp/auth_callback when claude.ai is in extraAllowedHosts', () => {
+    expect(
+      validateRedirectUri('https://claude.ai/api/mcp/auth_callback', policy_prod_with_claude)
+    ).toEqual({ ok: true });
+  });
+
+  it('rejects https://evil.com/cb when not in extraAllowedHosts', () => {
+    const result = validateRedirectUri('https://evil.com/cb', policy_prod_with_claude);
+    expect(result.ok).toBe(false);
+  });
+
+  it('case-insensitive host match (CLAUDE.AI in env still matches claude.ai request)', () => {
+    expect(
+      validateRedirectUri('https://claude.ai/cb', {
+        mode: 'prod',
+        publicUrlHost: null,
+        extraAllowedHosts: ['CLAUDE.AI'],
+      })
+    ).toEqual({ ok: true });
+  });
+
+  it('rejects http://claude.ai/cb (only https is allowed via extraAllowedHosts)', () => {
+    const result = validateRedirectUri('http://claude.ai/cb', policy_prod_with_claude);
+    expect(result.ok).toBe(false);
+  });
+
+  it('exact-match only — does not allow subdomains (https://api.claude.ai rejected)', () => {
+    const result = validateRedirectUri('https://api.claude.ai/cb', policy_prod_with_claude);
+    expect(result.ok).toBe(false);
+  });
+
+  it('multiple hosts — both allowed', () => {
+    const policy = {
+      mode: 'prod' as const,
+      publicUrlHost: null,
+      extraAllowedHosts: ['claude.ai', 'chatgpt.com'],
+    };
+    expect(validateRedirectUri('https://claude.ai/cb', policy)).toEqual({ ok: true });
+    expect(validateRedirectUri('https://chatgpt.com/cb', policy)).toEqual({ ok: true });
+    expect(validateRedirectUri('https://other.com/cb', policy).ok).toBe(false);
+  });
+
+  it('empty / undefined extraAllowedHosts is treated as no extras (existing behaviour preserved)', () => {
+    const policy_undefined = {
+      mode: 'prod' as const,
+      publicUrlHost: 'mcp.example.com',
+    };
+    const policy_empty = {
+      mode: 'prod' as const,
+      publicUrlHost: 'mcp.example.com',
+      extraAllowedHosts: [] as readonly string[],
+    };
+    expect(validateRedirectUri('https://claude.ai/cb', policy_undefined).ok).toBe(false);
+    expect(validateRedirectUri('https://claude.ai/cb', policy_empty).ok).toBe(false);
+  });
+
+  it('publicUrlHost match still wins (no overlap break)', () => {
+    expect(
+      validateRedirectUri('https://mcp.example.com/cb', {
+        mode: 'prod',
+        publicUrlHost: 'mcp.example.com',
+        extraAllowedHosts: ['claude.ai'],
+      })
+    ).toEqual({ ok: true });
+  });
+});
