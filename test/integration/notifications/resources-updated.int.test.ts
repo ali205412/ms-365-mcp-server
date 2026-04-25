@@ -142,8 +142,10 @@ function auditRow(action: string): AuditRow {
   };
 }
 
-async function nextTick(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 10));
+async function nextTick(microtaskTurns = 5): Promise<void> {
+  for (let i = 0; i < microtaskTurns; i++) {
+    await Promise.resolve();
+  }
 }
 
 describe('Phase 7 Plan 07-08 Task 2 — resource subscriptions', () => {
