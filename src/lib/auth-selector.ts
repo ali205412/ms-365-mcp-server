@@ -29,6 +29,7 @@ import type { TenantRow } from './tenant/tenant-row.js';
 import type { TenantPool } from './tenant/tenant-pool.js';
 import { createBearerMiddleware } from './microsoft-auth.js';
 import { requestContext, getRequestTokens } from '../request-context.js';
+import { buildWwwAuthenticate } from './www-authenticate.js';
 import logger from '../logger.js';
 
 export interface AuthSelectorDeps {
@@ -138,12 +139,34 @@ export function createAuthSelectorMiddleware(
     //    available, the MCP request is unauthenticated. The client MUST
     //    navigate /authorize + POST /token first.
     if (tenant.mode === 'delegated') {
-      res.status(401).json({ error: 'delegated_flow_requires_prior_authorize' });
+      res
+        .status(401)
+        .set(
+          'WWW-Authenticate',
+          buildWwwAuthenticate({
+            req,
+            tenantId: tenant.id,
+            error: 'invalid_token',
+            errorDescription: 'delegated flow requires prior authorize',
+          })
+        )
+        .json({ error: 'delegated_flow_requires_prior_authorize' });
       return;
     }
 
     // 4. Bearer-mode tenant without an Authorization header — refuse rather
     //    than fall through to delegated behaviour.
-    res.status(401).json({ error: 'bearer_token_required' });
+    res
+      .status(401)
+      .set(
+        'WWW-Authenticate',
+        buildWwwAuthenticate({
+          req,
+          tenantId: tenant.id,
+          error: 'invalid_token',
+          errorDescription: 'bearer token required',
+        })
+      )
+      .json({ error: 'bearer_token_required' });
   };
 }

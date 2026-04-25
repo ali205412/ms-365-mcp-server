@@ -25,6 +25,7 @@ import { decodeJwt } from 'jose';
 import logger from '../logger.js';
 import { getCloudEndpoints, type CloudType } from '../cloud-config.js';
 import { requestContext, getRequestTokens } from '../request-context.js';
+import { buildWwwAuthenticate } from './www-authenticate.js';
 
 /**
  * Decode-only bearer middleware (plan 03-06, AUTH-03, D-13).
@@ -61,33 +62,69 @@ export function createBearerMiddleware(): (
     }
     const token = authHeader.substring(7);
 
+    const urlTenantIdRaw = req.params?.tenantId;
+    const urlTenantIdEarly = Array.isArray(urlTenantIdRaw) ? urlTenantIdRaw[0] : urlTenantIdRaw;
+    const tenantForChallenge =
+      typeof urlTenantIdEarly === 'string' && urlTenantIdEarly ? urlTenantIdEarly : undefined;
+
     let tid: string;
     try {
       const payload = decodeJwt(token);
       if (typeof payload.tid !== 'string') {
-        res.status(401).json({ error: 'invalid_token', detail: 'missing_tid_claim' });
+        res
+          .status(401)
+          .set(
+            'WWW-Authenticate',
+            buildWwwAuthenticate({
+              req,
+              tenantId: tenantForChallenge,
+              error: 'invalid_token',
+              errorDescription: 'missing tid claim',
+            })
+          )
+          .json({ error: 'invalid_token', detail: 'missing_tid_claim' });
         return;
       }
       tid = payload.tid;
     } catch (err) {
       logger.info({ err: (err as Error).message }, 'bearer: JWT decode failed');
-      res.status(401).json({ error: 'invalid_token' });
+      res
+        .status(401)
+        .set(
+          'WWW-Authenticate',
+          buildWwwAuthenticate({
+            req,
+            tenantId: tenantForChallenge,
+            error: 'invalid_token',
+            errorDescription: 'malformed JWT',
+          })
+        )
+        .json({ error: 'invalid_token' });
       return;
     }
 
-    const urlTenantIdRaw = req.params?.tenantId;
-    const urlTenantId = Array.isArray(urlTenantIdRaw) ? urlTenantIdRaw[0] : urlTenantIdRaw;
-    if (!urlTenantId || typeof urlTenantId !== 'string') {
+    if (!tenantForChallenge) {
       // Bearer flows in Phase 3 are always per-tenant — refuse a bearer
       // request that arrived outside a tenant-scoped route.
       res.status(400).json({ error: 'bearer_requires_tenant_context' });
       return;
     }
-    if (tid.toLowerCase() !== urlTenantId.toLowerCase()) {
-      res.status(401).json({
-        error: 'tenant_mismatch',
-        detail: 'JWT tid does not match URL tenantId',
-      });
+    if (tid.toLowerCase() !== tenantForChallenge.toLowerCase()) {
+      res
+        .status(401)
+        .set(
+          'WWW-Authenticate',
+          buildWwwAuthenticate({
+            req,
+            tenantId: tenantForChallenge,
+            error: 'invalid_token',
+            errorDescription: 'JWT tid does not match URL tenantId',
+          })
+        )
+        .json({
+          error: 'tenant_mismatch',
+          detail: 'JWT tid does not match URL tenantId',
+        });
       return;
     }
 

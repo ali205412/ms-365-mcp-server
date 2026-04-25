@@ -38,12 +38,19 @@ function makeReqRes(
   authHeader: string | undefined,
   tenantId: string | undefined
 ): { req: Request; res: Response; next: ReturnType<typeof vi.fn> } {
+  const headers: Record<string, string> = { host: 'mcp.test.local' };
+  if (authHeader) headers.authorization = authHeader;
   const req = {
-    headers: authHeader ? { authorization: authHeader } : {},
+    protocol: 'https',
+    headers,
     params: tenantId !== undefined ? { tenantId } : {},
+    get(name: string): string | undefined {
+      return headers[name.toLowerCase()];
+    },
   } as unknown as Request;
   const res = {
     status: vi.fn().mockReturnThis(),
+    set: vi.fn().mockReturnThis(),
     json: vi.fn().mockReturnThis(),
   } as unknown as Response;
   const next = vi.fn() as unknown as ReturnType<typeof vi.fn>;
@@ -202,6 +209,54 @@ describe('createBearerMiddleware (AUTH-03)', () => {
       expect.objectContaining({ error: 'bearer_requires_tenant_context' })
     );
     expect(next).not.toHaveBeenCalled();
+  });
+
+  // ── WWW-Authenticate header (RFC 9728 / MCP 2025-06-18) ────────────────
+  // Each 401 emit site MUST set the WWW-Authenticate header pointing at
+  // the OAuth Protected Resource Metadata document so MCP clients can
+  // discover the auth flow. Without this header, Claude.ai-style
+  // connectors fail with "Couldn't reach the MCP server".
+
+  it('Test 10: missing tid claim → 401 sets WWW-Authenticate with resource_metadata', async () => {
+    const jwt = await makeJwt({ sub: 'no-tid' });
+    const mw = createBearerMiddleware();
+    const { req, res, next } = makeReqRes(`Bearer ${jwt}`, 'tenant-x');
+
+    mw(req, res, next as unknown as NextFunction);
+
+    expect(res.set).toHaveBeenCalledWith(
+      'WWW-Authenticate',
+      expect.stringMatching(
+        /^Bearer .*resource_metadata=".+\/\.well-known\/oauth-protected-resource"/
+      )
+    );
+    const headerValue = (res.set as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1] as string;
+    expect(headerValue).toContain('/t/tenant-x/.well-known/oauth-protected-resource');
+    expect(headerValue).toContain('error="invalid_token"');
+  });
+
+  it('Test 11: malformed JWT → 401 sets WWW-Authenticate', () => {
+    const mw = createBearerMiddleware();
+    const { req, res, next } = makeReqRes('Bearer not.a.jwt', 'tenant-y');
+
+    mw(req, res, next as unknown as NextFunction);
+
+    const headerValue = (res.set as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1] as string;
+    expect(headerValue).toMatch(/^Bearer /);
+    expect(headerValue).toContain('/t/tenant-y/.well-known/oauth-protected-resource');
+    expect(headerValue).toContain('error="invalid_token"');
+  });
+
+  it('Test 12: tenant_mismatch → 401 sets WWW-Authenticate with URL tenantId (not the JWT tid)', async () => {
+    const jwt = await makeJwt({ tid: 'jwt-tid' });
+    const mw = createBearerMiddleware();
+    const { req, res, next } = makeReqRes(`Bearer ${jwt}`, 'url-tid');
+
+    mw(req, res, next as unknown as NextFunction);
+
+    const headerValue = (res.set as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1] as string;
+    expect(headerValue).toContain('/t/url-tid/.well-known/oauth-protected-resource');
+    expect(headerValue).not.toContain('/t/jwt-tid/');
   });
 });
 
