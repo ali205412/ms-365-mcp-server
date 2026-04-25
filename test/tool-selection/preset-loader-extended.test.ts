@@ -10,9 +10,9 @@
  *     ReadonlySet that is Object.isFrozen.
  *   - Unknown versions still resolve to the same frozen EMPTY_PRESET
  *     (fail-closed; T-05-06 + T-5.1-04 mitigation).
- *   - KNOWN_PRESET_VERSIONS lists exactly the 6 expected names.
- *   - DEFAULT_PRESET_VERSION stays 'essentials-v1' — plan 05.1-07 does NOT
- *     change the fresh-tenant default.
+ *   - KNOWN_PRESET_VERSIONS lists exactly the 7 expected names after
+ *     discovery-v1 is added in Phase 7.
+ *   - DEFAULT_PRESET_VERSION is discovery-v1 for fresh tenant create paths.
  *   - The 5 per-product `*_OPS` re-exports are all defined ReadonlySet
  *     instances, even when the underlying JSON has not yet been compiled
  *     (stub frozen Sets from generated-index.ts preserve fail-closed).
@@ -31,12 +31,13 @@ import {
 } from '../../src/lib/tool-selection/preset-loader.js';
 
 describe('plan 05.1-07 — preset-loader extended resolution', () => {
-  it('DEFAULT_PRESET_VERSION stays essentials-v1 (plan does NOT change fresh-tenant default)', () => {
-    expect(DEFAULT_PRESET_VERSION).toBe('essentials-v1');
+  it('DEFAULT_PRESET_VERSION is discovery-v1 for fresh tenant create paths', () => {
+    expect(DEFAULT_PRESET_VERSION).toBe('discovery-v1');
   });
 
-  it('KNOWN_PRESET_VERSIONS enumerates exactly the 6 preset names', () => {
+  it('KNOWN_PRESET_VERSIONS enumerates exactly the 7 preset names', () => {
     expect(KNOWN_PRESET_VERSIONS).toEqual([
+      'discovery-v1',
       'essentials-v1',
       'powerbi-essentials',
       'pwrapps-essentials',
@@ -48,6 +49,7 @@ describe('plan 05.1-07 — preset-loader extended resolution', () => {
   });
 
   it.each([
+    ['discovery-v1'],
     ['essentials-v1'],
     ['powerbi-essentials'],
     ['pwrapps-essentials'],
