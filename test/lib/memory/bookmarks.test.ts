@@ -8,6 +8,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { DataType, newDb } from 'pg-mem';
 import type { Pool } from 'pg';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import express from 'express';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { __setPoolForTesting } from '../../../src/lib/postgres.js';
 import {
   deleteBookmark,
@@ -15,6 +19,12 @@ import {
   listBookmarks,
   upsertBookmark,
 } from '../../../src/lib/memory/bookmarks.js';
+import { registerBookmarkTools } from '../../../src/lib/memory/bookmark-tools.js';
+import { createMemoryBookmarkRoutes } from '../../../src/lib/admin/memory-bookmarks.js';
+import { requestContext } from '../../../src/request-context.js';
+import { MemoryRedisFacade } from '../../../src/lib/redis-facade.js';
+import { TOOL_SELECTION_INVALIDATE_CHANNEL } from '../../../src/lib/tool-selection/tool-selection-invalidation.js';
+import { AGENTIC_EVENTS_CHANNEL } from '../../../src/lib/mcp-notifications/events.js';
 
 const TENANT_A = '11111111-1111-4111-8111-111111111111';
 const TENANT_B = '22222222-2222-4222-8222-222222222222';
@@ -52,6 +62,98 @@ async function installSchema(pool: Pool): Promise<void> {
       ON tenant_tool_bookmarks (tenant_id);
   `);
   await pool.query(`INSERT INTO tenants (id) VALUES ($1), ($2)`, [TENANT_A, TENANT_B]);
+}
+
+interface CallToolResult {
+  content: Array<{ type: 'text'; text: string }>;
+  isError?: boolean;
+}
+
+async function callTool(
+  server: McpServer,
+  name: string,
+  args: Record<string, unknown>
+): Promise<CallToolResult> {
+  const registered = (
+    server as unknown as {
+      _registeredTools: Record<
+        string,
+        { handler: (args: unknown, extra: unknown) => Promise<CallToolResult> }
+      >;
+    }
+  )._registeredTools;
+  const tool = registered[name];
+  if (!tool || typeof tool.handler !== 'function') {
+    throw new Error(`tool "${name}" not registered on test McpServer`);
+  }
+  return tool.handler(args, { requestId: 'test' });
+}
+
+async function collectBookmarkPublishEvents(
+  redis: MemoryRedisFacade,
+  fn: () => Promise<void>
+): Promise<{ invalidations: string[]; agenticEvents: Array<{ type: string; uris?: string[] }> }> {
+  const invalidations: string[] = [];
+  const agenticEvents: Array<{ type: string; uris?: string[] }> = [];
+  redis.on('message', (channel, message) => {
+    if (channel === TOOL_SELECTION_INVALIDATE_CHANNEL) {
+      invalidations.push(message);
+    }
+    if (channel === AGENTIC_EVENTS_CHANNEL) {
+      agenticEvents.push(JSON.parse(message) as { type: string; uris?: string[] });
+    }
+  });
+  await redis.subscribe(TOOL_SELECTION_INVALIDATE_CHANNEL, AGENTIC_EVENTS_CHANNEL);
+  await fn();
+  return { invalidations, agenticEvents };
+}
+
+interface HttpResult {
+  status: number;
+  body: unknown;
+}
+
+async function startBookmarkAdminServer(
+  redis: MemoryRedisFacade,
+  tenantScoped: string | null = null
+): Promise<{ url: string; close: () => Promise<void> }> {
+  const app = express();
+  app.use(express.json() as unknown as express.RequestHandler);
+  app.use((req, _res, next) => {
+    (req as unknown as {
+      admin?: { actor: string; source: 'entra'; tenantScoped: string | null };
+    }).admin = { actor: 'admin@example.com', source: 'entra', tenantScoped };
+    (req as express.Request & { id?: string }).id = 'req-bookmark-admin';
+    next();
+  });
+  app.use('/admin/tenants', createMemoryBookmarkRoutes({ redis } as never));
+  const server = await new Promise<http.Server>((resolve) => {
+    const s = http.createServer(app).listen(0, () => resolve(s));
+  });
+  const port = (server.address() as AddressInfo).port;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    close: async () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      }),
+  };
+}
+
+async function doJson(method: string, url: string, body?: unknown): Promise<HttpResult> {
+  const res = await fetch(url, {
+    method,
+    headers: { 'content-type': 'application/json' },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  const text = await res.text();
+  let parsed: unknown = text;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    // plain text response
+  }
+  return { status: res.status, body: parsed };
 }
 
 describe('Phase 7 Plan 07-03 Task 1 — bookmark service', () => {
@@ -158,5 +260,179 @@ describe('Phase 7 Plan 07-03 Task 1 — bookmark service', () => {
       ['me.sendMail', 1],
     ]);
     expect([...countsB.entries()]).toEqual([['me.sendMail', 1]]);
+  });
+});
+
+describe('Phase 7 Plan 07-03 Task 2 — bookmark MCP tools', () => {
+  let pool: Pool;
+  let redis: MemoryRedisFacade;
+  let server: McpServer;
+
+  beforeEach(async () => {
+    pool = makePool();
+    await installSchema(pool);
+    __setPoolForTesting(pool);
+    redis = new MemoryRedisFacade();
+    server = new McpServer({ name: 'bookmark-test', version: '0.0.0' });
+    registerBookmarkTools(server, { redis });
+  });
+
+  afterEach(async () => {
+    __setPoolForTesting(null);
+    await redis.quit();
+    await pool.end();
+  });
+
+  it('bookmark-tool requires alias and fails closed when tenant context is absent', async () => {
+    const missingAlias = await requestContext.run({ tenantId: TENANT_A }, () =>
+      callTool(server, 'bookmark-tool', {})
+    );
+    expect(missingAlias.isError).toBe(true);
+    expect(JSON.parse(missingAlias.content[0].text)).toMatchObject({ error: 'invalid_bookmark' });
+
+    const noTenant = await callTool(server, 'bookmark-tool', { alias: 'me.sendMail' });
+    expect(noTenant.isError).toBe(true);
+    expect(JSON.parse(noTenant.content[0].text)).toMatchObject({ error: 'tenant_required' });
+  });
+
+  it('bookmark-tool persists a row and publishes invalidation plus bookmarks.json update', async () => {
+    const events = await collectBookmarkPublishEvents(redis, async () => {
+      const result = await requestContext.run(
+        {
+          tenantId: TENANT_A,
+          enabledToolsSet: new Set(['bookmark-tool']),
+          presetVersion: 'discovery-v1',
+        },
+        () =>
+          callTool(server, 'bookmark-tool', {
+            alias: 'me.sendMail',
+            label: 'send mail',
+            note: 'known good',
+          })
+      );
+      expect(result.isError).toBeFalsy();
+      expect(JSON.parse(result.content[0].text)).toMatchObject({
+        alias: 'me.sendMail',
+        label: 'send mail',
+        note: 'known good',
+      });
+    });
+
+    expect(await listBookmarks(TENANT_A)).toHaveLength(1);
+    expect(events.invalidations).toEqual([TENANT_A]);
+    expect(events.agenticEvents).toContainEqual(
+      expect.objectContaining({
+        type: 'resources/updated',
+        uris: [`mcp://tenant/${TENANT_A}/bookmarks.json`],
+      })
+    );
+  });
+
+  it('list-bookmarks accepts optional filter and returns Bookmark[]', async () => {
+    await upsertBookmark(TENANT_A, { alias: 'me.sendMail', label: 'mail' });
+    await upsertBookmark(TENANT_A, { alias: 'me.ListMessages', label: 'inbox' });
+
+    const result = await requestContext.run(
+      {
+        tenantId: TENANT_A,
+        enabledToolsSet: new Set(['list-bookmarks']),
+        presetVersion: 'discovery-v1',
+      },
+      () => callTool(server, 'list-bookmarks', { filter: 'mail' })
+    );
+
+    expect(result.isError).toBeFalsy();
+    const body = JSON.parse(result.content[0].text) as { bookmarks: Array<{ alias: string }> };
+    expect(body.bookmarks.map((b) => b.alias)).toEqual(['me.sendMail']);
+  });
+
+  it('unbookmark-tool accepts label_or_alias and returns { deleted: boolean }', async () => {
+    await upsertBookmark(TENANT_A, { alias: 'me.sendMail', label: 'send mail' });
+
+    const result = await requestContext.run(
+      {
+        tenantId: TENANT_A,
+        enabledToolsSet: new Set(['unbookmark-tool']),
+        presetVersion: 'discovery-v1',
+      },
+      () => callTool(server, 'unbookmark-tool', { label_or_alias: 'send mail' })
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(result.content[0].text)).toEqual({ deleted: true });
+    expect(await listBookmarks(TENANT_A)).toEqual([]);
+  });
+});
+
+describe('Phase 7 Plan 07-03 Task 2 — admin bookmark subrouter', () => {
+  let pool: Pool;
+  let redis: MemoryRedisFacade;
+
+  beforeEach(async () => {
+    pool = makePool();
+    await installSchema(pool);
+    __setPoolForTesting(pool);
+    redis = new MemoryRedisFacade();
+  });
+
+  afterEach(async () => {
+    __setPoolForTesting(null);
+    await redis.quit();
+    await pool.end();
+  });
+
+  it('POST /:id/bookmarks accepts an array body and persists tenant-scoped bookmarks', async () => {
+    const { url, close } = await startBookmarkAdminServer(redis);
+    try {
+      const result = await doJson('POST', `${url}/admin/tenants/${TENANT_A}/bookmarks`, [
+        { alias: 'me.sendMail', label: 'send mail', note: 'admin seed' },
+      ]);
+
+      expect(result.status).toBe(200);
+      expect(result.body).toMatchObject({
+        bookmarks: [
+          {
+            alias: 'me.sendMail',
+            label: 'send mail',
+            note: 'admin seed',
+          },
+        ],
+      });
+      expect(await listBookmarks(TENANT_A)).toHaveLength(1);
+      expect(await listBookmarks(TENANT_B)).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+
+  it('DELETE /:id/bookmarks/:bookmarkId deletes only that tenant bookmark', async () => {
+    const bookmarkA = await upsertBookmark(TENANT_A, {
+      alias: 'me.sendMail',
+      label: 'send mail',
+    });
+    await upsertBookmark(TENANT_B, {
+      alias: 'me.sendMail',
+      label: 'send mail',
+    });
+    const { url, close } = await startBookmarkAdminServer(redis);
+    try {
+      const denied = await doJson(
+        'DELETE',
+        `${url}/admin/tenants/${TENANT_B}/bookmarks/${bookmarkA.id}`
+      );
+      expect(denied.status).toBe(200);
+      expect(denied.body).toEqual({ deleted: false });
+
+      const result = await doJson(
+        'DELETE',
+        `${url}/admin/tenants/${TENANT_A}/bookmarks/${bookmarkA.id}`
+      );
+      expect(result.status).toBe(200);
+      expect(result.body).toEqual({ deleted: true });
+      expect(await listBookmarks(TENANT_A)).toEqual([]);
+      expect(await listBookmarks(TENANT_B)).toHaveLength(1);
+    } finally {
+      await close();
+    }
   });
 });
