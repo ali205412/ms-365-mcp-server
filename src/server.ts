@@ -397,6 +397,16 @@ export function createTokenHandler(config: TokenHandlerConfig) {
 export interface AuthorizeHandlerConfig {
   pkceStore: PkceStore;
   pgPool?: import('pg').Pool;
+  /**
+   * Hosts allowed in the redirect_uri scheme/host check at the entry of
+   * /authorize, in addition to the tenant's per-tenant DB allowlist.
+   * Sourced from `MS365_MCP_OAUTH_REDIRECT_HOSTS` (CSV) at server start
+   * and shared with the DCR /register handler. Without this, the
+   * scheme-check call at server.ts:512 (which intentionally passes
+   * `publicUrlHost: null`) rejects every prod-mode HTTPS redirect_uri
+   * before reaching the tenant DB allowlist.
+   */
+  extraAllowedHosts?: readonly string[];
 }
 
 /**
@@ -469,7 +479,7 @@ function normalizeRedirectUri(u: string): string {
 }
 
 export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
-  const { pkceStore, pgPool } = config;
+  const { pkceStore, pgPool, extraAllowedHosts } = config;
 
   // Plan 03-10 helper: fire-and-forget audit write. Never delays OAuth
   // response. writeAuditStandalone internally catches DB errors and emits
@@ -508,8 +518,16 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
 
     const redirectUri = String(req.query.redirect_uri ?? '');
     // Two-layer allowlist check (AUTH-06 layered defence):
-    //   a) Phase 1 scheme validator — rejects javascript:, data:, file:, ...
-    const schemeCheck = validateRedirectUri(redirectUri, { mode: 'prod', publicUrlHost: null });
+    //   a) Phase 1 scheme/host validator — rejects javascript:, data:,
+    //      file:, plus any host outside the operator-configured set
+    //      (publicUrlHost via the per-tenant token endpoint, or the
+    //      env-driven extraAllowedHosts shared with DCR for third-party
+    //      MCP connectors).
+    const schemeCheck = validateRedirectUri(redirectUri, {
+      mode: 'prod',
+      publicUrlHost: null,
+      extraAllowedHosts,
+    });
     if (!schemeCheck.ok) {
       emitAudit(
         tenant.id,
@@ -986,7 +1004,8 @@ class MicrosoftGraphServer {
    */
   private async mountTenantRoutes(
     app: import('express').Express,
-    publicBase: string | null
+    publicBase: string | null,
+    oauthRedirectHosts: readonly string[] = []
   ): Promise<void> {
     let pg: import('pg').Pool;
     try {
@@ -1247,7 +1266,11 @@ class MicrosoftGraphServer {
     // oauth.token.exchange audit rows via writeAuditStandalone.
     app.get(
       '/t/:tenantId/authorize',
-      createAuthorizeHandler({ pkceStore: this.pkceStore, pgPool: pg })
+      createAuthorizeHandler({
+        pkceStore: this.pkceStore,
+        pgPool: pg,
+        extraAllowedHosts: oauthRedirectHosts,
+      })
     );
     app.post(
       '/t/:tenantId/token',
@@ -1554,7 +1577,7 @@ class MicrosoftGraphServer {
       // — stdio / dev deployments without those can skip the mount entirely.
       // isHttpMode is already guaranteed here (we are inside `if
       // (this.options.http)`), so dependency resolution below is safe.
-      await this.mountTenantRoutes(app, publicBase);
+      await this.mountTenantRoutes(app, publicBase, oauthRedirectHosts);
 
       const oauthProvider = new MicrosoftOAuthProvider(this.authManager, this.secrets!);
 
