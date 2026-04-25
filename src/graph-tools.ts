@@ -610,7 +610,20 @@ export function registerGraphTools(
   orgMode: boolean = false,
   authManager?: AuthManager,
   multiAccount: boolean = false,
-  accountNames: string[] = []
+  accountNames: string[] = [],
+  /**
+   * Per-tenant alias allowlist. When provided AND non-empty, ONLY tools
+   * whose alias is in the set are registered — filtering happens BEFORE
+   * Zod schemas are built so the per-request memory + CPU cost is
+   * proportional to the tenant's enabled-tools size, NOT to the full
+   * generated catalog (~42k entries). Resolved upstream from
+   * `tenants.enabled_tools` text (DSL: `+preset:foo,workload:*,...`)
+   * via `computeEnabledToolsSet` in lib/tool-selection/enabled-tools-parser.ts.
+   *
+   * Pass `undefined` to keep the legacy "register all" behaviour (stdio
+   * mode, single-tenant HTTP, tests).
+   */
+  enabledToolsSet?: ReadonlySet<string>
 ): number {
   let enabledToolsRegex: RegExp | undefined;
   if (enabledToolsPattern) {
@@ -622,11 +635,28 @@ export function registerGraphTools(
     }
   }
 
+  const useSetFilter = enabledToolsSet !== undefined && enabledToolsSet.size > 0;
+  if (useSetFilter) {
+    logger.info(
+      { allowlistSize: enabledToolsSet!.size },
+      'Per-tenant enabled_tools_set provided — registering only allowed aliases'
+    );
+  }
+
   let registeredCount = 0;
   let skippedCount = 0;
   let failedCount = 0;
 
   for (const tool of api.endpoints) {
+    // Per-tenant allowlist gate FIRST — cheapest filter, runs before any
+    // Zod schema build for the tool, before endpoint metadata lookup.
+    // Cuts the inner loop work from ~42k iterations to the tenant's
+    // enabled-tools size when the set is supplied.
+    if (useSetFilter && !enabledToolsSet!.has(tool.alias)) {
+      skippedCount++;
+      continue;
+    }
+
     const endpointConfig = endpointsMap.get(tool.alias);
     if (!orgMode && endpointConfig && !endpointConfig.scopes && endpointConfig.workScopes) {
       logger.info(`Skipping work account tool ${tool.alias} - not in org mode`);

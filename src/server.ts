@@ -923,12 +923,15 @@ class MicrosoftGraphServer {
    * (stdio mode + HTTP mode's legacy /mcp path which 03-09 retires).
    */
   createMcpServer(tenant?: TenantRow): McpServer {
-    // `tenant` is currently consumed by Plan 05-05's tools/list filter wrap
-    // below — the filter reads from AsyncLocalStorage at request time, so
-    // the tenant row here is informational only (future plans may capture
-    // it for per-tenant metrics / audit wiring). Keep the param to preserve
-    // the factory signature that 03-09's buildMcpServer closure depends on.
-    void tenant;
+    // Per-tenant allowlist for tool registration. The augmented
+    // `req.tenant` shape from loadTenant carries `enabled_tools_set` —
+    // a frozen Set of aliases derived from `tenants.enabled_tools` text
+    // + `preset_version`. Passing it down to registerGraphTools turns
+    // the inner registration loop from "iterate all 42k generated tools"
+    // into "iterate ~tenant-allowlist-size tools", which keeps per-request
+    // heap usage proportional to what the tenant actually exposes.
+    const enabledToolsSet = (tenant as { enabled_tools_set?: ReadonlySet<string> } | undefined)
+      ?.enabled_tools_set;
 
     const server = new McpServer(
       {
@@ -968,7 +971,8 @@ class MicrosoftGraphServer {
         this.options.orgMode,
         this.authManager,
         this.multiAccount,
-        this.accountNames
+        this.accountNames,
+        enabledToolsSet
       );
     }
 
@@ -1050,7 +1054,15 @@ class MicrosoftGraphServer {
 
     const loadTenant = createLoadTenantMiddleware({ pool: pg });
 
-    // Subscribe to the pub/sub channel so admin mutations in Phase 4 propagate
+    // Per-tenant McpServer cache. The MCP server holds the registered
+    // tool list (Zod schemas + handlers) for a tenant; building it
+    // requires walking the generated catalog (~42k entries) — too heavy
+    // to repeat per request. We build once on first use, reuse on every
+    // subsequent request for the same tenant, and evict when either
+    // tenant-invalidate (tenant row mutated) or tool-selection-invalidate
+    // (enabled_tools or preset_version mutated) fires for that tenant.
+    // Stdio mode keeps using `this.server` (legacy single-server path).
+    const mcpServerCache = new Map<string, McpServer>();
     // to our LRU. Failure to subscribe (Redis partition) logs + continues —
     // the 60s TTL still bounds staleness.
     try {
@@ -1067,6 +1079,7 @@ class MicrosoftGraphServer {
         evict: (tenantId: string) => {
           loadTenant.evict(tenantId);
           tenantPool.evict(tenantId);
+          mcpServerCache.delete(tenantId);
         },
       });
       logger.info('Phase 3 tenant routes: subscribed to mcp:tenant-invalidate');
@@ -1095,7 +1108,14 @@ class MicrosoftGraphServer {
           ? (redis as { duplicate: () => typeof redis }).duplicate()
           : redis;
       await subscribeToToolSelectionInvalidation(subscriberClient, {
-        invalidate: (tenantId: string) => discoveryCache.invalidate(tenantId),
+        invalidate: (tenantId: string) => {
+          discoveryCache.invalidate(tenantId);
+          // enabled_tools_set is baked into the tenant's cached McpServer
+          // at registration time, so a tool-selection mutation MUST evict
+          // the server too — otherwise the next /mcp call replays the old
+          // tool surface until the next tenant-invalidate.
+          mcpServerCache.delete(tenantId);
+        },
       });
       logger.info('Plan 05-06 tool-selection routes: subscribed to mcp:tool-selection-invalidate');
     } catch (err) {
@@ -1294,7 +1314,17 @@ class MicrosoftGraphServer {
     // so tool registration is identical across transports. The closure
     // captures `this` + tenantPool + redis from the bootstrap scope.
     const authSelector = createAuthSelectorMiddleware({ tenantPool });
-    const buildMcpServer = (tenant: TenantRow): McpServer => this.createMcpServer(tenant);
+    // Cached factory — `this.createMcpServer(tenant)` is expensive (registers
+    // every tool in the tenant's enabled_tools_set), so memoize per tenantId
+    // and let the invalidation subscribers drop entries on tenant /
+    // tool-selection mutations.
+    const buildMcpServer = (tenant: TenantRow): McpServer => {
+      const cached = mcpServerCache.get(tenant.id);
+      if (cached) return cached;
+      const fresh = this.createMcpServer(tenant);
+      mcpServerCache.set(tenant.id, fresh);
+      return fresh;
+    };
 
     // Plan 05-04 TENANT-08: seed AsyncLocalStorage with tenantId +
     // enabled_tools_set + preset_version BEFORE authSelector runs. The auth
