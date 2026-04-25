@@ -37,9 +37,13 @@ async function makePool(): Promise<Pool> {
   db.registerExtension('pgcrypto', () => {});
   const { Pool: PgMemPool } = db.adapters.createPg();
   const pool = new PgMemPool() as Pool;
-  // Apply just the tenants migration — create-tenant only needs the table.
+  // Apply the tenants table plus the preset_version column used by create-tenant.
   const files = readdirSync(MIGRATIONS_DIR)
-    .filter((f) => f.startsWith('20260501000000') && f.endsWith('.sql'))
+    .filter(
+      (f) =>
+        (f.startsWith('20260501000000') || f === '20260702000000_preset_version.sql') &&
+        f.endsWith('.sql')
+    )
     .sort();
   for (const f of files) {
     const sql = readFileSync(path.join(MIGRATIONS_DIR, f), 'utf8');
@@ -86,12 +90,18 @@ describe('plan 03-01 + 03-04 — bin/create-tenant.mjs', () => {
     );
     expect(result).toEqual({ id, wrappedDek: 'set' });
 
-    const r = await pool.query<{ id: string; mode: string; wrapped_dek: unknown }>(
-      `SELECT id, mode, wrapped_dek FROM tenants WHERE id = $1`,
+    const r = await pool.query<{
+      id: string;
+      mode: string;
+      wrapped_dek: unknown;
+      preset_version: string;
+    }>(
+      `SELECT id, mode, wrapped_dek, preset_version FROM tenants WHERE id = $1`,
       [id]
     );
     expect(r.rows).toHaveLength(1);
     expect(r.rows[0]!.mode).toBe('delegated');
+    expect(r.rows[0]!.preset_version).toBe('discovery-v1');
     expect(r.rows[0]!.wrapped_dek).not.toBeNull();
 
     const envelope =
@@ -176,6 +186,55 @@ describe('plan 03-01 + 03-04 — bin/create-tenant.mjs', () => {
     );
     expect(r.rows[0]!.slug).toBe('example-corp');
     expect(r.rows[0]!.cloud_type).toBe('china');
+  });
+
+  it('defaults new CLI tenants to discovery-v1 and preserves explicit essentials-v1', async () => {
+    const discoveryId = '77777777-7777-4777-8777-777777777777';
+    await createTenantMain(
+      [`--id=${discoveryId}`, '--client-id=c', '--tenant-id=t', '--mode=delegated'],
+      deps
+    );
+
+    const staticId = '88888888-8888-4888-8888-888888888888';
+    await createTenantMain(
+      [
+        `--id=${staticId}`,
+        '--client-id=c',
+        '--tenant-id=t',
+        '--mode=delegated',
+        '--preset-version=essentials-v1',
+      ],
+      deps
+    );
+
+    const { rows } = await pool.query<{ id: string; preset_version: string }>(
+      `SELECT id, preset_version FROM tenants WHERE id IN ($1, $2) ORDER BY id`,
+      [discoveryId, staticId]
+    );
+    expect(rows).toEqual([
+      { id: discoveryId, preset_version: 'discovery-v1' },
+      { id: staticId, preset_version: 'essentials-v1' },
+    ]);
+  });
+
+  it('rejects invalid --preset-version values before insert', async () => {
+    await expect(
+      createTenantMain(
+        [
+          '--id=99999999-9999-4999-8999-999999999999',
+          '--client-id=c',
+          '--tenant-id=t',
+          '--mode=delegated',
+          '--preset-version=ESSENTIALS/V1!',
+        ],
+        deps
+      )
+    ).rejects.toThrow(/invalid --preset-version/);
+
+    const { rows } = await pool.query<{ count: string }>(
+      'SELECT COUNT(*)::text AS count FROM tenants'
+    );
+    expect(rows[0]!.count).toBe('0');
   });
 
   it('wrapped_dek contains no plaintext DEK bytes (SC#5 baseline)', async () => {
