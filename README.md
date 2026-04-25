@@ -10,13 +10,10 @@ Enterprise Microsoft 365 MCP gateway for AI assistants. The current runtime is a
 
 Maintained at [ali205412/ms-365-mcp-server](https://github.com/ali205412/ms-365-mcp-server). The published container image is `ghcr.io/ali205412/ms-365-mcp-server:latest`.
 
-Originally forked from [softeria/ms-365-mcp-server](https://github.com/softeria/ms-365-mcp-server), which owns the `@softeria/ms-365-mcp-server` npm package and the legacy single-user CLI path.
-
 ## What It Provides
 
 - Multi-tenant MCP over Streamable HTTP at `/t/:tenantId/mcp`.
-- Legacy `/mcp` bearer-token HTTP path and stdio mode for single-user workflows.
-- Delegated OAuth 2.1 with PKCE, app-only client credentials, bearer pass-through, and device-code login.
+- Delegated OAuth 2.1 with PKCE, app-only client credentials, and bearer pass-through.
 - Default `discovery-v1` tool surface: 12 visible meta tools that search, inspect, and execute the generated catalog on demand.
 - Generated catalog across Microsoft Graph plus product admin surfaces for Power BI, Power Apps, Power Automate, Exchange Online, and SharePoint Online.
 - MCP resources, prompts, completions, logging, bookmarks, recipes, and tenant-scoped facts for discovery tenants.
@@ -77,8 +74,6 @@ https://mcp.example.com/.well-known/oauth-authorization-server/t/<tenant-route-i
 https://mcp.example.com/.well-known/oauth-protected-resource/t/<tenant-route-id>
 ```
 
-The legacy `/mcp` endpoint still exists for bearer-token HTTP compatibility, but new multi-tenant connectors should use `/t/<tenant-route-id>/mcp`.
-
 Validate a connector endpoint with:
 
 ```bash
@@ -89,7 +84,7 @@ npx @modelcontextprotocol/inspector \
 
 ## Tenant Onboarding
 
-Tenants are runtime data, not build-time config. The tenant row controls which Entra app to use, which Azure tenant to authenticate against, which scopes are allowed, which preset is exposed, and which optional product routing settings are present.
+Tenants are runtime data, not build-time config. The tenant row controls which Entra app to use, which Azure tenant to authenticate against, which scopes are allowed, and which optional product routing settings are present.
 
 Create tenants through `/admin/tenants` when the admin API is enabled:
 
@@ -219,52 +214,20 @@ Normal agent flow:
 3. Use `execute-tool` with the validated parameters.
 4. Save useful aliases with bookmarks, recipes, or facts when the workflow should be repeatable.
 
-Existing tenants are not auto-migrated. Opt in explicitly:
+Existing tenant rows should be moved to the discovery surface explicitly:
 
 ```bash
 node bin/migrate-tenant-to-discovery.mjs --tenant-id <tenant-route-id> --dry-run
 node bin/migrate-tenant-to-discovery.mjs --tenant-id <tenant-route-id>
 ```
 
-Rollback is a normal admin patch:
-
-```http
-PATCH /admin/tenants/:id
-Content-Type: application/json
-
-{
-  "preset_version": "essentials-v1"
-}
-```
-
 See [docs/discovery-mode.md](docs/discovery-mode.md) for discovery behavior, MCP resources, prompts, completions, memory, and pgvector notes.
-
-## Presets
-
-Tenant presets are versioned and fail closed. Unknown preset names expose zero tools.
-
-Current tenant `preset_version` values:
-
-| Preset                | Purpose                                   |
-| --------------------- | ----------------------------------------- |
-| `discovery-v1`        | Default Phase 7 meta-tool surface.        |
-| `essentials-v1`       | Legacy static cross-product Graph subset. |
-| `powerbi-essentials`  | Power BI admin read-first subset.         |
-| `pwrapps-essentials`  | Power Apps admin read-first subset.       |
-| `pwrauto-essentials`  | Power Automate admin read-first subset.   |
-| `exo-essentials`      | Exchange Online REST admin subset.        |
-| `sp-admin-essentials` | SharePoint tenant admin subset.           |
-
-`enabled_tools` is additive with the selected preset when present. Leave it `null` for the preset-only surface. Static tenants expose tool lists only; discovery tenants also expose MCP resources, prompts, completions, logging, bookmarks, recipes, and facts.
 
 ## Endpoint Reference
 
 | Endpoint                                              | Purpose                                            |
 | ----------------------------------------------------- | -------------------------------------------------- |
 | `/t/:tenantId/mcp`                                    | Primary multi-tenant Streamable HTTP MCP endpoint. |
-| `/t/:tenantId/sse`                                    | Legacy SSE MCP stream.                             |
-| `/t/:tenantId/messages`                               | Legacy SSE POST channel.                           |
-| `/mcp`                                                | Legacy bearer-token Streamable HTTP endpoint.      |
 | `/.well-known/oauth-authorization-server/t/:tenantId` | Tenant OAuth server metadata.                      |
 | `/.well-known/oauth-protected-resource/t/:tenantId`   | Tenant protected-resource metadata.                |
 | `/t/:tenantId/authorize`                              | Tenant OAuth authorize endpoint.                   |
@@ -311,50 +274,6 @@ MS365_MCP_DEFAULT_GRAPH_POINTS_PER_MIN=50000
 ```
 
 Per-tenant overrides live in `tenants.rate_limits`. See [docs/observability/](docs/observability/) for the Grafana starter dashboard, runbook, and tuning notes.
-
-## Single User Stdio
-
-The legacy single-user CLI path still works:
-
-```bash
-npx @softeria/ms-365-mcp-server --login
-npx @softeria/ms-365-mcp-server --verify-login
-npx @softeria/ms-365-mcp-server --org-mode
-```
-
-Claude Desktop stdio config:
-
-```json
-{
-  "mcpServers": {
-    "ms365": {
-      "command": "npx",
-      "args": ["-y", "@softeria/ms-365-mcp-server", "--org-mode"]
-    }
-  }
-}
-```
-
-Common CLI flags:
-
-```text
---login
---logout
---verify-login
---list-accounts
---select-account <accountId>
---remove-account <accountId>
---org-mode
---read-only
---enabled-tools <regex>
---preset <names>
---list-presets
---discovery
---cloud <global|china>
---http [host:]port
---public-url <url>
---tenant-id <tenant-route-id>
-```
 
 ## Development
 
@@ -427,7 +346,6 @@ Set `MS365_MCP_CLOUD_TYPE=china`, pass `--cloud china`, or set `cloud_type` on t
 - Tokens and tenant secrets are encrypted at rest with per-tenant DEKs wrapped by the KEK.
 - Disabling a tenant cryptoshreds its wrapped DEK and revokes tenant-scoped API keys.
 - Admin routes are disabled unless admin app and group env vars are set.
-- Static preset mistakes fail closed through an empty tool set.
 - Product admin routes require both Azure permission grants and tenant-specific routing settings where applicable.
 
 ## More Documentation
