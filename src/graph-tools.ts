@@ -5,6 +5,7 @@ import AuthManager from './auth.js';
 import { api } from './generated/client.js';
 import { z } from 'zod';
 import { readFileSync } from 'fs';
+import { safeMcpName } from './lib/tool-selection/safe-mcp-name.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { TOOL_CATEGORIES } from './tool-categories.js';
@@ -828,7 +829,7 @@ export function registerGraphTools(
 
     try {
       server.tool(
-        tool.alias,
+        safeMcpName(tool.alias),
         toolDescription,
         paramSchema,
         {

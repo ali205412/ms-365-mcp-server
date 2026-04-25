@@ -44,6 +44,7 @@ import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getRequestTenant } from '../../request-context.js';
 import logger from '../../logger.js';
+import { safeMcpName } from './safe-mcp-name.js';
 
 /**
  * JSON-RPC method literal the MCP SDK uses for tools/list requests.
@@ -164,9 +165,19 @@ export function applyTenantFilter(result: ListToolsResult): ListToolsResult {
     return result;
   }
 
+  // Per-tenant `enabledSet` is built from raw aliases (`me.messages.X`).
+  // Registered MCP tool names are run through `safeMcpName` (SEP-986
+  // pattern), so we expand the comparison set to include both forms.
+  // Cheap one-time build per request; sets are O(1) lookup.
+  const expandedSet = new Set<string>();
+  for (const alias of enabledSet) {
+    expandedSet.add(alias);
+    expandedSet.add(safeMcpName(alias));
+  }
+
   const before = result.tools.length;
   const filteredTools = result.tools.filter(
-    (tool) => typeof tool.name === 'string' && enabledSet.has(tool.name)
+    (tool) => typeof tool.name === 'string' && expandedSet.has(tool.name)
   );
   const after = filteredTools.length;
 
