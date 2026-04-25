@@ -46,6 +46,7 @@ vi.mock('../../src/generated/client.js', () => ({
 
 vi.mock('../../src/lib/memory/bookmarks.js', () => ({
   listBookmarks: memoryMocks.listBookmarks,
+  getBookmarkCountsByAlias: vi.fn(async () => new Map()),
 }));
 
 vi.mock('../../src/lib/memory/recipes.js', () => ({
