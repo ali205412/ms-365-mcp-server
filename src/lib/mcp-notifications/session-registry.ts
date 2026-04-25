@@ -1,5 +1,5 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type { ResourceUpdatedNotification } from '@modelcontextprotocol/sdk/types.js';
 import logger from '../../logger.js';
 import { AGENTIC_EVENTS_CHANNEL, type AgenticEvent, type McpLogMessage } from './events.js';
 import {
@@ -10,13 +10,18 @@ import { clearSessionLogLevel, shouldEmitToSession } from '../mcp-logging/sessio
 
 export type McpNotificationSurface = 'discovery' | 'static';
 
+export interface McpNotificationServer {
+  sendToolListChanged(): void | Promise<void>;
+  sendResourceListChanged(): void | Promise<void>;
+  sendResourceUpdated(params: ResourceUpdatedNotification['params']): void | Promise<void>;
+  sendLoggingMessage(message: McpLogMessage, sessionId?: string): void | Promise<void>;
+  close?: () => void | Promise<void>;
+}
+
 export interface RegisteredMcpSession {
   tenantId: string;
   sessionId: string;
-  server: Pick<
-    McpServer,
-    'sendToolListChanged' | 'sendResourceListChanged' | 'sendResourceUpdated' | 'sendLoggingMessage'
-  > & { close?: () => void | Promise<void> };
+  server: McpNotificationServer;
   transport: StreamableHTTPServerTransport;
   surface: McpNotificationSurface;
 }
@@ -24,12 +29,14 @@ export interface RegisteredMcpSession {
 export type RegisterSessionInput = RegisteredMcpSession;
 
 export interface RedisSubscriberLike {
-  subscribe(channel: string): Promise<number>;
-  on(event: 'message', listener: (channel: string, message: string) => void): unknown;
+  subscribe(...channels: string[]): Promise<unknown>;
+  on(event: 'message', listener: (...args: unknown[]) => void): unknown;
 }
 
-export interface RedisWithOptionalDuplicate extends Partial<RedisSubscriberLike> {
-  duplicate?: () => RedisSubscriberLike;
+export interface RedisWithOptionalDuplicate {
+  subscribe?: (...channels: string[]) => Promise<unknown>;
+  on?: (event: 'message', listener: (...args: unknown[]) => void) => unknown;
+  duplicate?: () => unknown;
 }
 
 export type ResourceSubscriptionChecker = (
@@ -146,7 +153,10 @@ export function duplicateRedisForAgenticSubscription(
   redis: RedisWithOptionalDuplicate
 ): RedisSubscriberLike {
   if (typeof redis.duplicate === 'function') {
-    return redis.duplicate();
+    const duplicate = redis.duplicate();
+    if (isRedisSubscriber(duplicate)) {
+      return duplicate;
+    }
   }
   if (isRedisSubscriber(redis)) {
     return redis;
@@ -160,7 +170,9 @@ export async function subscribeToAgenticEvents(
 ): Promise<RedisSubscriberLike> {
   const subscriber = duplicateRedisForAgenticSubscription(redis);
   await subscriber.subscribe(AGENTIC_EVENTS_CHANNEL);
-  subscriber.on('message', (channel, message) => {
+  subscriber.on('message', (...args) => {
+    const [channel, message] = args;
+    if (typeof channel !== 'string' || typeof message !== 'string') return;
     if (channel !== AGENTIC_EVENTS_CHANNEL) return;
     void dispatchAgenticEvent(registry, message);
   });
@@ -202,6 +214,13 @@ async function dispatchAgenticEvent(registry: McpSessionRegistry, message: strin
   }
 }
 
-function isRedisSubscriber(value: RedisWithOptionalDuplicate): value is RedisSubscriberLike {
-  return typeof value.subscribe === 'function' && typeof value.on === 'function';
+function isRedisSubscriber(value: unknown): value is RedisSubscriberLike {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'subscribe' in value &&
+    typeof value.subscribe === 'function' &&
+    'on' in value &&
+    typeof value.on === 'function'
+  );
 }

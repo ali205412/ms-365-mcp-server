@@ -32,6 +32,12 @@ export type AgenticEvent =
   | (AgenticEventBase & { type: 'resources/updated'; uris: string[] })
   | (AgenticEventBase & { type: 'logging/message'; message: McpLogMessage });
 
+type PublishableAgenticEvent = AgenticEvent extends infer Event
+  ? Event extends AgenticEvent
+    ? Omit<Event, 'ts'> & { ts?: string }
+    : never
+  : never;
+
 export async function publishToolsListChanged(
   redis: RedisFacade,
   tenantId: string,
@@ -76,7 +82,7 @@ export async function publishMcpLogMessage(
 
 async function publishAgenticEvent(
   redis: RedisFacade,
-  event: Omit<AgenticEvent, 'ts'> & { ts?: string }
+  event: PublishableAgenticEvent
 ): Promise<void> {
   const payload = toJsonSafe({
     ...event,

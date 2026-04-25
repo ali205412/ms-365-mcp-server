@@ -132,7 +132,7 @@ function registerTemplates(server: McpServer, deps: RegisterMcpResourcesDeps): v
     new ResourceTemplate('mcp://endpoint/{alias}.schema.json', {
       list: undefined,
       complete: {
-        alias: completeAlias,
+        alias: (value) => completeAlias(value),
       },
     }),
     {

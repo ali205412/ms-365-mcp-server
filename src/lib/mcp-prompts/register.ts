@@ -66,7 +66,7 @@ function promptArgsSchema(
         : arg.name === 'account'
           ? (value: string) => completeAccount(value, { authManager: deps.authManager })
           : arg.name === 'alias'
-            ? completeAlias
+            ? (value: string) => completeAlias(value)
             : undefined;
     if (arg.required !== true) {
       schema = schema.optional();

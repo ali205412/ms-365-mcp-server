@@ -25,6 +25,7 @@ import logger from '../../logger.js';
 import { isDiscoverySurface } from '../tenant-surface/surface.js';
 import {
   mcpSessionRegistry,
+  type McpNotificationServer,
   type McpNotificationSurface,
   type McpSessionRegistry,
 } from '../mcp-notifications/session-registry.js';
@@ -97,11 +98,18 @@ export function createStreamableHttpHandler(deps: StreamableHttpDeps): RequestHa
     }
 
     const server = deps.buildMcpServer(tenant);
+    const notificationServer: McpNotificationServer = {
+      sendToolListChanged: () => server.sendToolListChanged(),
+      sendResourceListChanged: () => server.sendResourceListChanged(),
+      sendResourceUpdated: (params) => server.server.sendResourceUpdated(params),
+      sendLoggingMessage: (message, sessionId) => server.sendLoggingMessage(message, sessionId),
+      close: () => server.close(),
+    };
     const cleanupSession = async (sessionId: string): Promise<void> => {
       const session = registry.unregisterSession(sessionId);
       if (!session) return;
       await deps.resourceSubscriptions?.deleteSession(session.tenantId, sessionId);
-      await (session.server as McpServer).close?.();
+      await session.server.close?.();
     };
     const transport = createTransport({
       sessionIdGenerator: randomUUID,
@@ -109,7 +117,7 @@ export function createStreamableHttpHandler(deps: StreamableHttpDeps): RequestHa
         registry.registerSession({
           tenantId: tenant.id,
           sessionId,
-          server,
+          server: notificationServer,
           transport,
           surface: 'discovery',
         });
