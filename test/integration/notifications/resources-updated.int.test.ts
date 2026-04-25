@@ -64,12 +64,10 @@ function registerFakeSession(registry: McpSessionRegistry, sessionId: string): S
   return sent;
 }
 
-async function waitFor(condition: () => boolean, timeoutMs = 1_000): Promise<void> {
-  vi.useRealTimers();
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+async function waitFor(condition: () => boolean, microtaskTurns = 20): Promise<void> {
+  for (let i = 0; i < microtaskTurns; i++) {
     if (condition()) return;
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await Promise.resolve();
   }
   expect(condition()).toBe(true);
 }
