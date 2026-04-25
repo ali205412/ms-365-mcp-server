@@ -31,7 +31,16 @@ ENV MS365_MCP_FULL_COVERAGE=1 \
 
 # Split into separate RUN steps so buildkit shows precisely which command
 # fails — `npm run generate && npm run build` hides the failure point.
-RUN npm run generate
+# Skip generate when the CI workflow has already produced (and cached) the
+# generated client and copied it into the build context. Saves ~5-7 min on
+# the image build path. Local `docker build` with a clean clone still
+# regenerates — `client.ts` is gitignored, so the conditional sees no file
+# and runs the generator.
+RUN if [ -s src/generated/client.ts ]; then \
+      echo "Using pre-generated src/generated/client.ts ($(wc -c < src/generated/client.ts) bytes) — skipping npm run generate"; \
+    else \
+      npm run generate; \
+    fi
 # Fail fast on build errors; don't pipe to tail (pipe hides exit code).
 RUN set -e && npm run build
 RUN npm prune --omit=dev
