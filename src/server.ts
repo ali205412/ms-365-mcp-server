@@ -7,6 +7,7 @@ import logger, { enableConsoleLogging, rawPinoLogger } from './logger.js';
 import { registerAuthTools } from './auth-tools.js';
 import { registerGraphTools, registerDiscoveryTools } from './graph-tools.js';
 import { registerMemoryTools } from './lib/memory/tools.js';
+import { registerMcpResources } from './lib/mcp-resources/register.js';
 import { registerMcpPrompts, type RegisterMcpPromptsDeps } from './lib/mcp-prompts/register.js';
 import { buildMcpServerInstructions } from './mcp-instructions.js';
 import GraphClient from './graph-client.js';
@@ -976,6 +977,20 @@ class MicrosoftGraphServer {
         redis: getRedis(),
         graphClient: this.graphClient!,
         authManager: this.authManager,
+        readOnly: this.options.readOnly,
+        orgMode: this.options.orgMode,
+      });
+      registerMcpResources(server, {
+        tenant:
+          tenant && enabledToolsSet
+            ? {
+                id: tenant.id,
+                allowed_scopes: tenant.allowed_scopes,
+                enabled_tools: tenant.enabled_tools,
+                enabled_tools_set: enabledToolsSet,
+                preset_version: tenant.preset_version,
+              }
+            : undefined,
         readOnly: this.options.readOnly,
         orgMode: this.options.orgMode,
       });

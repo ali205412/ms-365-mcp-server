@@ -46,16 +46,19 @@ vi.mock('../../src/generated/client.js', () => ({
   },
 }));
 
-vi.mock('../../src/lib/memory/bookmarks.js', () => ({
+vi.mock('../../src/lib/memory/bookmarks.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/lib/memory/bookmarks.js')>()),
   listBookmarks: memoryMocks.listBookmarks,
   getBookmarkCountsByAlias: vi.fn(async () => new Map()),
 }));
 
-vi.mock('../../src/lib/memory/recipes.js', () => ({
+vi.mock('../../src/lib/memory/recipes.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/lib/memory/recipes.js')>()),
   listRecipes: memoryMocks.listRecipes,
 }));
 
-vi.mock('../../src/lib/memory/facts.js', () => ({
+vi.mock('../../src/lib/memory/facts.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/lib/memory/facts.js')>()),
   recallFacts: memoryMocks.recallFacts,
 }));
 
