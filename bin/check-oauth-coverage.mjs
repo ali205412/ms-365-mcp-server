@@ -48,12 +48,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OAUTH_LINE_RANGES = [
   { fn: 'createRegisterHandler', start: 88, end: 136 },
   { fn: 'createTokenHandler', start: 185, end: 376 },
-  { fn: 'createAuthorizeHandler', start: 471, end: 618 },
-  { fn: 'createTenantTokenHandler', start: 667, end: 810 },
-  { fn: 'wellKnownAuthServerTenant', start: 1147, end: 1172 },
-  { fn: 'wellKnownProtectedResourceTenant', start: 1174, end: 1194 },
-  { fn: 'wellKnownAuthServer', start: 1503, end: 1527 },
-  { fn: 'wellKnownProtectedResource', start: 1530, end: 1544 },
+  { fn: 'createAuthorizeHandler', start: 481, end: 636 },
+  { fn: 'createTenantTokenHandler', start: 685, end: 828 },
+  { fn: 'wellKnownAuthServerTenant', start: 1244, end: 1251 },
+  { fn: 'wellKnownProtectedResourceTenant', start: 1253, end: 1261 },
+  { fn: 'wellKnownAuthServer', start: 1615, end: 1640 },
+  { fn: 'wellKnownProtectedResource', start: 1642, end: 1656 },
 ];
 
 // D-10 target threshold is 70%. Effective threshold is temporarily lowered
