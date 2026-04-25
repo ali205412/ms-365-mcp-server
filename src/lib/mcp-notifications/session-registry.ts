@@ -19,7 +19,7 @@ export interface RegisteredMcpSession {
   server: Pick<
     McpServer,
     'sendToolListChanged' | 'sendResourceListChanged' | 'sendResourceUpdated' | 'sendLoggingMessage'
-  >;
+  > & { close?: () => void | Promise<void> };
   transport: StreamableHTTPServerTransport;
   surface: McpNotificationSurface;
 }

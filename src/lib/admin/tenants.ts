@@ -73,6 +73,10 @@ import { encodeCursor, decodeCursor } from './cursor.js';
 import { generateTenantDek } from '../crypto/dek.js';
 import { validateRedirectUri, type RedirectUriPolicy } from '../redirect-uri.js';
 import { publishTenantInvalidation } from '../tenant/tenant-invalidation.js';
+import {
+  publishResourcesListChanged,
+  publishToolsListChanged,
+} from '../mcp-notifications/events.js';
 import logger from '../../logger.js';
 import type { AdminRouterDeps } from './router.js';
 import type { RedisClient } from '../redis.js';
@@ -809,6 +813,7 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
     const whereIdx = idx;
     params.push(id);
 
+    const presetVersionChanged = fieldsChanged.includes('preset_version');
     let existed = true;
     try {
       await withTransaction(async (client) => {
@@ -874,6 +879,17 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
         { tenantId: id, err: (err as Error).message },
         'admin-tenants: tenantPool invalidation threw on patch'
       );
+    }
+    if (presetVersionChanged) {
+      try {
+        await publishToolsListChanged(deps.redis, id, 'preset-version-change');
+        await publishResourcesListChanged(deps.redis, id, 'preset-version-change');
+      } catch (err) {
+        logger.warn(
+          { tenantId: id, err: (err as Error).message },
+          'admin-tenants: agentic list-change publish failed on preset patch'
+        );
+      }
     }
 
     try {

@@ -9,6 +9,12 @@ import { registerGraphTools, registerDiscoveryTools } from './graph-tools.js';
 import { registerMemoryTools } from './lib/memory/tools.js';
 import { registerMcpResources } from './lib/mcp-resources/register.js';
 import { registerMcpPrompts, type RegisterMcpPromptsDeps } from './lib/mcp-prompts/register.js';
+import {
+  mcpSessionRegistry,
+  subscribeToAgenticEvents,
+} from './lib/mcp-notifications/session-registry.js';
+import { RedisResourceSubscriptionStore } from './lib/mcp-notifications/resource-subscriptions.js';
+import { publishResourceUpdated } from './lib/mcp-notifications/events.js';
 import { buildMcpServerInstructions } from './mcp-instructions.js';
 import GraphClient from './graph-client.js';
 import AuthManager, { buildScopesFromEndpoints } from './auth.js';
@@ -24,6 +30,7 @@ import { registerShutdownHooks } from './lib/shutdown.js';
 import { validateRedirectUri, type RedirectUriPolicy } from './lib/redirect-uri.js';
 import { createCorsMiddleware, type CorsMode } from './lib/cors.js';
 import { getRedis } from './lib/redis.js';
+import { registerAuditResourcePublisher } from './lib/audit.js';
 import type { CloudType } from './cloud-config.js';
 import type { PkceStore } from './lib/pkce-store/pkce-store.js';
 import { MemoryPkceStore } from './lib/pkce-store/memory-store.js';
@@ -890,6 +897,7 @@ class MicrosoftGraphServer {
   // in 03-02; tenantPool in 03-05; etc). Default empty array preserves the
   // Phase 1 baseline contract.
   private readinessChecks: ReadinessCheck[];
+  private resourceSubscriptions?: RedisResourceSubscriptionStore;
 
   /**
    * @param authManager - MSAL + scope owner.
@@ -993,6 +1001,7 @@ class MicrosoftGraphServer {
             : undefined,
         readOnly: this.options.readOnly,
         orgMode: this.options.orgMode,
+        resourceSubscriptions: this.resourceSubscriptions,
       });
       registerMcpPrompts(server, this.promptDeps);
     } else {
@@ -1086,6 +1095,19 @@ class MicrosoftGraphServer {
     const { createPerTenantCorsMiddleware } = await import('./lib/cors.js');
 
     const loadTenant = createLoadTenantMiddleware({ pool: pg });
+    const resourceSubscriptions = new RedisResourceSubscriptionStore(redis);
+    this.resourceSubscriptions = resourceSubscriptions;
+    mcpSessionRegistry.setResourceSubscriptionChecker((tenantId, sessionId, uri) =>
+      resourceSubscriptions.isSubscribed(tenantId, sessionId, uri)
+    );
+    registerAuditResourcePublisher((tenantId) =>
+      publishResourceUpdated(
+        redis,
+        tenantId,
+        [`mcp://tenant/${tenantId}/audit/recent.json`],
+        'audit-write'
+      )
+    );
 
     // Per-tenant McpServer cache. The MCP server holds the registered
     // tool list (Zod schemas + handlers) for a tenant; building it
@@ -1155,6 +1177,16 @@ class MicrosoftGraphServer {
       logger.warn(
         { err: (err as Error).message },
         'Plan 05-06 tool-selection routes: invalidation subscription failed (falling back to 10-minute TTL)'
+      );
+    }
+
+    try {
+      await subscribeToAgenticEvents(redis, mcpSessionRegistry);
+      logger.info('Plan 07-08 notifications: subscribed to mcp:agentic-events');
+    } catch (err) {
+      logger.warn(
+        { err: (err as Error).message },
+        'Plan 07-08 notifications: agentic event subscription failed'
       );
     }
 
@@ -1367,7 +1399,11 @@ class MicrosoftGraphServer {
       await import('./lib/tool-selection/tenant-context-middleware.js');
     const seedTenantContext = createSeedTenantContextMiddleware();
 
-    const streamableHttp = createStreamableHttpHandler({ buildMcpServer });
+    const streamableHttp = createStreamableHttpHandler({
+      buildMcpServer,
+      sessionRegistry: mcpSessionRegistry,
+      resourceSubscriptions,
+    });
     const legacySseGet = createLegacySseGetHandler({ buildMcpServer });
     const legacySsePost = createLegacySsePostHandler({ buildMcpServer });
 

@@ -57,6 +57,10 @@ import { z } from 'zod';
 import { withTransaction } from '../postgres.js';
 import { writeAudit } from '../audit.js';
 import { publishToolSelectionInvalidation } from '../tool-selection/tool-selection-invalidation.js';
+import {
+  publishResourcesListChanged,
+  publishToolsListChanged,
+} from '../mcp-notifications/events.js';
 import { validateSelectors } from '../tool-selection/registry-validator.js';
 import { parseSelectorList } from '../tool-selection/selector-ast.js';
 import {
@@ -396,6 +400,15 @@ export function createEnabledToolsRoutes(deps: AdminRouterDeps): Router {
       logger.warn(
         { tenantId: id, err: (err as Error).message },
         'admin-enabled-tools: publishToolSelectionInvalidation failed; TTL fallback'
+      );
+    }
+    try {
+      await publishToolsListChanged(deps.redis, id, 'enabled-tools-change');
+      await publishResourcesListChanged(deps.redis, id, 'enabled-tools-change');
+    } catch (err) {
+      logger.warn(
+        { tenantId: id, err: (err as Error).message },
+        'admin-enabled-tools: agentic list-change publish failed; clients may refresh on next request'
       );
     }
 
