@@ -16,10 +16,12 @@
  */
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
+import pg from 'pg';
 import { runner as migrationRunner } from 'node-pg-migrate';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, '..', 'migrations');
+const { Client } = pg;
 
 /**
  * Parse an integer CLI flag like `--count=3`. Returns Infinity when the
@@ -30,6 +32,22 @@ function parseCount(rest) {
   const arg = rest.find((a) => typeof a === 'string' && a.startsWith('--count='));
   if (!arg) return Infinity;
   return Number.parseInt(arg.slice('--count='.length), 10);
+}
+
+function pgvectorEnabledFromEnv() {
+  return (
+    process.env.MS365_MCP_PGVECTOR_ENABLED === '1' ||
+    process.env.MS365_MCP_PGVECTOR_ENABLED === 'true'
+  );
+}
+
+async function createMigrationClient(connectionString) {
+  const client = new Client({ connectionString });
+  await client.connect();
+  await client.query("SELECT set_config('ms365_mcp.pgvector_enabled', $1, false)", [
+    pgvectorEnabledFromEnv() ? 'true' : 'false',
+  ]);
+  return client;
 }
 
 /**
@@ -52,45 +70,50 @@ export async function main(argv = process.argv.slice(2)) {
     throw new Error('--count= must be a positive integer');
   }
 
-  const baseOpts = {
-    databaseUrl: connectionString,
-    dir: MIGRATIONS_DIR,
-    migrationsTable: 'pgmigrations',
-    checkOrder: true,
-    verbose: false,
-    logger: {
-      info: () => {},
-      warn: (msg) => process.stderr.write(`${msg}\n`),
-      error: (msg) => process.stderr.write(`${msg}\n`),
-      debug: () => {},
-    },
-  };
+  const client = await createMigrationClient(connectionString);
+  try {
+    const baseOpts = {
+      dbClient: client,
+      dir: MIGRATIONS_DIR,
+      migrationsTable: 'pgmigrations',
+      checkOrder: true,
+      verbose: false,
+      logger: {
+        info: () => {},
+        warn: (msg) => process.stderr.write(`${msg}\n`),
+        error: (msg) => process.stderr.write(`${msg}\n`),
+        debug: () => {},
+      },
+    };
 
-  if (cmd === 'status') {
-    // node-pg-migrate doesn't expose a status-only API; use dryRun+up to
-    // enumerate what WOULD run. `count` defaults to Infinity so we see the
-    // full set of pending migrations, not just the first one.
-    const pending = await migrationRunner({
+    if (cmd === 'status') {
+      // node-pg-migrate doesn't expose a status-only API; use dryRun+up to
+      // enumerate what WOULD run. `count` defaults to Infinity so we see the
+      // full set of pending migrations, not just the first one.
+      const pending = await migrationRunner({
+        ...baseOpts,
+        direction: 'up',
+        count: Infinity,
+        dryRun: true,
+      });
+      process.stdout.write(`${JSON.stringify({ pending: pending.length }, null, 2)}\n`);
+      return 0;
+    }
+
+    const direction = cmd === 'down' ? 'down' : 'up';
+    const applied = await migrationRunner({
       ...baseOpts,
-      direction: 'up',
-      count: Infinity,
-      dryRun: true,
+      direction,
+      count,
+      dryRun,
     });
-    process.stdout.write(`${JSON.stringify({ pending: pending.length }, null, 2)}\n`);
+    process.stdout.write(
+      `${JSON.stringify({ direction, count: applied.length, dryRun }, null, 2)}\n`
+    );
     return 0;
+  } finally {
+    await client.end();
   }
-
-  const direction = cmd === 'down' ? 'down' : 'up';
-  const applied = await migrationRunner({
-    ...baseOpts,
-    direction,
-    count,
-    dryRun,
-  });
-  process.stdout.write(
-    `${JSON.stringify({ direction, count: applied.length, dryRun }, null, 2)}\n`
-  );
-  return 0;
 }
 
 const invokedAsScript = (() => {

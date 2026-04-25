@@ -15,6 +15,7 @@ import type { Pool } from 'pg';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, '..', '..', '..', 'migrations');
+const MIGRATE_BIN = path.resolve(__dirname, '..', '..', '..', 'bin', 'migrate.mjs');
 const TENANTS_MIGRATION = '20260501000000_tenants.sql';
 const MEMORY_MIGRATION = '20261001000000_tenant_memory.sql';
 const FORBIDDEN_EXISTING_TENANT_MUTATIONS = [
@@ -82,7 +83,9 @@ async function listTables(pool: Pool, names: string[]): Promise<string[]> {
 }
 
 function tableBlock(sql: string, tableName: string): string {
-  const match = sql.match(new RegExp(`CREATE\\s+TABLE\\s+${tableName}\\s*\\([\\s\\S]*?\\n\\);`, 'i'));
+  const match = sql.match(
+    new RegExp(`CREATE\\s+TABLE\\s+${tableName}\\s*\\([\\s\\S]*?\\n\\);`, 'i')
+  );
   return match?.[0] ?? '';
 }
 
@@ -128,7 +131,9 @@ describe('plan 07-01 — tenant memory migration', () => {
     expect(tableBlock(sql, 'tenant_facts')).toMatch(
       /content_tsv\s+tsvector\s+GENERATED\s+ALWAYS\s+AS\s+\(to_tsvector\('english',\s*content\)\)\s+STORED/i
     );
-    expect(sql).toMatch(/CREATE\s+INDEX\s+idx_tenant_facts_content_tsv\s+ON\s+tenant_facts\s+USING\s+gin\s+\(content_tsv\)/i);
+    expect(sql).toMatch(
+      /CREATE\s+INDEX\s+idx_tenant_facts_content_tsv\s+ON\s+tenant_facts\s+USING\s+gin\s+\(content_tsv\)/i
+    );
   });
 
   it('does not mutate existing tenant rows or change tenant defaults', () => {
@@ -149,6 +154,15 @@ describe('plan 07-01 — tenant memory migration', () => {
     expect(sql).toContain('ms365_mcp.pgvector_enabled');
     expect(sql).toContain('pg_available_extensions');
     expect(sql).toMatch(/\bCREATE\s+EXTENSION\s+IF\s+NOT\s+EXISTS\s+vector\b/i);
-    expect(sql).toMatch(/\bALTER\s+TABLE\s+tenant_facts\s+ADD\s+COLUMN\s+embedding\s+vector\(1536\)/i);
+    expect(sql).toMatch(
+      /\bALTER\s+TABLE\s+tenant_facts\s+ADD\s+COLUMN\s+embedding\s+vector\(1536\)/i
+    );
+  });
+
+  it('sets the pgvector migration session gate from MS365_MCP_PGVECTOR_ENABLED', () => {
+    const source = readFileSync(MIGRATE_BIN, 'utf8');
+    expect(source).toContain('MS365_MCP_PGVECTOR_ENABLED');
+    expect(source).toContain("set_config('ms365_mcp.pgvector_enabled'");
+    expect(source).toContain('dbClient');
   });
 });
