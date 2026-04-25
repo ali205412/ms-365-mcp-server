@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Phase 5.1 context gathered
-last_updated: "2026-04-22T10:35:47.310Z"
-last_activity: 2026-04-22
+status: human_needed
+stopped_at: Phase 07 complete; Claude.ai connector UX verification pending
+last_updated: "2026-04-25T20:23:17Z"
+last_activity: 2026-04-25 -- Phase 07 review fixes applied and gates passed
 progress:
-  total_phases: 7
-  completed_phases: 7
-  total_plans: 60
-  completed_plans: 60
+  total_phases: 8
+  completed_phases: 8
+  total_plans: 72
+  completed_plans: 72
   percent: 100
 ---
 
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** One deployable, multi-tenant MCP gateway that exposes the entire Microsoft Graph surface an organization needs — with tenant isolation, resilient Graph transport, and all four identity flows — so AI assistants can safely act on behalf of any user or app across any registered tenant.
-**Current focus:** Phase 6 — operational-observability-rate-limiting
+**Current focus:** Phase 07 — agentic-tool-surface-discovery-default-mcp-resources-prompts
 
 ## Current Position
 
-Phase: 6
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-04-22
+Phase: 07 (agentic-tool-surface-discovery-default-mcp-resources-prompts) — COMPLETE / HUMAN_NEEDED
+Plan: 12 of 12
+Status: Phase 07 code complete; external Claude.ai connector UX verification remains
+Last activity: 2026-04-25 -- Phase 07 review fixes applied and gates passed
 
-Progress: [███░░░░░░░] 33% (2/6 phases)
+Progress: [██████████] 100% (8/8 phases)
 
 ## Performance Metrics
 
@@ -49,10 +49,11 @@ Progress: [███░░░░░░░] 33% (2/6 phases)
 
 **Recent Trend:**
 
-- Last 5 plans: -
-- Trend: -
+- Last 5 plans: 07-08, 07-09, 07-10, 07-11, 07-12
+- Trend: complete
 
 *Updated after each plan completion*
+| Phase 07 P11 | 8min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -65,6 +66,13 @@ Recent decisions affecting current work:
 - Keep `openapi-zod-client` generator; do NOT wrap `@microsoft/msgraph-sdk` — SDK audit confirms our pipeline is the right shape for MCP
 - All four identity flows concurrent (delegated, app-only, bearer pass-through, device code) — landed together in Phase 3 to avoid double-touching AuthManager
 - Stack additions: Postgres (durable tenant registry, audit, delta tokens) + Redis (PKCE, token cache, rate limits) — both lazy/optional in stdio mode
+- [Phase 07]: Tenant resource reads compare URI tenant id against getRequestTenant().id before any data read. — Mitigates tenant resource URI information disclosure for Plan 07-11.
+- [Phase 07]: Endpoint schema resources validate aliases against discoveryCatalogSet, not the visible discovery-v1 meta-tool set. — Allows discovery tenants to inspect generated Graph/product schemas without exposing them in tools/list.
+- [Phase 07]: Tenant resources are registered as concrete caller-tenant URIs; templates are limited to workload and endpoint schema families. — Prevents cross-tenant template enumeration while keeping resources/list discoverable for the caller tenant.
+
+### Roadmap Evolution
+
+- Phase 7 added: agentic-tool-surface — discovery-mode default + MCP Resources (templated, per-tenant) + Prompts (10 canned workflows) + Notifications (tools/list, resources/list, resources/updated) + Logging capability + Completions + per-tenant memory (bookmarks, recipes, facts via Postgres + BM25 + optional pgvector) + admin API CRUD for memory + opt-in migration tool. Out of scope: Tasks/Elicitation/Sampling/Roots (no claude.ai client support yet).
 
 ### Pending Todos
 
@@ -83,9 +91,17 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-20T19:43:06.730Z
-Stopped at: Phase 5.1 context gathered
-Resume file: .planning/phases/05.1-power-platform-m365-admin-surface-expansion-inserted/05.1-CONTEXT.md
+Last session: 2026-04-25T18:42:24.557Z
+Stopped at: Completed 07-11-PLAN.md
+Resume file: None
+
+## Quick Tasks Completed
+
+| ID | Slug | Date | Description | Status |
+|----|------|------|-------------|--------|
+| 260425-bxa | coolify-pull-policy | 2026-04-25 | `pull_policy: always` on mcp service — force Coolify to re-pull GHCR `:latest` on every redeploy. Resolves stale-image blocker that was masking the Redis subscriber-mode fixes (`ee08ae4`, `3027552`) and producing `rate_limit_error` on `tools/call`. | complete ✓ |
+| 260425-e5x | mcp-401-www-authenticate | 2026-04-25 | Emit `WWW-Authenticate: Bearer …resource_metadata=…` on every 401 from the MCP path (RFC 9728 / MCP 2025-06-18). Fixes Claude.ai-style connector failure "Couldn't reach the MCP server". 5 emit sites + new helper + 12 unit tests. Commits `f1f67d3`, `2c3bce6`. | complete ✓ |
+| 260425-gug | oauth-discovery-dcr | 2026-04-25 | RFC 8414 host-prefixed metadata routes + `registration_endpoint` in per-tenant auth-server metadata + `MS365_MCP_OAUTH_REDIRECT_HOSTS` env (default `claude.ai`) for DCR allowlist. Unblocks Claude.ai connector OAuth dance after /register stopped returning 400. Commit `a15eed8`. | complete ✓ |
 
 ## Deferred Items
 

@@ -148,15 +148,16 @@ describe('plan 07-01 — tenant memory migration', () => {
     expect(sql).not.toContain("DEFAULT 'discovery-v1'");
   });
 
-  it('guards pgvector SQL behind MS365_MCP_PGVECTOR_ENABLED session state and extension availability', () => {
-    const sql = readMigration(MEMORY_MIGRATION);
-    expect(sql).toContain('MS365_MCP_PGVECTOR_ENABLED');
-    expect(sql).toContain('ms365_mcp.pgvector_enabled');
-    expect(sql).toContain('pg_available_extensions');
-    expect(sql).toMatch(/\bCREATE\s+EXTENSION\s+IF\s+NOT\s+EXISTS\s+vector\b/i);
-    expect(sql).toMatch(
-      /\bALTER\s+TABLE\s+tenant_facts\s+ADD\s+COLUMN\s+embedding\s+vector\(1536\)/i
+  it('applies pgvector SQL from the migration CLI behind env, table, and extension gates', () => {
+    const source = readFileSync(MIGRATE_BIN, 'utf8');
+    expect(source).toContain('MS365_MCP_PGVECTOR_ENABLED');
+    expect(source).toContain('pg_available_extensions');
+    expect(source).toContain("to_regclass('public.tenant_facts')");
+    expect(source).toMatch(/\bCREATE\s+EXTENSION\s+IF\s+NOT\s+EXISTS\s+vector\b/i);
+    expect(source).toMatch(
+      /\bALTER\s+TABLE\s+tenant_facts\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+embedding\s+vector\(1536\)/i
     );
+    expect(source).toMatch(/\bCREATE\s+INDEX\s+IF\s+NOT\s+EXISTS\s+idx_tenant_facts_embedding\b/i);
   });
 
   it('sets the pgvector migration session gate from MS365_MCP_PGVECTOR_ENABLED', () => {

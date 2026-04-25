@@ -13,10 +13,11 @@
  *   - Missing per-product preset files are skipped (not an error).
  *   - Missing essentials-v1 IS an error (legacy mandatory preset).
  *   - Per-product presets reject cross-product prefix leakage.
- *   - Per-product presets reject registry misses with a bounded preview.
+ *   - Per-product presets preserve full product-family misses under default
+ *     non-full-coverage generation, but reject partial registry misses.
  *   - Per-product presets reject empty arrays, duplicates, and non-strings.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -50,6 +51,12 @@ function makeFakeClient(aliases) {
     '',
   ];
   return lines.join('\n');
+}
+
+function expectStringLiteral(out, value) {
+  const singleQuoted = `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+  const doubleQuoted = `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  expect(out.includes(singleQuoted) || out.includes(doubleQuoted)).toBe(true);
 }
 
 function copyPreset(tmp, filename) {
@@ -153,10 +160,10 @@ describe('plan 05.1-07 — compile-preset 6-preset pipeline', () => {
 
     // Every per-product op is a literal in the emitted TS file.
     for (const op of discovery.ops) {
-      expect(out).toContain(`"${op}"`);
+      expectStringLiteral(out, op);
     }
     for (const op of [...powerbi.ops, ...pwrapps.ops, ...pwrauto.ops, ...exo.ops, ...spadmin.ops]) {
-      expect(out).toContain(`"${op}"`);
+      expectStringLiteral(out, op);
     }
   });
 
@@ -174,6 +181,36 @@ describe('plan 05.1-07 — compile-preset 6-preset pipeline', () => {
     // The 5 per-product const exports are ABSENT because those JSONs weren't staged.
     expect(out).not.toContain('POWERBI_ESSENTIALS_OPS');
     expect(out).not.toContain('EXO_ESSENTIALS_OPS');
+  });
+
+  it('warns but preserves a per-product preset when the generated registry lacks that whole product family', () => {
+    const essentials = loadPresetJson('essentials-v1.json');
+    const powerbi = loadPresetJson('powerbi-essentials.json');
+
+    fs.writeFileSync(path.join(tmp, 'generated', 'client.ts'), makeFakeClient(essentials.ops));
+    copyPreset(tmp, 'essentials-v1.json');
+    copyPreset(tmp, 'powerbi-essentials.json');
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const result = compileEssentialsPreset(
+        path.join(tmp, 'generated'),
+        path.join(tmp, 'presets')
+      );
+      expect(result.count).toBe(150);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/product alias family "__powerbi__" absent from registry/)
+      );
+
+      const out = fs.readFileSync(path.join(tmp, 'presets', 'generated-index.ts'), 'utf-8');
+      expect(out).toContain('POWERBI_ESSENTIALS_OPS');
+      for (const op of powerbi.ops) {
+        expectStringLiteral(out, op);
+      }
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('rejects a per-product preset whose op is missing its product prefix', () => {
@@ -302,10 +339,12 @@ describe('plan 05.1-07 — compile-preset 6-preset pipeline', () => {
 
     // Extract the POWERBI_ESSENTIALS_OPS Set literal body and confirm it is
     // emitted in lex-sorted order.
-    const match = out.match(/POWERBI_ESSENTIALS_OPS[\s\S]*?new Set<string>\(\[([\s\S]*?)\]\)\)/);
+    const match = out.match(
+      /POWERBI_ESSENTIALS_OPS[\s\S]*?new Set<string>\(\[([\s\S]*?)\n\s*\]\s*\)\s*\)\s*;/
+    );
     expect(match).not.toBeNull();
     const body = match[1];
-    const emittedOps = [...body.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    const emittedOps = [...body.matchAll(/["']([^"']+)["']/g)].map((m) => m[1]);
     const sortedCopy = [...emittedOps].sort();
     expect(emittedOps).toEqual(sortedCopy);
     expect(emittedOps.length).toBe(powerbi.ops.length);

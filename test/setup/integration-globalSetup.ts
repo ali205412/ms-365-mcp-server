@@ -35,8 +35,7 @@ function isHermeticNotificationRun(): boolean {
     .slice(2)
     .filter((arg) => arg.includes('test/') || arg.includes('.test.'));
   return (
-    filters.length > 0 &&
-    filters.every((arg) => arg.includes('test/integration/notifications/'))
+    filters.length > 0 && filters.every((arg) => arg.includes('test/integration/notifications/'))
   );
 }
 

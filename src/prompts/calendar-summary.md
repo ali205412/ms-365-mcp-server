@@ -7,11 +7,13 @@ arguments:
   - name: range
     description: Optional natural language or ISO date range to review.
 ---
+
 Prepare a calendar summary for account "{{account}}" over range "{{range}}".
 
 Use `search-tools` to find calendar event listing and calendar view operations. Use `get-tool-schema` before each unfamiliar operation, then call `execute-tool` with a narrow range and only the fields needed for subject, start, end, organizer, attendees, location, and online meeting details.
 
 Summarize:
+
 - events grouped by day
 - meetings with overlapping times
 - attendees or organizers that recur across the range

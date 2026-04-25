@@ -7,11 +7,13 @@ arguments:
   - name: attendeeFocus
     description: Optional person, group, or domain to prioritize.
 ---
+
 Prepare meeting context for event "{{eventId}}" with attendee focus "{{attendeeFocus}}".
 
 Use `search-tools` to find event detail, attendee, message search, people, and organization operations. Use `get-tool-schema` for the selected operations and call `execute-tool` in the smallest useful sequence: event details first, attendees second, then recent messages or profile context for the focused attendees.
 
 Produce:
+
 - meeting goal inferred from title, agenda, and recent thread context
 - attendee list with likely roles
 - recent relevant emails or chats to review

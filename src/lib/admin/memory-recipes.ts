@@ -72,7 +72,10 @@ export function createMemoryRecipeRoutes(deps: Pick<AdminRouterDeps, 'redis'>): 
       await publishRecipeChange(deps, id);
       res.status(200).json({ recipes });
     } catch (err) {
-      logger.error({ tenantId: id, err: (err as Error).message }, 'admin-memory-recipes: bulk upsert failed');
+      logger.error(
+        { tenantId: id, err: (err as Error).message },
+        'admin-memory-recipes: bulk upsert failed'
+      );
       problemInternal(res, req.id);
     }
   });
@@ -102,7 +105,10 @@ export function createMemoryRecipeRoutes(deps: Pick<AdminRouterDeps, 'redis'>): 
       if (result.deleted) await publishRecipeChange(deps, id);
       res.status(200).json(result);
     } catch (err) {
-      logger.error({ tenantId: id, err: (err as Error).message }, 'admin-memory-recipes: delete failed');
+      logger.error(
+        { tenantId: id, err: (err as Error).message },
+        'admin-memory-recipes: delete failed'
+      );
       problemInternal(res, req.id);
     }
   });

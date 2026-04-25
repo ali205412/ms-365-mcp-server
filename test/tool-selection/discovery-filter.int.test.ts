@@ -440,17 +440,21 @@ describe('plan 05-06 Task 2 — discovery per-tenant filter + pub/sub invalidati
       },
       () => callDiscoveryTool(server, 'search-tools', { query: 'user', limit: 10 })
     );
-    const boostedNames = (JSON.parse(boosted.content[0].text) as {
-      tools: Array<{ name: string }>;
-    }).tools.map((t) => t.name);
+    const boostedNames = (
+      JSON.parse(boosted.content[0].text) as {
+        tools: Array<{ name: string }>;
+      }
+    ).tools.map((t) => t.name);
     expect(boostedNames[0]).toBe(boostTarget);
 
     const notLeaked = await requestContext.run(discoveryCtxB, () =>
       callDiscoveryTool(server, 'search-tools', { query: 'user', limit: 10 })
     );
-    const notLeakedNames = (JSON.parse(notLeaked.content[0].text) as {
-      tools: Array<{ name: string }>;
-    }).tools.map((t) => t.name);
+    const notLeakedNames = (
+      JSON.parse(notLeaked.content[0].text) as {
+        tools: Array<{ name: string }>;
+      }
+    ).tools.map((t) => t.name);
     expect(notLeakedNames[0]).toBe(baselineTop);
   });
 });

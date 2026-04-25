@@ -198,9 +198,7 @@ describe('Phase 7 Plan 07-09 Task 1 - MCP logging', () => {
       data: { alias: 'me.sendMail' },
     });
 
-    expect(loggedPayloads(sendA).map((message) => message.data.event)).toEqual([
-      'tool-call.start',
-    ]);
+    expect(loggedPayloads(sendA).map((message) => message.data.event)).toEqual(['tool-call.start']);
     expect(sendB).not.toHaveBeenCalled();
   });
 
@@ -217,9 +215,11 @@ describe('Phase 7 Plan 07-09 Task 1 - MCP logging', () => {
         .mockResolvedValueOnce({
           content: [{ type: 'text', text: JSON.stringify({ ok: true }) }],
         })
-        .mockRejectedValueOnce(Object.assign(new Error('raw-token-123 should stay private'), {
-          code: 'GraphFailure',
-        })),
+        .mockRejectedValueOnce(
+          Object.assign(new Error('raw-token-123 should stay private'), {
+            code: 'GraphFailure',
+          })
+        ),
     };
     const server = new McpServer({ name: 'tool-logging-test', version: '0.0.0' });
     registerDiscoveryTools(server, graphClient as never, false, true);

@@ -17,6 +17,7 @@ import {
   __resetFactPgvectorAvailabilityForTesting,
   forgetFact,
   isPgvectorRecallEnabled,
+  listFactsForAdmin,
   recallFacts,
   recordFact,
 } from '../../../src/lib/memory/facts.js';
@@ -276,6 +277,37 @@ describe('Phase 7 Plan 07-05 Task 1 - fact service', () => {
         content: 'Tenant B prefers detailed messages.',
       },
     ]);
+  });
+
+  it('listFactsForAdmin cursor follows updated_at DESC, id DESC ordering', async () => {
+    await pool.query(
+      `INSERT INTO tenant_facts (id, tenant_id, scope, content, created_at, updated_at)
+       VALUES
+         ($1, $4, 'preferences', 'newest low id', $7, $7),
+         ($2, $4, 'preferences', 'older high id', $6, $6),
+         ($3, $4, 'preferences', 'oldest middle id', $5, $5)`,
+      [
+        '00000000-0000-4000-8000-000000000001',
+        'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        '11111111-1111-4111-8111-111111111112',
+        TENANT_A,
+        new Date('2026-04-25T10:00:00Z'),
+        new Date('2026-04-25T11:00:00Z'),
+        new Date('2026-04-25T12:00:00Z'),
+      ]
+    );
+
+    const page1 = await listFactsForAdmin(TENANT_A, { limit: 1 });
+    expect(page1.facts.map((fact) => fact.content)).toEqual(['newest low id']);
+    expect(page1.nextCursor).toEqual(expect.any(String));
+
+    const page2 = await listFactsForAdmin(TENANT_A, { limit: 1, cursor: page1.nextCursor! });
+    expect(page2.facts.map((fact) => fact.content)).toEqual(['older high id']);
+    expect(page2.nextCursor).toEqual(expect.any(String));
+
+    const page3 = await listFactsForAdmin(TENANT_A, { limit: 1, cursor: page2.nextCursor! });
+    expect(page3.facts.map((fact) => fact.content)).toEqual(['oldest middle id']);
+    expect(page3.nextCursor).toBeNull();
   });
 
   it('pgvector recall is not selected unless env, query embedding, and schema availability all pass', async () => {

@@ -9,6 +9,10 @@ const FactIdZod = z.string().trim().min(1).max(512);
 const FactQueryZod = z.string().trim().min(1).max(1000).optional();
 const FactLimitZod = z.number().int().optional();
 const QueryEmbeddingZod = z.array(z.number().finite()).min(1).optional();
+const FactCursorZod = z.object({
+  updatedAt: z.string().datetime(),
+  id: z.string().uuid(),
+});
 
 export const FactInputZod = z.object({
   scope: FactScopeZod,
@@ -65,6 +69,8 @@ interface PgvectorAvailabilityRow {
   column_available?: boolean | string | number | null;
 }
 
+type FactCursor = z.infer<typeof FactCursorZod>;
+
 let pgvectorAvailability: boolean | null = null;
 
 function parseTenantId(tenantId: string): string {
@@ -99,6 +105,32 @@ function rowToFact(row: FactRow): Fact {
     updatedAt: toIsoString(row.updated_at),
     ...(score === undefined ? {} : { score }),
   };
+}
+
+export class InvalidFactCursorError extends Error {
+  constructor() {
+    super('invalid_fact_cursor');
+    this.name = 'InvalidFactCursorError';
+  }
+}
+
+function encodeFactCursor(row: FactRow): string {
+  return Buffer.from(
+    JSON.stringify({
+      updatedAt: toIsoString(row.updated_at),
+      id: row.id,
+    })
+  ).toString('base64url');
+}
+
+function decodeFactCursor(value: string): FactCursor | null {
+  try {
+    const decoded = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as unknown;
+    const parsed = FactCursorZod.safeParse(decoded);
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
 }
 
 function boolFromPg(value: boolean | string | number | null | undefined): boolean {
@@ -302,6 +334,43 @@ export async function forgetFact(tenantId: string, id: string): Promise<DeleteFa
   return { deleted: result.rows.length > 0 };
 }
 
+async function resolveAdminFactCursor(
+  tenantId: string,
+  scope: string | undefined,
+  value: string
+): Promise<FactCursor> {
+  const decoded = decodeFactCursor(value);
+  if (decoded) return decoded;
+
+  const legacyId = z.string().uuid().safeParse(value);
+  if (!legacyId.success) {
+    throw new InvalidFactCursorError();
+  }
+
+  const params: unknown[] = [tenantId, legacyId.data];
+  const where = ['tenant_id = $1', 'id = $2'];
+  if (scope) {
+    params.push(scope);
+    where.push(`scope = $${params.length}`);
+  }
+
+  const result = await getPool().query<Pick<FactRow, 'id' | 'updated_at'>>(
+    `SELECT id, updated_at
+     FROM tenant_facts
+     WHERE ${where.join(' AND ')}
+     LIMIT 1`,
+    params
+  );
+  const row = result.rows[0];
+  if (!row) {
+    throw new InvalidFactCursorError();
+  }
+  return {
+    id: row.id,
+    updatedAt: toIsoString(row.updated_at),
+  };
+}
+
 export async function listFactsForAdmin(
   tenantId: string,
   input: ListFactsForAdminInput = {}
@@ -323,8 +392,14 @@ export async function listFactsForAdmin(
     where.push(`scope = $${params.length}`);
   }
   if (parsed.cursor) {
-    params.push(parsed.cursor);
-    where.push(`id::text < $${params.length}`);
+    const cursor = await resolveAdminFactCursor(tid, parsed.scope, parsed.cursor);
+    params.push(cursor.updatedAt);
+    const cursorUpdatedAtParam = `$${params.length}`;
+    params.push(cursor.id);
+    const cursorIdParam = `$${params.length}`;
+    where.push(
+      `(updated_at < ${cursorUpdatedAtParam}::timestamptz OR (updated_at = ${cursorUpdatedAtParam}::timestamptz AND id < ${cursorIdParam}::uuid))`
+    );
   }
 
   params.push(limit + 1);
@@ -342,6 +417,6 @@ export async function listFactsForAdmin(
   const overflow = result.rows[limit];
   return {
     facts: rows.map(rowToFact),
-    nextCursor: overflow?.id ?? null,
+    nextCursor: overflow && rows.length > 0 ? encodeFactCursor(rows[rows.length - 1]) : null,
   };
 }

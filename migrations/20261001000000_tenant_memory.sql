@@ -8,9 +8,9 @@
 --   - This migration is additive only; it does not rewrite existing tenant
 --     rows or change static-preset defaults.
 --   - Full-text fact recall is the default path through content_tsv.
---   - Optional pgvector storage/indexing is gated by bin/migrate.mjs setting
---     ms365_mcp.pgvector_enabled from MS365_MCP_PGVECTOR_ENABLED and by
---     pg_available_extensions advertising the vector extension.
+--   - Optional pgvector storage/indexing is applied by bin/migrate.mjs after
+--     regular Up migrations when MS365_MCP_PGVECTOR_ENABLED is enabled and
+--     pg_available_extensions advertises the vector extension.
 
 CREATE TABLE tenant_tool_bookmarks (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -56,26 +56,6 @@ CREATE INDEX idx_tenant_facts_tenant_scope
 
 CREATE INDEX idx_tenant_facts_content_tsv
   ON tenant_facts USING gin (content_tsv);
-
-DO $$
-BEGIN
-  IF lower(coalesce(current_setting('ms365_mcp.pgvector_enabled', true), 'false')) IN ('1', 'true', 'yes', 'on')
-     AND EXISTS (
-       SELECT 1
-       FROM pg_available_extensions
-       WHERE name = 'vector'
-     ) THEN
-    CREATE EXTENSION IF NOT EXISTS vector;
-
-    ALTER TABLE tenant_facts ADD COLUMN embedding vector(1536);
-
-    CREATE INDEX idx_tenant_facts_embedding
-      ON tenant_facts
-      USING ivfflat (embedding vector_cosine_ops)
-      WITH (lists = 100);
-  END IF;
-END
-$$;
 
 -- Down Migration
 DROP TABLE IF EXISTS tenant_facts;

@@ -53,6 +53,7 @@ export function completeAlias(value: string, deps: CompleteAliasDeps = {}): stri
   const catalog = resolveDiscoveryCatalog({
     presetVersion: tenant.presetVersion,
     enabledToolsSet: tenant.enabledToolsSet,
+    enabledToolsExplicit: tenant.enabledToolsExplicit,
     registryAliases,
   });
 

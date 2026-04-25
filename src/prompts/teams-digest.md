@@ -7,11 +7,13 @@ arguments:
   - name: since
     description: Optional lower bound for recent activity.
 ---
+
 Create a Teams digest for "{{team}}" since "{{since}}".
 
 Use `search-tools` to find operations for teams, channels, chats, messages, replies, and membership. Use `get-tool-schema` to inspect the chosen operations, then use `execute-tool` with small result limits and clear time filters.
 
 Return:
+
 - unread or recent threads grouped by channel or chat
 - decisions, asks, and blockers
 - people mentioned most often

@@ -1323,6 +1323,7 @@ export async function executeToolAlias({
   const catalog = resolveDiscoveryCatalog({
     presetVersion: tenant.presetVersion,
     enabledToolsSet: tenant.enabledToolsSet,
+    enabledToolsExplicit: tenant.enabledToolsExplicit,
     registryAliases: toolsRegistry.keys(),
   });
 
@@ -1360,9 +1361,8 @@ export async function executeToolAlias({
   }
 
   const ctx = requestContext.getStore() ?? {};
-  return requestContext.run(
-    { ...ctx, enabledToolsSet: catalog.discoveryCatalogSet },
-    async () => executeGraphTool(toolData.tool, toolData.config, graphClient, parameters, authManager)
+  return requestContext.run({ ...ctx, enabledToolsSet: catalog.discoveryCatalogSet }, async () =>
+    executeGraphTool(toolData.tool, toolData.config, graphClient, parameters, authManager)
   );
 }
 
@@ -1409,6 +1409,7 @@ function resolveTenantForDiscovery():
   | {
       id: string;
       enabledToolsSet: ReadonlySet<string>;
+      enabledToolsExplicit?: boolean;
       presetVersion: string;
     }
   | undefined {
@@ -1417,6 +1418,7 @@ function resolveTenantForDiscovery():
     return {
       id: als.id,
       enabledToolsSet: als.enabledToolsSet,
+      enabledToolsExplicit: als.enabledToolsExplicit,
       presetVersion: als.presetVersion,
     };
   }
@@ -1425,6 +1427,7 @@ function resolveTenantForDiscovery():
     return {
       id: fallback.tenantId,
       enabledToolsSet: fallback.enabledToolsSet,
+      enabledToolsExplicit: fallback.enabledToolsExplicit,
       presetVersion: fallback.presetVersion,
     };
   }
@@ -1569,6 +1572,7 @@ export function registerDiscoveryTools(
       const catalog = resolveDiscoveryCatalog({
         presetVersion: tenant.presetVersion,
         enabledToolsSet: tenant.enabledToolsSet,
+        enabledToolsExplicit: tenant.enabledToolsExplicit,
         registryAliases: projectedRegistry.keys(),
       });
       const catalogSet = catalog.discoveryCatalogSet;
@@ -1670,6 +1674,7 @@ export function registerDiscoveryTools(
       const catalog = resolveDiscoveryCatalog({
         presetVersion: tenant.presetVersion,
         enabledToolsSet: tenant.enabledToolsSet,
+        enabledToolsExplicit: tenant.enabledToolsExplicit,
         registryAliases: projectedRegistry.keys(),
       });
 

@@ -65,6 +65,14 @@ describe('Phase 7 Plan 07-06 static markdown resource content', () => {
     }
   });
 
+  it('build config copies static resource markdown into dist/resources', () => {
+    const buildConfig = fs.readFileSync(path.join(REPO_ROOT, 'tsup.config.ts'), 'utf-8');
+
+    expect(buildConfig).toContain('copyMarkdownTree');
+    expect(buildConfig).toContain("path.resolve('src/resources')");
+    expect(buildConfig).toContain("path.resolve('dist/resources')");
+  });
+
   it('every workload guide references the discover-schema-execute loop', () => {
     for (const guide of WORKLOAD_GUIDES) {
       const markdown = readResource(guide);

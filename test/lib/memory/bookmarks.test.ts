@@ -121,9 +121,11 @@ async function startBookmarkAdminServer(
   const app = express();
   app.use(express.json() as unknown as express.RequestHandler);
   app.use((req, _res, next) => {
-    (req as unknown as {
-      admin?: { actor: string; source: 'entra'; tenantScoped: string | null };
-    }).admin = { actor: 'admin@example.com', source: 'entra', tenantScoped };
+    (
+      req as unknown as {
+        admin?: { actor: string; source: 'entra'; tenantScoped: string | null };
+      }
+    ).admin = { actor: 'admin@example.com', source: 'entra', tenantScoped };
     (req as express.Request & { id?: string }).id = 'req-bookmark-admin';
     next();
   });
@@ -248,6 +250,28 @@ describe('Phase 7 Plan 07-03 Task 1 — bookmark service', () => {
     expect(await listBookmarks(TENANT_B)).toHaveLength(1);
   });
 
+  it('deleteBookmark rejects ambiguous tenant labels without deleting rows', async () => {
+    await upsertBookmark(TENANT_A, {
+      alias: 'me.sendMail',
+      label: 'mail',
+      note: 'first',
+    });
+    await upsertBookmark(TENANT_A, {
+      alias: 'me.ListMessages',
+      label: 'mail',
+      note: 'second',
+    });
+
+    await expect(deleteBookmark(TENANT_A, 'mail')).resolves.toEqual({
+      deleted: false,
+      ambiguous: true,
+    });
+    expect((await listBookmarks(TENANT_A)).map((bookmark) => bookmark.alias).sort()).toEqual([
+      'me.ListMessages',
+      'me.sendMail',
+    ]);
+  });
+
   it('getBookmarkCountsByAlias counts only the caller tenant aliases', async () => {
     await upsertBookmark(TENANT_A, { alias: 'me.sendMail', label: 'send mail' });
     await upsertBookmark(TENANT_A, { alias: 'me.ListMessages', label: 'messages' });
@@ -358,17 +382,21 @@ describe('Phase 7 Plan 07-03 Task 3 — bookmark boost math', () => {
       },
       () => callTool(server, 'search-tools', { query: 'list user', limit: 10 })
     );
-    const boostedNames = (JSON.parse(boosted.content[0].text) as {
-      tools: Array<{ name: string }>;
-    }).tools.map((tool) => tool.name);
+    const boostedNames = (
+      JSON.parse(boosted.content[0].text) as {
+        tools: Array<{ name: string }>;
+      }
+    ).tools.map((tool) => tool.name);
     expect(boostedNames[0]).toBe('users.user.GetUserByUserPrincipalName');
 
     const notLeaked = await dynamicRequestContext.requestContext.run(discoveryCtxB, () =>
       callTool(server, 'search-tools', { query: 'list user', limit: 10 })
     );
-    const notLeakedNames = (JSON.parse(notLeaked.content[0].text) as {
-      tools: Array<{ name: string }>;
-    }).tools.map((tool) => tool.name);
+    const notLeakedNames = (
+      JSON.parse(notLeaked.content[0].text) as {
+        tools: Array<{ name: string }>;
+      }
+    ).tools.map((tool) => tool.name);
     expect(notLeakedNames[0]).toBe('users.user.ListUser');
 
     discoveryCache._clear();

@@ -102,10 +102,7 @@ export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>)
   }
 }
 
-export function scheduleAfterCommit(
-  client: PoolClient,
-  callback: AfterCommitCallback
-): void {
+export function scheduleAfterCommit(client: PoolClient, callback: AfterCommitCallback): void {
   const callbacks = afterCommitCallbacks.get(client);
   if (!callbacks) return;
   callbacks.push(callback);

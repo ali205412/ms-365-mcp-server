@@ -38,20 +38,15 @@ export interface EmitMcpLogEventInput {
   redis?: RedisFacade;
 }
 
-export function registerMcpLogging(
-  server: McpServer,
-  deps: RegisterMcpLoggingDeps = {}
-): void {
+export function registerMcpLogging(server: McpServer, deps: RegisterMcpLoggingDeps = {}): void {
   const registry = deps.registry ?? mcpSessionRegistry;
   server.server.registerCapabilities({ logging: {} });
   server.server.setRequestHandler(SetLevelRequestSchema, async (request, extra) => {
     const sessionId = extra.sessionId;
     if (!sessionId || !registry.getSession(sessionId)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'logging/setLevel requires an active session.',
-        { code: 'session_required' }
-      );
+      throw new McpError(ErrorCode.InvalidParams, 'logging/setLevel requires an active session.', {
+        code: 'session_required',
+      });
     }
 
     const parsed = LoggingLevelSchema.safeParse(request.params.level);
@@ -83,7 +78,10 @@ export async function emitMcpLogEvent(input: EmitMcpLogEventInput): Promise<void
   }
 }
 
-function redactLogData(event: McpLogEventName, data: Record<string, unknown>): Record<string, unknown> {
+function redactLogData(
+  event: McpLogEventName,
+  data: Record<string, unknown>
+): Record<string, unknown> {
   switch (event) {
     case 'tool-call.start':
       return {

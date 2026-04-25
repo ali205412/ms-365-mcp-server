@@ -66,10 +66,9 @@ function throwResourceError(error: InvalidMcpResourceUri): never {
   throw new McpError(ErrorCode.InvalidParams, error.message, { code: error.code });
 }
 
-function assertParsed(parsed: ParsedMcpResourceUri): asserts parsed is Exclude<
-  ParsedMcpResourceUri,
-  InvalidMcpResourceUri
-> {
+function assertParsed(
+  parsed: ParsedMcpResourceUri
+): asserts parsed is Exclude<ParsedMcpResourceUri, InvalidMcpResourceUri> {
   if (!parsed.ok) {
     throwResourceError(parsed);
   }
@@ -160,12 +159,16 @@ function readCatalogResource(uri: string, parsed: ParsedMcpResourceUri): ReadRes
 function tenantContextFromDeps(deps: ReadMcpResourceDeps): {
   id?: string;
   enabledToolsSet?: ReadonlySet<string>;
+  enabledToolsExplicit?: boolean;
   presetVersion?: string;
 } {
   const requestTenant = getRequestTenant();
   return {
     id: requestTenant.id ?? deps.tenant?.id,
     enabledToolsSet: requestTenant.enabledToolsSet ?? deps.tenant?.enabled_tools_set,
+    enabledToolsExplicit:
+      requestTenant.enabledToolsExplicit ??
+      (deps.tenant ? deps.tenant.enabled_tools !== null : undefined),
     presetVersion: requestTenant.presetVersion ?? deps.tenant?.preset_version,
   };
 }
@@ -186,6 +189,7 @@ function readEndpointSchemaResource(
   const catalog = resolveDiscoveryCatalog({
     presetVersion: tenant.presetVersion,
     enabledToolsSet: tenant.enabledToolsSet,
+    enabledToolsExplicit: tenant.enabledToolsExplicit,
     registryAliases: toolsRegistry.keys(),
   });
 

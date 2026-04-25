@@ -243,10 +243,9 @@ describe('Phase 7 Plan 07-12 — locked workflow prompt content', () => {
       expect(prompt.name).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
       expect(prompt.name.length).toBeLessThanOrEqual(64);
       expect(prompt.description.trim().length).toBeGreaterThan(0);
-      expect(prompt.arguments.map((arg) => ({ name: arg.name, required: arg.required === true })))
-        .toEqual(
-          LOCKED_PROMPT_SPECS[prompt.name as keyof typeof LOCKED_PROMPT_SPECS]
-        );
+      expect(
+        prompt.arguments.map((arg) => ({ name: arg.name, required: arg.required === true }))
+      ).toEqual(LOCKED_PROMPT_SPECS[prompt.name as keyof typeof LOCKED_PROMPT_SPECS]);
     }
   });
 

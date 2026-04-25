@@ -40,7 +40,10 @@ export interface BookmarkToolDeps {
   redis: RedisClient;
 }
 
-function jsonResult(value: unknown, isError = false): {
+function jsonResult(
+  value: unknown,
+  isError = false
+): {
   content: Array<{ type: 'text'; text: string }>;
   isError?: boolean;
 } {
@@ -180,6 +183,16 @@ export function registerBookmarkTools(server: McpServer, deps: BookmarkToolDeps)
       }
 
       const result = await deleteBookmark(tenant.id, parsed.data.label_or_alias);
+      if (result.ambiguous) {
+        return jsonResult(
+          {
+            error: 'ambiguous_bookmark_label',
+            label: parsed.data.label_or_alias,
+            tip: 'Use the bookmark id or exact alias to delete one row.',
+          },
+          true
+        );
+      }
       if (result.deleted) await publishBookmarkChange(deps.redis, tenant.id);
       return jsonResult(result);
     }

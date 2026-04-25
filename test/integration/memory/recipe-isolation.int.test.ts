@@ -65,9 +65,11 @@ async function startRecipeAdminServer(
   const app = express();
   app.use(express.json() as unknown as express.RequestHandler);
   app.use((req, _res, next) => {
-    (req as unknown as {
-      admin?: { actor: string; source: 'entra'; tenantScoped: string | null };
-    }).admin = { actor: 'admin@example.com', source: 'entra', tenantScoped };
+    (
+      req as unknown as {
+        admin?: { actor: string; source: 'entra'; tenantScoped: string | null };
+      }
+    ).admin = { actor: 'admin@example.com', source: 'entra', tenantScoped };
     (req as express.Request & { id?: string }).id = 'req-recipe-admin';
     next();
   });
@@ -185,11 +187,17 @@ describe('Phase 7 Plan 07-04 Task 3 — recipe tenant isolation', () => {
     });
     const { url, close } = await startRecipeAdminServer(redis);
     try {
-      const denied = await doJson('DELETE', `${url}/admin/tenants/${TENANT_B}/recipes/${recipeA.id}`);
+      const denied = await doJson(
+        'DELETE',
+        `${url}/admin/tenants/${TENANT_B}/recipes/${recipeA.id}`
+      );
       expect(denied.status).toBe(200);
       expect(denied.body).toEqual({ deleted: false });
 
-      const result = await doJson('DELETE', `${url}/admin/tenants/${TENANT_A}/recipes/${recipeA.id}`);
+      const result = await doJson(
+        'DELETE',
+        `${url}/admin/tenants/${TENANT_A}/recipes/${recipeA.id}`
+      );
       expect(result.status).toBe(200);
       expect(result.body).toEqual({ deleted: true });
       expect(await listRecipes(TENANT_A)).toEqual([]);

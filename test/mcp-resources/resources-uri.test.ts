@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  assertTenantResourceOwner,
-  parseMcpResourceUri,
-} from '../../src/lib/mcp-resources/uri.js';
+import { assertTenantResourceOwner, parseMcpResourceUri } from '../../src/lib/mcp-resources/uri.js';
 
 const TENANT_A = '11111111-1111-4111-8111-111111111111';
 const TENANT_B = '22222222-2222-4222-8222-222222222222';

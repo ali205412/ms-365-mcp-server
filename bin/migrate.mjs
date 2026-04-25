@@ -50,6 +50,37 @@ async function createMigrationClient(connectionString) {
   return client;
 }
 
+async function applyPgvectorSupport(client) {
+  if (!pgvectorEnabledFromEnv()) return;
+
+  const { rows } = await client.query(`
+    SELECT
+      EXISTS (
+        SELECT 1
+        FROM pg_available_extensions
+        WHERE name = 'vector'
+      ) AS extension_available,
+      to_regclass('public.tenant_facts') IS NOT NULL AS table_exists
+  `);
+  const status = rows[0] ?? {};
+  if (!status.table_exists) return;
+  if (!status.extension_available) {
+    process.stderr.write(
+      'MS365_MCP_PGVECTOR_ENABLED is set, but the vector extension is not available; skipping tenant_facts.embedding setup\n'
+    );
+    return;
+  }
+
+  await client.query('CREATE EXTENSION IF NOT EXISTS vector');
+  await client.query('ALTER TABLE tenant_facts ADD COLUMN IF NOT EXISTS embedding vector(1536)');
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_tenant_facts_embedding
+      ON tenant_facts
+      USING ivfflat (embedding vector_cosine_ops)
+      WITH (lists = 100)
+  `);
+}
+
 /**
  * Programmatic entry point. Returns 0 on success, non-zero on error so
  * callers can choose whether to `process.exit()`.
@@ -107,6 +138,9 @@ export async function main(argv = process.argv.slice(2)) {
       count,
       dryRun,
     });
+    if (direction === 'up' && !dryRun) {
+      await applyPgvectorSupport(client);
+    }
     process.stdout.write(
       `${JSON.stringify({ direction, count: applied.length, dryRun }, null, 2)}\n`
     );

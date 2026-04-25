@@ -232,9 +232,9 @@ describe('Phase 7 Plan 07-02 — discovery-v1 visible preset', () => {
 
     const out = fs.readFileSync(path.join(tmp, 'presets', 'generated-index.ts'), 'utf-8');
     expect(out).toContain('DISCOVERY_V1_OPS');
-    expect(out).toContain('"discovery-v1"');
+    expect(out).toMatch(/['"]discovery-v1['"]/);
     for (const alias of DISCOVERY_META_ALIASES) {
-      expect(out).toContain(JSON.stringify(alias));
+      expect(out).toMatch(new RegExp(`['"]${alias}['"]`));
     }
 
     const broken = makeTmp();
@@ -286,6 +286,26 @@ describe('Phase 7 Plan 07-02 — discovery catalog separation', () => {
     expect(resolution.discoveryCatalogSet.size).toBeGreaterThan(12);
     expect(resolution.discoveryCatalogSet.has('me.sendMail')).toBe(true);
     expect(resolution.discoveryCatalogSet.has('__powerbi__Groups_GetGroups')).toBe(true);
+    expect(resolution.discoveryCatalogSet.has('search-tools')).toBe(false);
+  });
+
+  it('resolveDiscoveryCatalog applies explicit allowlists inside discovery-v1 catalogs', () => {
+    const registryAliases = Object.freeze(
+      new Set(['search-tools', 'me.sendMail', 'me.ListMessages', '__powerbi__Groups_GetGroups'])
+    );
+
+    const resolution = resolveDiscoveryCatalog({
+      presetVersion: DISCOVERY_PRESET_VERSION,
+      enabledToolsSet: Object.freeze(new Set(['me.ListMessages'])),
+      enabledToolsExplicit: true,
+      registryAliases,
+    });
+
+    expect(resolution.isDiscoverySurface).toBe(true);
+    expect(resolution.visibleToolsSet.has('search-tools')).toBe(true);
+    expect(resolution.discoveryCatalogSet.has('me.ListMessages')).toBe(true);
+    expect(resolution.discoveryCatalogSet.has('me.sendMail')).toBe(false);
+    expect(resolution.discoveryCatalogSet.has('__powerbi__Groups_GetGroups')).toBe(false);
     expect(resolution.discoveryCatalogSet.has('search-tools')).toBe(false);
   });
 
@@ -344,6 +364,50 @@ describe('Phase 7 Plan 07-02 — discovery catalog separation', () => {
     );
     expect(executed.isError).toBeFalsy();
     expect(graphClient.graphRequest).toHaveBeenCalled();
+  });
+
+  it('discovery tools enforce explicit tenant allowlists before schema or execution', async () => {
+    const server = new McpServer({ name: 'test', version: '0.0.0' });
+    const graphClient = {
+      graphRequest: vi.fn().mockResolvedValue({
+        content: [{ type: 'text', text: JSON.stringify({ ok: true }) }],
+      }),
+    };
+    registerDiscoveryTools(
+      server,
+      graphClient as unknown as Parameters<typeof registerDiscoveryTools>[1],
+      false,
+      true
+    );
+
+    const ctx = {
+      tenantId: '11111111-1111-4111-8111-111111111111',
+      enabledToolsSet: Object.freeze(new Set(['me.ListMessages'])),
+      enabledToolsExplicit: true,
+      presetVersion: DISCOVERY_PRESET_VERSION,
+    };
+
+    const search = await requestContext.run(ctx, () =>
+      callDiscoveryTool(server, 'search-tools', { limit: 10 })
+    );
+    const searchBody = JSON.parse(search.content[0].text) as {
+      tools: Array<{ name: string }>;
+      total: number;
+    };
+    expect(searchBody.total).toBe(1);
+    expect(searchBody.tools.map((t) => t.name)).toEqual(['me.ListMessages']);
+
+    const schema = await requestContext.run(ctx, () =>
+      callDiscoveryTool(server, 'get-tool-schema', { tool_name: 'me.sendMail' })
+    );
+    expect(schema.isError).toBe(true);
+    expect(schema.content[0].text).toContain('Tool not enabled for tenant');
+
+    const executed = await requestContext.run(ctx, () =>
+      callDiscoveryTool(server, 'execute-tool', { tool_name: 'me.sendMail', parameters: {} })
+    );
+    expect(executed.isError).toBe(true);
+    expect(graphClient.graphRequest).not.toHaveBeenCalled();
   });
 
   it('static tenants still search only their enabledToolsSet through discovery tools', async () => {

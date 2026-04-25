@@ -7,11 +7,13 @@ arguments:
   - name: since
     description: Optional lower bound for messages to inspect.
 ---
+
 Triage mail for account "{{account}}" since "{{since}}".
 
 Use `search-tools` to find message listing, message detail, sender, and draft reply operations. Use `get-tool-schema` before calling unfamiliar operations, then use `execute-tool` to fetch unread or recent messages in small batches.
 
 Group the messages into:
+
 - urgent action needed
 - waiting on me
 - waiting on others

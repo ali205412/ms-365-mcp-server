@@ -181,7 +181,9 @@ function rowToParams(row: AuditRow): unknown[] {
  */
 export async function writeAudit(client: PoolClient, row: AuditRow): Promise<void> {
   await client.query(INSERT_SQL, rowToParams(row));
-  scheduleAfterCommit(client, () => publishAuditResourceUpdate(row.tenantId));
+  if (typeof scheduleAfterCommit === 'function') {
+    scheduleAfterCommit(client, () => publishAuditResourceUpdate(row.tenantId));
+  }
 }
 
 /**

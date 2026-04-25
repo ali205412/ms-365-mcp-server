@@ -5,11 +5,7 @@ import type { AdminRouterDeps } from './router.js';
 import { problemBadRequest, problemInternal, problemNotFound } from './problem-json.js';
 import { publishResourceUpdated } from '../mcp-notifications/events.js';
 import { publishToolSelectionInvalidation } from '../tool-selection/tool-selection-invalidation.js';
-import {
-  BookmarkInputZod,
-  deleteBookmark,
-  upsertBookmark,
-} from '../memory/bookmarks.js';
+import { BookmarkInputZod, deleteBookmark, upsertBookmark } from '../memory/bookmarks.js';
 
 const TENANT_GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const BOOKMARK_CHANGE_REASON = 'bookmark-change';
@@ -106,6 +102,14 @@ export function createMemoryBookmarkRoutes(deps: Pick<AdminRouterDeps, 'redis'>)
 
     try {
       const result = await deleteBookmark(id, parsed.data);
+      if (result.ambiguous) {
+        problemBadRequest(
+          res,
+          'Bookmark label is ambiguous; delete by bookmark id or alias.',
+          req.id
+        );
+        return;
+      }
       if (result.deleted) await publishBookmarkChange(deps, id);
       res.status(200).json(result);
     } catch (err) {

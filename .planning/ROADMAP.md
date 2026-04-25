@@ -19,6 +19,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 5: Graph Coverage Expansion & Per-Tenant Tool Selection** - Regenerated client against full Graph v1.0 + curated beta whitelist (~5,000 ops), default ~150-op essentials preset, per-tenant enabled_tools enforcement at dispatch and discovery, HIGH-priority workload coverage verified
 - [ ] **Phase 5.1: Power Platform & M365 Admin Surface Expansion** (INSERTED) - Extend the generator pipeline beyond Microsoft Graph to cover Power BI REST API, Power Apps, Power Automate, Exchange Admin (PowerShell REST bridge), and SharePoint Tenant Admin. Each product gets a namespace prefix (`__powerbi__`, `__pwrapps__`, `__pwrauto__`, `__exo__`, `__spadmin__`), per-product essentials preset additions, admin-API workload selectors, and coverage harness thresholds.
 - [x] **Phase 6: Operational Observability & Rate Limiting** - OpenTelemetry traces + metrics on every Graph request (tenant/tool/status/duration/retry-count), Prometheus /metrics endpoint, per-tenant rate limiting (request count + Graph token budget), and the integration test pass that closes v1's 0%-coverage OAuth surface (completed 2026-04-22)
+- [x] **Phase 7: Agentic Tool Surface + Per-Tenant Memory** - Make discovery-mode the default for new tenants, expose MCP Resources/Prompts/Notifications/Logging/Completions, add per-tenant bookmarks/recipes/facts memory with admin APIs, and provide an opt-in migration path while preserving existing static-preset tenants unchanged. (completed 2026-04-25; external Claude.ai UX verification pending)
 
 ## Phase Details
 
@@ -194,7 +195,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -204,6 +205,28 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 4. Admin API, Webhooks & Delta Persistence | 0/9 | Not started | - |
 | 5. Graph Coverage Expansion & Per-Tenant Tool Selection | 0/8 | Not started | - |
 | 6. Operational Observability & Rate Limiting | 9/9 | Complete    | 2026-04-22 |
+| 7. Agentic Tool Surface + Per-Tenant Memory | 12/12 | Complete    | 2026-04-25 |
+
+### Phase 7: agentic-tool-surface: discovery default + MCP Resources/Prompts/Notifications/Logging/Completions + per-tenant bookmarks/recipes/facts memory + admin API + opt-in migration. Skips Tasks/Elicitation/Sampling/Roots (no claude.ai client). Full SPEC.md / PLAN.md to be filled in /gsd-plan-phase.
+
+**Goal:** Transform the gateway from a curated static tool-list model into an agentic discovery surface where new tenants default to a 12-tool discovery preset, use MCP Resources/Prompts/Notifications/Logging/Completions to navigate the full catalog, and persist per-tenant bookmarks, recipes, and facts without changing existing static-preset tenants.
+**Requirements**: Phase 7 SPEC acceptance criteria 1-11
+**Depends on:** Phase 6
+**Plans:** 12 plans
+
+Plans:
+- [x] 07-01: Additive Postgres migrations for tenant_tool_bookmarks, tenant_tool_recipes, tenant_facts, and optional pgvector support
+- [x] 07-02: discovery-v1 visible preset, tenant defaults, and separate discovery catalog resolver
+- [x] 07-03: Bookmark memory tools, admin subrouter, BM25 boost over discoveryCatalogSet, invalidation, and isolation tests
+- [x] 07-04: Recipe memory tools, admin subrouter, run-recipe dispatch, and isolation tests
+- [x] 07-05: Fact memory tools, aggregate memory/admin registration, optional-pgvector recall gate, and exact 12-tool surface tests
+- [x] 07-06: Static MCP resource catalog markdown and manifest
+- [x] 07-07: MCP prompt loader, bounded renderer, and discovery-only registration hook
+- [x] 07-08: Stateful MCP Notifications for tool-list/resource-list/resource-update/message events with Streamable HTTP session reuse
+- [x] 07-09: MCP Logging and Completions capabilities with per-session log level and discoveryCatalogSet alias completion
+- [x] 07-10: Discovery migration CLI, opt-in docs, E2E discovery smoke, and static-mode regression checks
+- [x] 07-11: MCP Resources URI parsing, read dispatch, endpoint schema resources, templates, and discovery-only registration
+- [x] 07-12: 10 canned MCP prompt workflow markdown templates and exact prompt-count tests
 
 ---
 

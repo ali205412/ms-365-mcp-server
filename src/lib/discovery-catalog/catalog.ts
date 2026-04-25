@@ -11,14 +11,19 @@ export interface DiscoveryCatalogResolution {
 export interface DiscoveryCatalogInput {
   presetVersion?: string;
   enabledToolsSet?: ReadonlySet<string>;
+  enabledToolsExplicit?: boolean;
   registryAliases: Iterable<string>;
 }
 
 export function resolveDiscoveryCatalog(input: DiscoveryCatalogInput): DiscoveryCatalogResolution {
   if (isDiscoverySurface(input.presetVersion)) {
+    const explicitAllowlist = input.enabledToolsExplicit ? input.enabledToolsSet : undefined;
     const discoveryCatalogSet = new Set<string>();
     for (const alias of input.registryAliases) {
-      if (!DISCOVERY_META_TOOL_NAMES.has(alias)) {
+      if (
+        !DISCOVERY_META_TOOL_NAMES.has(alias) &&
+        (!explicitAllowlist || explicitAllowlist.has(alias))
+      ) {
         discoveryCatalogSet.add(alias);
       }
     }

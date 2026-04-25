@@ -156,41 +156,48 @@ function makeTransportFactory() {
     close: ReturnType<typeof vi.fn>;
     handleRequest: ReturnType<typeof vi.fn>;
   }> = [];
-  const createTransport = vi.fn((options: {
-    onsessioninitialized?: (sessionId: string) => void | Promise<void>;
-    onsessionclosed?: (sessionId: string) => void | Promise<void>;
-  }) => {
-    const transport = {
-      sessionId: undefined as string | undefined,
-      onclose: undefined as (() => void) | undefined,
-      close: vi.fn(async () => {
-        transport.onclose?.();
-      }),
-      handleRequest: vi.fn(async (req: { method: string; get: (name: string) => string | undefined }, res: FakeResponse) => {
-        const sessionId = req.get('mcp-session-id');
-        if (req.method === 'POST' && !sessionId) {
-          transport.sessionId = 'generated-session';
-          await options.onsessioninitialized?.('generated-session');
-          res.setHeader('Mcp-Session-Id', 'generated-session');
-          res.status(200).json({ initialized: true });
-          return;
-        }
-        if (req.method === 'GET') {
-          res.writeHead(200, { 'content-type': 'text/event-stream' });
-          res.write('event: notifications\n\n');
-          return;
-        }
-        if (req.method === 'DELETE') {
-          await options.onsessionclosed?.(sessionId ?? '');
-          res.status(200).end();
-          return;
-        }
-        res.status(202).end();
-      }),
-    };
-    transports.push(transport);
-    return transport;
-  });
+  const createTransport = vi.fn(
+    (options: {
+      onsessioninitialized?: (sessionId: string) => void | Promise<void>;
+      onsessionclosed?: (sessionId: string) => void | Promise<void>;
+    }) => {
+      const transport = {
+        sessionId: undefined as string | undefined,
+        onclose: undefined as (() => void) | undefined,
+        close: vi.fn(async () => {
+          transport.onclose?.();
+        }),
+        handleRequest: vi.fn(
+          async (
+            req: { method: string; get: (name: string) => string | undefined },
+            res: FakeResponse
+          ) => {
+            const sessionId = req.get('mcp-session-id');
+            if (req.method === 'POST' && !sessionId) {
+              transport.sessionId = 'generated-session';
+              await options.onsessioninitialized?.('generated-session');
+              res.setHeader('Mcp-Session-Id', 'generated-session');
+              res.status(200).json({ initialized: true });
+              return;
+            }
+            if (req.method === 'GET') {
+              res.writeHead(200, { 'content-type': 'text/event-stream' });
+              res.write('event: notifications\n\n');
+              return;
+            }
+            if (req.method === 'DELETE') {
+              await options.onsessionclosed?.(sessionId ?? '');
+              res.status(200).end();
+              return;
+            }
+            res.status(202).end();
+          }
+        ),
+      };
+      transports.push(transport);
+      return transport;
+    }
+  );
   return { createTransport, transports };
 }
 
@@ -241,9 +248,11 @@ async function startAdminServer(pool: Pool, redis: MemoryRedisFacade) {
   const app = express();
   app.use(express.json() as unknown as express.RequestHandler);
   app.use((req, _res, next) => {
-    (req as unknown as {
-      admin?: { actor: string; source: 'entra'; tenantScoped: string | null };
-    }).admin = { actor: 'admin@example.com', source: 'entra', tenantScoped: null };
+    (
+      req as unknown as {
+        admin?: { actor: string; source: 'entra'; tenantScoped: string | null };
+      }
+    ).admin = { actor: 'admin@example.com', source: 'entra', tenantScoped: null };
     (req as express.Request & { id?: string }).id = 'req-notifications';
     next();
   });
@@ -355,7 +364,9 @@ describe('Phase 7 Plan 07-08 Task 1 — agentic event session registry', () => {
     now += 1_999;
     expect(coalescer.shouldDeliver(TENANT_A, 'session-1', AUDIT_URI)).toBe(false);
     expect(coalescer.shouldDeliver(TENANT_A, 'session-2', AUDIT_URI)).toBe(true);
-    expect(coalescer.shouldDeliver(TENANT_A, 'session-1', `mcp://tenant/${TENANT_A}/bookmarks.json`)).toBe(true);
+    expect(
+      coalescer.shouldDeliver(TENANT_A, 'session-1', `mcp://tenant/${TENANT_A}/bookmarks.json`)
+    ).toBe(true);
     expect(coalescer.shouldDeliver(TENANT_B, 'session-1', AUDIT_URI)).toBe(true);
 
     now += 1;
@@ -423,7 +434,11 @@ describe('Phase 7 Plan 07-08 Task 3 — stateful streamable HTTP and admin list 
     expect(transports[0].handleRequest).toHaveBeenCalledTimes(2);
 
     const getRes = new FakeResponse();
-    await handler(makeRequest('GET', undefined, 'generated-session') as never, getRes as never, vi.fn());
+    await handler(
+      makeRequest('GET', undefined, 'generated-session') as never,
+      getRes as never,
+      vi.fn()
+    );
     expect(getRes.getHeader('content-type')).toBe('text/event-stream');
     expect(transports[0].handleRequest).toHaveBeenCalledTimes(3);
 
@@ -465,9 +480,13 @@ describe('Phase 7 Plan 07-08 Task 3 — stateful streamable HTTP and admin list 
       const tenantId = (await pool.query<{ id: string }>('SELECT id FROM tenants LIMIT 1')).rows[0]
         .id;
       const enabledToolsEvents = await collectAgenticEvents(redis, async () => {
-        const patched = await doJson('PATCH', `${server.url}/admin/tenants/${tenantId}/enabled-tools`, {
-          set: '',
-        });
+        const patched = await doJson(
+          'PATCH',
+          `${server.url}/admin/tenants/${tenantId}/enabled-tools`,
+          {
+            set: '',
+          }
+        );
         expect(patched.status).toBe(200);
       });
       expect(enabledToolsEvents).toEqual(

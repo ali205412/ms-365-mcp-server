@@ -75,11 +75,7 @@ export function createStreamableHttpHandler(deps: StreamableHttpDeps): RequestHa
     const requestedSessionId = getSessionId(req);
     if (requestedSessionId) {
       const session = registry.getSession(requestedSessionId);
-      if (
-        !session ||
-        session.tenantId !== tenant.id ||
-        session.surface !== 'discovery'
-      ) {
+      if (!session || session.tenantId !== tenant.id || session.surface !== 'discovery') {
         res.status(404).json({
           jsonrpc: '2.0',
           error: { code: -32001, message: 'Session not found' },

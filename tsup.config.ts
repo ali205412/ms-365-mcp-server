@@ -13,13 +13,18 @@ export default defineConfig({
   publicDir: false,
   onSuccess: async () => {
     // Phase 6 plan 06-04: preserve the chmod behavior AND copy the Lua script.
-    const { chmodSync, copyFileSync, mkdirSync, readdirSync } = await import('node:fs');
+    const { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync } = await import('node:fs');
     const path = await import('node:path');
-    const copyMarkdownDir = (srcDir: string, distDir: string): void => {
+    const copyMarkdownTree = (srcDir: string, distDir: string): void => {
+      if (!existsSync(srcDir)) return;
       mkdirSync(distDir, { recursive: true });
       for (const entry of readdirSync(srcDir, { withFileTypes: true })) {
-        if (entry.isFile() && entry.name.endsWith('.md')) {
-          copyFileSync(path.join(srcDir, entry.name), path.join(distDir, entry.name));
+        const srcPath = path.join(srcDir, entry.name);
+        const distPath = path.join(distDir, entry.name);
+        if (entry.isDirectory()) {
+          copyMarkdownTree(srcPath, distPath);
+        } else if (entry.isFile() && entry.name.endsWith('.md')) {
+          copyFileSync(srcPath, distPath);
         }
       }
     };
@@ -34,8 +39,10 @@ export default defineConfig({
     const distLua = path.resolve('dist/lib/rate-limit/sliding-window.lua');
     mkdirSync(path.dirname(distLua), { recursive: true });
     copyFileSync(srcLua, distLua);
-    // 3. Copy MCP prompt templates so the built registry can load dist/prompts.
-    copyMarkdownDir(path.resolve('src/prompts'), path.resolve('dist/prompts'));
+    // 3. Copy MCP prompt templates and static resource markdown so the built
+    //    registries can load dist/prompts and dist/resources.
+    copyMarkdownTree(path.resolve('src/prompts'), path.resolve('dist/prompts'));
+    copyMarkdownTree(path.resolve('src/resources'), path.resolve('dist/resources'));
   },
   loader: {
     '.json': 'copy',

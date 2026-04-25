@@ -48,7 +48,10 @@ export interface RecipeToolDeps {
   orgMode?: boolean;
 }
 
-function jsonResult(value: unknown, isError = false): {
+function jsonResult(
+  value: unknown,
+  isError = false
+): {
   content: Array<{ type: 'text'; text: string }>;
   isError?: boolean;
 } {

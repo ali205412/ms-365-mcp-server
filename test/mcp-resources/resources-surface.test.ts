@@ -263,10 +263,14 @@ describe('Phase 7 Plan 07-11 Task 3 - MCP resource registration', () => {
       'mcp://catalog/workloads/{slug}.md',
       'mcp://endpoint/{alias}.schema.json',
     ]);
-    expect(list.resourceTemplates.find((template) => template.uriTemplate.includes('workloads'))).toMatchObject({
+    expect(
+      list.resourceTemplates.find((template) => template.uriTemplate.includes('workloads'))
+    ).toMatchObject({
       mimeType: 'text/markdown',
     });
-    expect(list.resourceTemplates.find((template) => template.uriTemplate.includes('endpoint'))).toMatchObject({
+    expect(
+      list.resourceTemplates.find((template) => template.uriTemplate.includes('endpoint'))
+    ).toMatchObject({
       mimeType: 'application/json',
     });
     expect(templates.some((template) => template.includes('/tenant/'))).toBe(false);

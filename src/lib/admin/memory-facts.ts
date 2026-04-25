@@ -4,7 +4,12 @@ import logger from '../../logger.js';
 import type { AdminRouterDeps } from './router.js';
 import { problemBadRequest, problemInternal, problemNotFound } from './problem-json.js';
 import { publishResourceUpdated } from '../mcp-notifications/events.js';
-import { FactScopeZod, forgetFact, listFactsForAdmin } from '../memory/facts.js';
+import {
+  FactScopeZod,
+  InvalidFactCursorError,
+  forgetFact,
+  listFactsForAdmin,
+} from '../memory/facts.js';
 
 const TENANT_GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -69,6 +74,10 @@ export function createMemoryFactRoutes(deps: Pick<AdminRouterDeps, 'redis'>): Ro
       const result = await listFactsForAdmin(id, parsed.data);
       res.status(200).json(result);
     } catch (err) {
+      if (err instanceof InvalidFactCursorError) {
+        problemBadRequest(res, 'invalid_fact_cursor', req.id);
+        return;
+      }
       logger.error(
         { tenantId: id, err: (err as Error).message },
         'admin-memory-facts: list failed'

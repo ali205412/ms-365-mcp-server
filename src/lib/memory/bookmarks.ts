@@ -31,6 +31,7 @@ export interface Bookmark {
 
 export interface DeleteBookmarkResult {
   deleted: boolean;
+  ambiguous?: boolean;
 }
 
 interface BookmarkRow {
@@ -110,13 +111,41 @@ export async function deleteBookmark(
 ): Promise<DeleteBookmarkResult> {
   const tid = parseTenantId(tenantId);
   const lookup = BookmarkLookupZod.parse(labelOrAliasOrId);
-  const result = await getPool().query<{ id: string }>(
+
+  const byId = await getPool().query<{ id: string }>(
     `DELETE FROM tenant_tool_bookmarks
-     WHERE tenant_id = $1 AND (id::text = $2 OR alias = $2 OR label = $2)
+     WHERE tenant_id = $1 AND id::text = $2
      RETURNING id`,
     [tid, lookup]
   );
-  return { deleted: result.rows.length > 0 };
+  if (byId.rows.length > 0) return { deleted: true };
+
+  const byAlias = await getPool().query<{ id: string }>(
+    `DELETE FROM tenant_tool_bookmarks
+     WHERE tenant_id = $1 AND alias = $2
+     RETURNING id`,
+    [tid, lookup]
+  );
+  if (byAlias.rows.length > 0) return { deleted: true };
+
+  const labelMatches = await getPool().query<{ id: string }>(
+    `SELECT id
+     FROM tenant_tool_bookmarks
+     WHERE tenant_id = $1 AND label = $2
+     ORDER BY created_at DESC, id ASC
+     LIMIT 2`,
+    [tid, lookup]
+  );
+  if (labelMatches.rows.length === 0) return { deleted: false };
+  if (labelMatches.rows.length > 1) return { deleted: false, ambiguous: true };
+
+  const byLabel = await getPool().query<{ id: string }>(
+    `DELETE FROM tenant_tool_bookmarks
+     WHERE tenant_id = $1 AND id = $2
+     RETURNING id`,
+    [tid, labelMatches.rows[0].id]
+  );
+  return { deleted: byLabel.rows.length > 0 };
 }
 
 export async function getBookmarkCountsByAlias(tenantId: string): Promise<Map<string, number>> {

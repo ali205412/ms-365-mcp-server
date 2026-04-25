@@ -1,11 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import logger from '../../logger.js';
-import {
-  AGENTIC_EVENTS_CHANNEL,
-  type AgenticEvent,
-  type McpLogMessage,
-} from './events.js';
+import { AGENTIC_EVENTS_CHANNEL, type AgenticEvent, type McpLogMessage } from './events.js';
 import {
   defaultResourceNotificationCoalescer,
   type ResourceNotificationCoalescer,
@@ -25,7 +21,7 @@ export interface RegisteredMcpSession {
   surface: McpNotificationSurface;
 }
 
-export interface RegisterSessionInput extends RegisteredMcpSession {}
+export type RegisterSessionInput = RegisteredMcpSession;
 
 export interface RedisSubscriberLike {
   subscribe(channel: string): Promise<number>;
