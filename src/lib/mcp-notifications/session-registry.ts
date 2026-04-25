@@ -49,11 +49,15 @@ export interface McpSessionRegistryOptions {
 export class McpSessionRegistry {
   private readonly sessions = new Map<string, RegisteredMcpSession>();
   private readonly coalescer: ResourceNotificationCoalescer;
-  private readonly isResourceSubscribed?: ResourceSubscriptionChecker;
+  private isResourceSubscribed?: ResourceSubscriptionChecker;
 
   constructor(options: McpSessionRegistryOptions = {}) {
     this.coalescer = options.coalescer ?? defaultResourceNotificationCoalescer;
     this.isResourceSubscribed = options.isResourceSubscribed;
+  }
+
+  setResourceSubscriptionChecker(checker: ResourceSubscriptionChecker | undefined): void {
+    this.isResourceSubscribed = checker;
   }
 
   registerSession(input: RegisterSessionInput): RegisteredMcpSession {

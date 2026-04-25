@@ -54,6 +54,15 @@ function registerFakeSession(registry: McpSessionRegistry, sessionId: string): S
   return sent;
 }
 
+async function waitFor(condition: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  expect(condition()).toBe(true);
+}
+
 function makeHandlerHarness(tenantId: string, store: RedisResourceSubscriptionStore) {
   let subscribeHandler:
     | ((request: SubscribeRequest, extra: { sessionId?: string }) => Promise<unknown>)
@@ -138,6 +147,7 @@ describe('Phase 7 Plan 07-08 Task 2 — resource subscriptions', () => {
     await store.subscribe(TENANT_A, SESSION_SUBSCRIBED, BOOKMARKS_URI);
     await subscribeToAgenticEvents(redis, registry);
     await publishResourceUpdated(redis, TENANT_A, [BOOKMARKS_URI], 'bookmark-change');
+    await waitFor(() => subscribed.length === 1);
 
     expect(subscribed).toEqual([
       { method: 'notifications/resources/updated', params: { uri: BOOKMARKS_URI } },

@@ -5,8 +5,12 @@ import {
   WORKLOAD_GUIDE_SLUGS,
 } from './catalog.js';
 import { JSON_MIME_TYPE, readMcpResource, type ReadMcpResourceDeps } from './read.js';
+import { registerResourceSubscriptionHandlers } from '../mcp-notifications/register-handlers.js';
+import type { RedisResourceSubscriptionStore } from '../mcp-notifications/resource-subscriptions.js';
 
-export interface RegisterMcpResourcesDeps extends ReadMcpResourceDeps {}
+export interface RegisterMcpResourcesDeps extends ReadMcpResourceDeps {
+  resourceSubscriptions?: RedisResourceSubscriptionStore;
+}
 
 interface ResourceDefinition {
   uri: string;
@@ -144,6 +148,13 @@ export function registerMcpResources(server: McpServer, deps: RegisterMcpResourc
   const tenantId = deps.tenant?.id;
   if (!tenantId) {
     return;
+  }
+
+  if (deps.resourceSubscriptions) {
+    registerResourceSubscriptionHandlers(server, {
+      tenantId,
+      store: deps.resourceSubscriptions,
+    });
   }
 
   for (const resource of staticResourceDefinitions()) {
