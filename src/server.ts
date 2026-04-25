@@ -1314,17 +1314,16 @@ class MicrosoftGraphServer {
     // so tool registration is identical across transports. The closure
     // captures `this` + tenantPool + redis from the bootstrap scope.
     const authSelector = createAuthSelectorMiddleware({ tenantPool });
-    // Cached factory — `this.createMcpServer(tenant)` is expensive (registers
-    // every tool in the tenant's enabled_tools_set), so memoize per tenantId
-    // and let the invalidation subscribers drop entries on tenant /
-    // tool-selection mutations.
-    const buildMcpServer = (tenant: TenantRow): McpServer => {
-      const cached = mcpServerCache.get(tenant.id);
-      if (cached) return cached;
-      const fresh = this.createMcpServer(tenant);
-      mcpServerCache.set(tenant.id, fresh);
-      return fresh;
-    };
+    // NOT cached: MCP SDK's Server.connect(transport) is strictly 1:1 —
+    // reusing a server across requests fails with "Already connected to
+    // a transport". Per-tenant caching was attempted (commit d6706e3)
+    // but conflicts with the streamable-http stateless transport model.
+    // The cost we still avoid is registering 42k tools per request:
+    // registerGraphTools now filters by tenant.enabled_tools_set BEFORE
+    // building Zod schemas, so each per-request build is ~204 tools
+    // (cheap, sub-100ms) instead of the full catalog.
+    const buildMcpServer = (tenant: TenantRow): McpServer => this.createMcpServer(tenant);
+    void mcpServerCache;
 
     // Plan 05-04 TENANT-08: seed AsyncLocalStorage with tenantId +
     // enabled_tools_set + preset_version BEFORE authSelector runs. The auth
