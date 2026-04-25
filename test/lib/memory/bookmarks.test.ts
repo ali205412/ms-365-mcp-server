@@ -5,7 +5,7 @@
  * scoped by the explicit caller tenant id, including same-alias rows across
  * tenants.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { DataType, newDb } from 'pg-mem';
 import type { Pool } from 'pg';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -273,6 +273,108 @@ describe('Phase 7 Plan 07-03 Task 3 — bookmark boost math', () => {
 
   it('safeBookmarkBoost ignores negative bookmark counts', () => {
     expect(safeBookmarkBoost(10, -5)).toBe(10);
+  });
+
+  it('search-tools applies bookmark boost over discoveryCatalogSet without tenant leakage', async () => {
+    vi.resetModules();
+    const countsByTenant = new Map<string, Map<string, number>>();
+
+    vi.doMock('../../../src/generated/client.js', () => ({
+      api: {
+        endpoints: [
+          {
+            alias: 'users.user.ListUser',
+            method: 'get',
+            path: '/users',
+            description: 'List user directory entries',
+          },
+          {
+            alias: 'users.user.GetUserByUserPrincipalName',
+            method: 'get',
+            path: '/users/:userPrincipalName',
+            description: 'Get one user by principal name',
+          },
+          { alias: 'me.sendMail', method: 'post', path: '/me/sendMail' },
+          ...Array.from({ length: 13 }, (_, i) => ({
+            alias: `users.synthetic${i}`,
+            method: 'get',
+            path: `/users/synthetic${i}`,
+            description: `Synthetic user endpoint ${i}`,
+          })),
+        ],
+      },
+    }));
+    vi.doMock('../../../src/lib/memory/bookmarks.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../../../src/lib/memory/bookmarks.js')>();
+      return {
+        ...actual,
+        getBookmarkCountsByAlias: vi.fn((tenantId: string) =>
+          Promise.resolve(countsByTenant.get(tenantId) ?? new Map<string, number>())
+        ),
+      };
+    });
+
+    const [{ registerDiscoveryTools, discoveryCache }, dynamicRequestContext, tenantSurface] =
+      await Promise.all([
+        import('../../../src/graph-tools.js'),
+        import('../../../src/request-context.js'),
+        import('../../../src/lib/tenant-surface/surface.js'),
+      ]);
+
+    const server = new McpServer({ name: 'bookmark-boost-test', version: '0.0.0' });
+    registerDiscoveryTools(
+      server,
+      {
+        graphRequest: vi.fn(),
+      } as never,
+      false,
+      true
+    );
+
+    const discoveryCtxB = {
+      tenantId: TENANT_B,
+      enabledToolsSet: tenantSurface.DISCOVERY_META_TOOL_NAMES,
+      presetVersion: tenantSurface.DISCOVERY_PRESET_VERSION,
+    };
+    const baseline = await dynamicRequestContext.requestContext.run(discoveryCtxB, () =>
+      callTool(server, 'search-tools', { query: 'list user', limit: 10 })
+    );
+    const baselineBody = JSON.parse(baseline.content[0].text) as {
+      tools: Array<{ name: string }>;
+      total: number;
+    };
+    const baselineNames = baselineBody.tools.map((tool) => tool.name);
+    expect(baselineBody.total).toBeGreaterThan(12);
+    expect(baselineNames[0]).toBe('users.user.ListUser');
+    expect(baselineNames).toContain('users.user.GetUserByUserPrincipalName');
+
+    countsByTenant.set(TENANT_A, new Map([['users.user.GetUserByUserPrincipalName', 100]]));
+
+    const boosted = await dynamicRequestContext.requestContext.run(
+      {
+        tenantId: TENANT_A,
+        enabledToolsSet: tenantSurface.DISCOVERY_META_TOOL_NAMES,
+        presetVersion: tenantSurface.DISCOVERY_PRESET_VERSION,
+      },
+      () => callTool(server, 'search-tools', { query: 'list user', limit: 10 })
+    );
+    const boostedNames = (JSON.parse(boosted.content[0].text) as {
+      tools: Array<{ name: string }>;
+    }).tools.map((tool) => tool.name);
+    expect(boostedNames[0]).toBe('users.user.GetUserByUserPrincipalName');
+
+    const notLeaked = await dynamicRequestContext.requestContext.run(discoveryCtxB, () =>
+      callTool(server, 'search-tools', { query: 'list user', limit: 10 })
+    );
+    const notLeakedNames = (JSON.parse(notLeaked.content[0].text) as {
+      tools: Array<{ name: string }>;
+    }).tools.map((tool) => tool.name);
+    expect(notLeakedNames[0]).toBe('users.user.ListUser');
+
+    discoveryCache._clear();
+    vi.doUnmock('../../../src/generated/client.js');
+    vi.doUnmock('../../../src/lib/memory/bookmarks.js');
+    vi.resetModules();
   });
 });
 
