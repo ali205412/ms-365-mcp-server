@@ -290,17 +290,14 @@ describe('Phase 7 Plan 07-12 — locked workflow prompt content', () => {
     }
   });
 
-  it('returns a safe prompt error when file-search-deep.query is omitted', async () => {
+  it('requires file-search-deep.query before prompts/get dispatches', async () => {
     const graphServer = createServerFactory({ promptDir: PROMPT_DIR });
     const mcp = graphServer.createMcpServer({
       preset_version: DISCOVERY_PRESET_VERSION,
       enabled_tools_set: DISCOVERY_META_TOOL_NAMES,
     } as never);
 
-    const result = await invokePromptGet(mcp, 'file-search-deep', {});
-
-    expect(result.messages[0].content.text).toContain('missing_required_argument');
-    expect(result.messages[0].content.text).toContain('query');
+    await expect(invokePromptGet(mcp, 'file-search-deep', {})).rejects.toThrow(/query/);
   });
 });
 
