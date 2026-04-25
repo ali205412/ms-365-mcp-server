@@ -1,12 +1,9 @@
 import { ResourceTemplate, type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import {
-  MARKDOWN_MIME_TYPE,
-  STATIC_CATALOG_RESOURCES,
-  WORKLOAD_GUIDE_SLUGS,
-} from './catalog.js';
+import { MARKDOWN_MIME_TYPE, STATIC_CATALOG_RESOURCES, WORKLOAD_GUIDE_SLUGS } from './catalog.js';
 import { JSON_MIME_TYPE, readMcpResource, type ReadMcpResourceDeps } from './read.js';
 import { registerResourceSubscriptionHandlers } from '../mcp-notifications/register-handlers.js';
 import type { RedisResourceSubscriptionStore } from '../mcp-notifications/resource-subscriptions.js';
+import { completeAlias } from '../mcp-completions/handlers.js';
 
 export interface RegisterMcpResourcesDeps extends ReadMcpResourceDeps {
   resourceSubscriptions?: RedisResourceSubscriptionStore;
@@ -134,6 +131,9 @@ function registerTemplates(server: McpServer, deps: RegisterMcpResourcesDeps): v
     'endpoint-schema-template',
     new ResourceTemplate('mcp://endpoint/{alias}.schema.json', {
       list: undefined,
+      complete: {
+        alias: completeAlias,
+      },
     }),
     {
       title: 'Endpoint Schema Template',

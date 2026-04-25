@@ -53,7 +53,9 @@ function discoveryContext() {
   };
 }
 
-function createGraphServer(authManagerOverrides: Record<string, unknown> = {}): MicrosoftGraphServer {
+function createGraphServer(
+  authManagerOverrides: Record<string, unknown> = {}
+): MicrosoftGraphServer {
   return new MicrosoftGraphServer(
     {
       isMultiAccount: vi.fn(async () => true),
@@ -118,9 +120,8 @@ describe('Phase 7 Plan 07-09 Task 2 - MCP completion handlers', () => {
       ]),
     };
 
-    const delegated = await requestContext.run(
-      { ...discoveryContext(), flow: 'delegated' },
-      () => completeAccount('av', { authManager })
+    const delegated = await requestContext.run({ ...discoveryContext(), flow: 'delegated' }, () =>
+      completeAccount('av', { authManager })
     );
     const deviceCode = await requestContext.run(
       { ...discoveryContext(), flow: 'device-code' },
@@ -137,13 +138,11 @@ describe('Phase 7 Plan 07-09 Task 2 - MCP completion handlers', () => {
       listAccounts: vi.fn(async () => [{ username: 'alex@example.com' }]),
     };
 
-    const appOnly = await requestContext.run(
-      { ...discoveryContext(), flow: 'app-only' },
-      () => completeAccount('a', { authManager })
+    const appOnly = await requestContext.run({ ...discoveryContext(), flow: 'app-only' }, () =>
+      completeAccount('a', { authManager })
     );
-    const bearer = await requestContext.run(
-      { ...discoveryContext(), flow: 'bearer' },
-      () => completeAccount('a', { authManager })
+    const bearer = await requestContext.run({ ...discoveryContext(), flow: 'bearer' }, () =>
+      completeAccount('a', { authManager })
     );
 
     expect(appOnly).toEqual([]);

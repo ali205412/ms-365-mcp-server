@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { completable } from '@modelcontextprotocol/sdk/server/completable.js';
 import type { GetPromptResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import {
@@ -9,6 +10,12 @@ import {
   type PromptTemplateDefinition,
 } from './frontmatter.js';
 import { renderPromptTemplate } from './renderer.js';
+import {
+  completeAccount,
+  completeAlias,
+  completeTenantId,
+  type AccountCompletionAuthManager,
+} from '../mcp-completions/handlers.js';
 
 const DEFAULT_PROMPT_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -20,6 +27,7 @@ const DEFAULT_PROMPT_DIR = path.resolve(
 export interface RegisterMcpPromptsDeps {
   readonly promptDir?: string;
   readonly loadPrompts?: () => readonly PromptTemplateDefinition[];
+  readonly authManager?: AccountCompletionAuthManager;
 }
 
 export interface RegisterMcpPromptsResult {
@@ -43,11 +51,30 @@ function assertUniquePromptNames(prompts: readonly PromptTemplateDefinition[]): 
   }
 }
 
-function promptArgsSchema(args: readonly PromptArgumentDefinition[]): Record<string, z.ZodTypeAny> {
+function promptArgsSchema(
+  args: readonly PromptArgumentDefinition[],
+  deps: RegisterMcpPromptsDeps
+): Record<string, z.ZodTypeAny> {
   const shape: Record<string, z.ZodTypeAny> = {};
   for (const arg of args) {
-    const schema = z.string().describe(arg.description ?? `Prompt argument ${arg.name}`);
-    shape[arg.name] = arg.required === true ? schema : schema.optional();
+    let schema: z.ZodTypeAny = z
+      .string()
+      .describe(arg.description ?? `Prompt argument ${arg.name}`);
+    const complete =
+      arg.name === 'tenantId'
+        ? completeTenantId
+        : arg.name === 'account'
+          ? (value: string) => completeAccount(value, { authManager: deps.authManager })
+          : arg.name === 'alias'
+            ? completeAlias
+            : undefined;
+    if (arg.required !== true) {
+      schema = schema.optional();
+    }
+    if (complete) {
+      schema = completable(schema, complete);
+    }
+    shape[arg.name] = schema;
   }
   return shape;
 }
@@ -87,7 +114,7 @@ export function registerMcpPrompts(
       {
         title: prompt.name,
         description: prompt.description,
-        argsSchema: promptArgsSchema(prompt.arguments),
+        argsSchema: promptArgsSchema(prompt.arguments, deps),
       },
       (args): GetPromptResult => {
         const rendered = renderPromptTemplate(
