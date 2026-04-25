@@ -63,6 +63,7 @@ export interface CallToolResultLike {
  */
 interface StdioFallback {
   enabledToolsSet: ReadonlySet<string>;
+  enabledToolsExplicit?: boolean;
   tenantId: string;
   presetVersion: string;
 }

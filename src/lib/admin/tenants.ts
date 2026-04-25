@@ -73,9 +73,14 @@ import { encodeCursor, decodeCursor } from './cursor.js';
 import { generateTenantDek } from '../crypto/dek.js';
 import { validateRedirectUri, type RedirectUriPolicy } from '../redirect-uri.js';
 import { publishTenantInvalidation } from '../tenant/tenant-invalidation.js';
+import {
+  publishResourcesListChanged,
+  publishToolsListChanged,
+} from '../mcp-notifications/events.js';
 import logger from '../../logger.js';
 import type { AdminRouterDeps } from './router.js';
 import type { RedisClient } from '../redis.js';
+import { DEFAULT_PRESET_VERSION } from '../tool-selection/preset-loader.js';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -545,11 +550,11 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
             JSON.stringify(body.cors_origins),
             JSON.stringify(body.allowed_scopes),
             body.enabled_tools ?? null,
-            // Plan 05-03 (D-19): default to essentials-v1 when the body omits
-            // preset_version. The DB column also has this default, but the
-            // explicit bind keeps the Zod default + bind surface symmetric
-            // and makes the intent visible in SQL logs.
-            body.preset_version ?? 'essentials-v1',
+            // Phase 7 Plan 07-02: supported admin create path defaults to
+            // discovery-v1 via the shared preset-loader constant. Existing
+            // tenants are not rewritten, and explicit static presets still
+            // persist verbatim.
+            body.preset_version ?? DEFAULT_PRESET_VERSION,
             // Plan 5.1-06: optional + nullable. NULL default — operators
             // PATCH later when they want to enable __spadmin__ tools.
             body.sharepoint_domain ?? null,
@@ -808,6 +813,7 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
     const whereIdx = idx;
     params.push(id);
 
+    const presetVersionChanged = fieldsChanged.includes('preset_version');
     let existed = true;
     try {
       await withTransaction(async (client) => {
@@ -873,6 +879,17 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
         { tenantId: id, err: (err as Error).message },
         'admin-tenants: tenantPool invalidation threw on patch'
       );
+    }
+    if (presetVersionChanged) {
+      try {
+        await publishToolsListChanged(deps.redis, id, 'preset-version-change');
+        await publishResourcesListChanged(deps.redis, id, 'preset-version-change');
+      } catch (err) {
+        logger.warn(
+          { tenantId: id, err: (err as Error).message },
+          'admin-tenants: agentic list-change publish failed on preset patch'
+        );
+      }
     }
 
     try {

@@ -31,6 +31,7 @@ export interface RequestContext {
   // by dispatch-guard (src/lib/tool-selection/dispatch-guard.ts) at the top
   // of executeGraphTool (src/graph-tools.ts). TENANT-08 isolation.
   enabledToolsSet?: ReadonlySet<string>;
+  enabledToolsExplicit?: boolean;
   presetVersion?: string;
   // Phase 5.1 plan 05.1-06 additions — populated by loadTenant middleware
   // (src/lib/tenant/load-tenant.ts) from the tenants row. Consumed by
@@ -101,12 +102,14 @@ export function getFlow(): AuthFlow | undefined {
 export function getRequestTenant(): {
   id?: string;
   enabledToolsSet?: ReadonlySet<string>;
+  enabledToolsExplicit?: boolean;
   presetVersion?: string;
 } {
   const ctx = requestContext.getStore();
   return {
     id: ctx?.tenantId ?? undefined,
     enabledToolsSet: ctx?.enabledToolsSet,
+    enabledToolsExplicit: ctx?.enabledToolsExplicit,
     presetVersion: ctx?.presetVersion,
   };
 }

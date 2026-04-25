@@ -5,8 +5,8 @@
  * end-to-end:
  *
  *   - POST /admin/tenants without preset_version in body returns a wire row
- *     whose preset_version === 'essentials-v1' (DB default flows through).
- *   - POST /admin/tenants with preset_version in body is honored.
+ *     whose preset_version === 'discovery-v1' without changing auth mode.
+ *   - POST /admin/tenants with an explicit static preset_version is honored.
  *   - GET /admin/tenants/:id returns preset_version in the wire shape.
  *   - PATCH /admin/tenants/:id { preset_version: 'essentials-v2' } updates
  *     the column and echoes the new value in the wire response.
@@ -16,7 +16,7 @@
  * real tenantRowToWire path.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { newDb } from 'pg-mem';
+import { DataType, newDb } from 'pg-mem';
 import express from 'express';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -44,6 +44,7 @@ vi.mock('../../src/logger.js', () => ({
 let sharedPool: Pool | null = null;
 vi.mock('../../src/lib/postgres.js', async () => {
   return {
+    scheduleAfterCommit: vi.fn(),
     withTransaction: async (fn: (client: unknown) => Promise<unknown>) => {
       if (!sharedPool) throw new Error('sharedPool not set in test');
       const client = await sharedPool.connect();
@@ -80,12 +81,26 @@ function stripPgcryptoExtensionStmts(sql: string): string {
   return sql
     .split('\n')
     .filter((line) => !/\bextension\b.*\bpgcrypto\b/i.test(line))
-    .join('\n');
+    .join('\n')
+    .replace(
+      /\n\s*content_tsv\s+tsvector\s+GENERATED ALWAYS AS \(to_tsvector\('english', content\)\) STORED,/i,
+      ''
+    )
+    .replace(
+      /\nCREATE\s+INDEX\s+idx_tenant_facts_content_tsv\s+ON\s+tenant_facts\s+USING\s+gin\s+\(content_tsv\);/i,
+      ''
+    )
+    .replace(/\nDO\s+\$\$[\s\S]*?\$\$;/i, '');
 }
 
 async function makePool(): Promise<Pool> {
   const db = newDb();
   db.registerExtension('pgcrypto', () => {});
+  db.public.registerFunction({
+    name: 'gen_random_uuid',
+    returns: DataType.uuid,
+    implementation: () => '00000000-0000-4000-8000-000000000001',
+  });
   const { Pool: PgMemPool } = db.adapters.createPg();
   const pool = new PgMemPool() as Pool;
   const files = readdirSync(MIGRATIONS_DIR)
@@ -199,7 +214,48 @@ describe('plan 05-03 task 2 — /admin/tenants preset_version plumbing', () => {
     sharedPool = null;
   });
 
-  it('POST /admin/tenants without preset_version returns essentials-v1 as the default', async () => {
+  it.each(['delegated', 'app-only', 'bearer'] as const)(
+    'POST /admin/tenants without preset_version returns discovery-v1 and preserves %s mode',
+    async (mode) => {
+      const pool = await makePool();
+      sharedPool = pool;
+
+      const { url, close } = await startServer(
+        pool,
+        new MemoryRedisFacade(),
+        { actor: 'admin@example.com', source: 'entra', tenantScoped: null },
+        makeTenantPoolStub()
+      );
+
+      try {
+        const res = await doJson('POST', `${url}/admin/tenants`, {
+          ...VALID_BODY,
+          mode,
+          tenant_id:
+            mode === 'delegated'
+              ? VALID_BODY.tenant_id
+              : mode === 'app-only'
+                ? '22222222-2222-4333-8444-555555555555'
+                : '33333333-2222-4333-8444-555555555555',
+        });
+        expect(res.status).toBe(201);
+        expect(res.body.mode).toBe(mode);
+        expect(res.body.preset_version).toBe('discovery-v1');
+
+        // DB row too.
+        const { rows } = await pool.query<{ mode: string; preset_version: string }>(
+          'SELECT mode, preset_version FROM tenants WHERE id = $1',
+          [res.body.id]
+        );
+        expect(rows[0]!.mode).toBe(mode);
+        expect(rows[0]!.preset_version).toBe('discovery-v1');
+      } finally {
+        await close();
+      }
+    }
+  );
+
+  it('POST /admin/tenants with explicit essentials-v1 persists a static preset', async () => {
     const pool = await makePool();
     sharedPool = pool;
 
@@ -211,7 +267,10 @@ describe('plan 05-03 task 2 — /admin/tenants preset_version plumbing', () => {
     );
 
     try {
-      const res = await doJson('POST', `${url}/admin/tenants`, VALID_BODY);
+      const res = await doJson('POST', `${url}/admin/tenants`, {
+        ...VALID_BODY,
+        preset_version: 'essentials-v1',
+      });
       expect(res.status).toBe(201);
       expect(res.body.preset_version).toBe('essentials-v1');
 
@@ -226,7 +285,7 @@ describe('plan 05-03 task 2 — /admin/tenants preset_version plumbing', () => {
     }
   });
 
-  it('POST /admin/tenants with explicit preset_version persists it', async () => {
+  it('POST /admin/tenants with another explicit preset_version persists it', async () => {
     const pool = await makePool();
     sharedPool = pool;
 
@@ -266,7 +325,7 @@ describe('plan 05-03 task 2 — /admin/tenants preset_version plumbing', () => {
 
       const got = await doJson('GET', `${url}/admin/tenants/${created.body.id}`);
       expect(got.status).toBe(200);
-      expect(got.body.preset_version).toBe('essentials-v1');
+      expect(got.body.preset_version).toBe('discovery-v1');
     } finally {
       await close();
     }
@@ -286,7 +345,7 @@ describe('plan 05-03 task 2 — /admin/tenants preset_version plumbing', () => {
     try {
       const created = await doJson('POST', `${url}/admin/tenants`, VALID_BODY);
       expect(created.status).toBe(201);
-      expect(created.body.preset_version).toBe('essentials-v1');
+      expect(created.body.preset_version).toBe('discovery-v1');
 
       const patched = await doJson('PATCH', `${url}/admin/tenants/${created.body.id}`, {
         preset_version: 'essentials-v2',
@@ -321,6 +380,41 @@ describe('plan 05-03 task 2 — /admin/tenants preset_version plumbing', () => {
         preset_version: 'ESSENTIALS/V1!',
       });
       expect(res.status).toBe(400);
+    } finally {
+      await close();
+    }
+  });
+
+  it('creating a discovery default tenant does not rewrite an existing static tenant row', async () => {
+    const pool = await makePool();
+    sharedPool = pool;
+
+    const { url, close } = await startServer(
+      pool,
+      new MemoryRedisFacade(),
+      { actor: 'admin@example.com', source: 'entra', tenantScoped: null },
+      makeTenantPoolStub()
+    );
+
+    try {
+      const staticTenant = await doJson('POST', `${url}/admin/tenants`, {
+        ...VALID_BODY,
+        preset_version: 'essentials-v1',
+      });
+      expect(staticTenant.status).toBe(201);
+
+      const discoveryTenant = await doJson('POST', `${url}/admin/tenants`, {
+        ...VALID_BODY,
+        tenant_id: '44444444-2222-4333-8444-555555555555',
+      });
+      expect(discoveryTenant.status).toBe(201);
+      expect(discoveryTenant.body.preset_version).toBe('discovery-v1');
+
+      const { rows } = await pool.query<{ preset_version: string }>(
+        'SELECT preset_version FROM tenants WHERE id = $1',
+        [staticTenant.body.id]
+      );
+      expect(rows[0]!.preset_version).toBe('essentials-v1');
     } finally {
       await close();
     }

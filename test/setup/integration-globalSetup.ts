@@ -30,8 +30,23 @@ declare module 'vitest' {
 let pg: StartedPostgreSqlContainer | undefined;
 let redis: StartedRedisContainer | undefined;
 
+function isHermeticNotificationRun(): boolean {
+  const filters = process.argv
+    .slice(2)
+    .filter((arg) => arg.includes('test/') || arg.includes('.test.'));
+  return (
+    filters.length > 0 && filters.every((arg) => arg.includes('test/integration/notifications/'))
+  );
+}
+
 export async function setup(project: TestProject): Promise<void> {
   if (process.env.MS365_MCP_INTEGRATION !== '1') return;
+
+  if (isHermeticNotificationRun()) {
+    project.provide('pgUrl', process.env.MS365_MCP_DATABASE_URL ?? '');
+    project.provide('redisUrl', process.env.MS365_MCP_REDIS_URL ?? '');
+    return;
+  }
 
   pg = await new PostgreSqlContainer('postgres:16-alpine')
     .withUsername('mcp')

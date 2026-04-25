@@ -251,9 +251,12 @@ Full admin API reference lives in the OpenAPI spec shipped with the server (gene
 
 The generated catalog covers all of Microsoft Graph v1.0 plus a curated beta surface (~5,000 operations). MCP clients cannot display 5,000 tools in one catalog, so v2 ships **per-tenant enabled-tools**:
 
-- **Default preset: "essentials"** (~150 ops covering Mail, Calendar, Files, Users, Teams, SharePoint)
+- **Default create-path preset: `discovery-v1`** (12 meta tools for search, schema lookup, execution, and tenant memory)
+- **Static preset: `essentials-v1`** (~150 ops covering Mail, Calendar, Files, Users, Teams, SharePoint)
 - **Regex filter** on the generated aliases via admin API
 - **Workload presets**: `mail`, `calendar`, `files`, `personal`, `work`, `excel`, `contacts`, `tasks`, `onenote`, `search`, `users`, `powerbi`, `intune`, `exchange`, `sharepoint`, `teams-admin`, `all`
+
+New tenants created through supported gateway/admin paths default to discovery mode. Existing tenants stay pinned to their stored `preset_version` and must opt in explicitly. See **[docs/discovery-mode.md](docs/discovery-mode.md)** for migration, rollback, and discovery-mode operator details.
 
 For single-user stdio mode, use `--preset`, `--enabled-tools <regex>`, or `--discovery` (lazy load tools on demand):
 

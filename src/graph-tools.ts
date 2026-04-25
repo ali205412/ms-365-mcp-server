@@ -22,6 +22,10 @@ import {
   type TenantBm25Cache,
 } from './lib/tool-selection/per-tenant-bm25.js';
 import { clampTopQueryParam } from './lib/graph-tools-pure.js';
+import { resolveDiscoveryCatalog } from './lib/discovery-catalog/catalog.js';
+import { safeBookmarkBoost } from './lib/memory/bookmark-boost.js';
+import { getBookmarkCountsByAlias } from './lib/memory/bookmarks.js';
+import { emitMcpLogEvent } from './lib/mcp-logging/register.js';
 // Re-export pure helpers so existing callers (tests, downstream modules)
 // keep working. New callers should import directly from
 // `./lib/graph-tools-pure.js` to avoid transitively pulling the 45 MB
@@ -140,7 +144,7 @@ type ResourceContent = ResourceTextContent | ResourceBlobContent;
 
 type ContentItem = TextContent | ImageContent | AudioContent | ResourceContent;
 
-interface CallToolResult {
+export interface CallToolResult {
   content: ContentItem[];
   _meta?: Record<string, unknown>;
   isError?: boolean;
@@ -155,7 +159,7 @@ async function executeGraphTool(
   params: Record<string, unknown>,
   authManager?: AuthManager
 ): Promise<CallToolResult> {
-  logger.info(`Tool ${tool.alias} called with params: ${JSON.stringify(params)}`);
+  logger.info({ toolAlias: tool.alias, paramKeys: Object.keys(params) }, 'graph tool called');
 
   // Plan 06-02 (OPS-05, D-06): augment ALS frame with toolAlias for GraphClient
   // span attribute + workload-prefix label. Spread preserves upstream fields
@@ -166,9 +170,81 @@ async function executeGraphTool(
   // wrap to populate the `tool.alias` attribute and the workload-prefix metric
   // label (via labelForTool).
   const existingCtx = requestContext.getStore() ?? {};
-  return requestContext.run({ ...existingCtx, toolAlias: tool.alias }, () =>
-    executeGraphToolInner(tool, config, graphClient, params, authManager)
-  );
+  return requestContext.run({ ...existingCtx, toolAlias: tool.alias }, async () => {
+    const tenantId = getRequestTenant().id;
+    const startedAt = Date.now();
+    await emitMcpLogEvent({
+      tenantId,
+      event: 'tool-call.start',
+      level: 'info',
+      data: {
+        alias: tool.alias,
+        method: tool.method.toUpperCase(),
+        paramKeys: Object.keys(params),
+      },
+    });
+
+    try {
+      const result = await executeGraphToolInner(tool, config, graphClient, params, authManager);
+      const durationMs = Date.now() - startedAt;
+      if (result.isError) {
+        await emitMcpLogEvent({
+          tenantId,
+          event: 'tool-call.error',
+          level: 'error',
+          data: {
+            alias: tool.alias,
+            durationMs,
+            code: errorCodeFromResult(result),
+          },
+        });
+      } else {
+        await emitMcpLogEvent({
+          tenantId,
+          event: 'tool-call.success',
+          level: 'info',
+          data: {
+            alias: tool.alias,
+            durationMs,
+            bytes: resultPayloadBytes(result),
+          },
+        });
+      }
+      return result;
+    } catch (error) {
+      await emitMcpLogEvent({
+        tenantId,
+        event: 'tool-call.error',
+        level: 'error',
+        data: {
+          alias: tool.alias,
+          durationMs: Date.now() - startedAt,
+          code: codeFromError(error),
+        },
+      });
+      throw error;
+    }
+  });
+}
+
+function resultPayloadBytes(result: CallToolResult): number {
+  return Buffer.byteLength(JSON.stringify(result.content ?? []), 'utf8');
+}
+
+function errorCodeFromResult(result: CallToolResult): string {
+  const code = result._meta?.errorCode;
+  return typeof code === 'string' && code.length > 0 ? code : 'tool_error';
+}
+
+function codeFromError(error: unknown): string {
+  const candidate =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? (error as { code?: unknown }).code
+      : undefined;
+  if (typeof candidate === 'string' && /^[a-zA-Z0-9_.-]{1,80}$/.test(candidate)) {
+    return candidate;
+  }
+  return error instanceof Error && error.name ? error.name : 'tool_error';
 }
 
 async function executeGraphToolInner(
@@ -598,6 +674,7 @@ async function executeGraphToolInner(
           }),
         },
       ],
+      _meta: { errorCode: codeFromError(error) },
       isError: true,
     };
   }
@@ -1208,6 +1285,87 @@ export function buildToolsRegistry(
   return toolsMap;
 }
 
+export interface ExecuteToolAliasArgs {
+  toolName: string;
+  parameters?: Record<string, unknown>;
+  graphClient: GraphClient;
+  authManager?: AuthManager;
+  readOnly?: boolean;
+  orgMode?: boolean;
+}
+
+export async function executeToolAlias({
+  toolName,
+  parameters = {},
+  graphClient,
+  authManager,
+  readOnly = false,
+  orgMode = false,
+}: ExecuteToolAliasArgs): Promise<CallToolResult> {
+  const tenant = resolveTenantForDiscovery();
+  if (!tenant) {
+    logger.warn({}, 'executeToolAlias: no tenant context; refusing dispatch');
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            error: 'tenant context unavailable',
+            tip: 'Tenant context not seeded — contact operator.',
+          }),
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  const toolsRegistry = buildToolsRegistry(readOnly, orgMode);
+  const catalog = resolveDiscoveryCatalog({
+    presetVersion: tenant.presetVersion,
+    enabledToolsSet: tenant.enabledToolsSet,
+    enabledToolsExplicit: tenant.enabledToolsExplicit,
+    registryAliases: toolsRegistry.keys(),
+  });
+
+  if (!catalog.discoveryCatalogSet.has(toolName)) {
+    logger.info({ tool: toolName, tenantId: tenant.id }, 'executeToolAlias: tool not enabled');
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            error: `Tool not enabled for tenant: ${toolName}`,
+            tenantId: tenant.id,
+            tip: 'Use search-tools to discover tools available to this tenant.',
+          }),
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  const toolData = toolsRegistry.get(toolName);
+  if (!toolData) {
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            error: `Tool not found: ${toolName}`,
+            tip: 'Use search-tools to find available tools.',
+          }),
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  const ctx = requestContext.getStore() ?? {};
+  return requestContext.run({ ...ctx, enabledToolsSet: catalog.discoveryCatalogSet }, async () =>
+    executeGraphTool(toolData.tool, toolData.config, graphClient, parameters, authManager)
+  );
+}
+
 // `buildDiscoverySearchIndex` + `scoreDiscoveryQuery` live in
 // `./lib/graph-tools-pure.ts` so they can be consumed without transitively
 // loading the 45 MB generated client catalog. They are re-exported at the
@@ -1251,6 +1409,7 @@ function resolveTenantForDiscovery():
   | {
       id: string;
       enabledToolsSet: ReadonlySet<string>;
+      enabledToolsExplicit?: boolean;
       presetVersion: string;
     }
   | undefined {
@@ -1259,6 +1418,7 @@ function resolveTenantForDiscovery():
     return {
       id: als.id,
       enabledToolsSet: als.enabledToolsSet,
+      enabledToolsExplicit: als.enabledToolsExplicit,
       presetVersion: als.presetVersion,
     };
   }
@@ -1267,6 +1427,7 @@ function resolveTenantForDiscovery():
     return {
       id: fallback.tenantId,
       enabledToolsSet: fallback.enabledToolsSet,
+      enabledToolsExplicit: fallback.enabledToolsExplicit,
       presetVersion: fallback.presetVersion,
     };
   }
@@ -1408,10 +1569,19 @@ export function registerDiscoveryTools(
         };
       }
 
-      // Build (or cache-hit) the per-tenant BM25 index over the enabled
-      // subset intersected with the registered tool universe. schemaHash
-      // drift auto-invalidates when the enabled set rotates.
-      const tenantIndex = discoveryCache.get(tenant.id, tenant.enabledToolsSet, projectedRegistry);
+      const catalog = resolveDiscoveryCatalog({
+        presetVersion: tenant.presetVersion,
+        enabledToolsSet: tenant.enabledToolsSet,
+        enabledToolsExplicit: tenant.enabledToolsExplicit,
+        registryAliases: projectedRegistry.keys(),
+      });
+      const catalogSet = catalog.discoveryCatalogSet;
+
+      // Build (or cache-hit) the per-tenant BM25 index over the effective
+      // discovery catalog subset intersected with the registered tool
+      // universe. For discovery-v1 tenants this is the generated Graph/product
+      // catalog, not the visible 12 meta aliases.
+      const tenantIndex = discoveryCache.get(tenant.id, catalogSet, projectedRegistry);
 
       let orderedNames: string[];
       if (query && query.trim().length > 0) {
@@ -1419,13 +1589,27 @@ export function registerDiscoveryTools(
         // (intentionally not cached — rebuild cost is ≤5ms on 5000-entry
         // enabled sets; caching would force the per-tenant cache to hold
         // the richer DiscoverySearchIndex shape and double its memory).
-        const nameTokens = buildTenantNameTokens(tenant.enabledToolsSet, projectedRegistry);
-        const ranked = scoreTenantDiscoveryQuery(query, tenantIndex, nameTokens);
+        const nameTokens = buildTenantNameTokens(catalogSet, projectedRegistry);
+        let bookmarkCounts = new Map<string, number>();
+        try {
+          bookmarkCounts = await getBookmarkCountsByAlias(tenant.id);
+        } catch (err) {
+          logger.warn(
+            { tenantId: tenant.id, err: (err as Error).message },
+            'search-tools: bookmark boost counts unavailable; returning unboosted ranking'
+          );
+        }
+        const ranked = scoreTenantDiscoveryQuery(query, tenantIndex, nameTokens)
+          .map((r) => ({
+            ...r,
+            score: safeBookmarkBoost(r.score, bookmarkCounts.get(r.id) ?? 0),
+          }))
+          .sort((a, b) => b.score - a.score);
         orderedNames = ranked.map((r) => r.id).filter(categoryFilter);
       } else {
         // No query → list every alias in the tenant's enabled set that
         // is also in the registered universe. Category filter still applies.
-        orderedNames = [...tenant.enabledToolsSet]
+        orderedNames = [...catalogSet]
           .filter((alias) => projectedRegistry.has(alias))
           .filter(categoryFilter);
       }
@@ -1442,7 +1626,7 @@ export function registerDiscoveryTools(
                 // Report the tenant's enabled-set size, not the full
                 // registry size — advertising the global total leaks
                 // cross-tenant shape (T-05-12).
-                total: tenant.enabledToolsSet.size,
+                total: catalogSet.size,
                 tools,
                 tip: 'Call get-tool-schema(tool_name) to see parameters before invoking execute-tool.',
               },
@@ -1487,7 +1671,14 @@ export function registerDiscoveryTools(
         };
       }
 
-      if (!tenant.enabledToolsSet.has(tool_name)) {
+      const catalog = resolveDiscoveryCatalog({
+        presetVersion: tenant.presetVersion,
+        enabledToolsSet: tenant.enabledToolsSet,
+        enabledToolsExplicit: tenant.enabledToolsExplicit,
+        registryAliases: projectedRegistry.keys(),
+      });
+
+      if (!catalog.discoveryCatalogSet.has(tool_name)) {
         logger.info(
           { tool: tool_name, tenantId: tenant.id },
           'get-tool-schema: tool not enabled for tenant'
@@ -1548,23 +1739,14 @@ export function registerDiscoveryTools(
       openWorldHint: true,
     },
     async ({ tool_name, parameters = {} }) => {
-      const toolData = toolsRegistry.get(tool_name);
-      if (!toolData) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                error: `Tool not found: ${tool_name}`,
-                tip: 'Use search-tools to find available tools.',
-              }),
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      return executeGraphTool(toolData.tool, toolData.config, graphClient, parameters, authManager);
+      return executeToolAlias({
+        toolName: tool_name,
+        parameters,
+        graphClient,
+        authManager,
+        readOnly,
+        orgMode,
+      });
     }
   );
 

@@ -37,6 +37,7 @@ vi.mock('../../../logger.js', () => ({
 let sharedPool: Pool | null = null;
 vi.mock('../../postgres.js', async () => {
   return {
+    scheduleAfterCommit: vi.fn(),
     withTransaction: async (fn: (client: unknown) => Promise<unknown>) => {
       if (!sharedPool) throw new Error('sharedPool not set in test');
       const client = await sharedPool.connect();

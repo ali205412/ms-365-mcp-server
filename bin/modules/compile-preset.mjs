@@ -1,17 +1,22 @@
 /**
  * Plan 05-03 + 05.1-07 — essentials preset compile step.
  *
- * Compiles src/presets/*.json (currently 6 presets: the legacy
- * `essentials-v1` cross-product default, plus 5 per-product essentials
- * added in plan 05.1-07) into a single emitted src/presets/generated-index.ts.
+ * Compiles src/presets/*.json (currently 7 presets: the Phase 7
+ * `discovery-v1` meta surface, the legacy `essentials-v1` cross-product
+ * preset, plus 5 per-product essentials added in plan 05.1-07) into a
+ * single emitted src/presets/generated-index.ts.
  *
  * The compile step is the typo-resistance contract (D-19, T-05-06 +
- * T-5.1-04 mitigation): every alias in every human-editable preset JSON
- * is checked against the fresh tool registry extracted from
- * src/generated/client.ts. An alias the registry does not know about
- * fails codegen loudly with a bounded preview of the offending names.
+ * T-5.1-04 mitigation): every modern alias in every human-editable preset
+ * JSON is checked against the fresh tool registry extracted from
+ * src/generated/client.ts. The legacy essentials-v1 preset and product
+ * presets during default non-full-coverage generation are the exceptions:
+ * they preserve their frozen legacy/product alias sets when the current
+ * generated registry intentionally omits those alias families. Product
+ * presets remain strict when their product registry is present.
  *
  * Presets compiled:
+ *   - discovery-v1         (12 meta aliases — Plan 07-02)
  *   - essentials-v1        (150 ops — Plan 05-03, cross-product Graph default)
  *   - powerbi-essentials    (plan 05.1-07, __powerbi__* subset)
  *   - pwrapps-essentials    (plan 05.1-07, __pwrapps__* subset)
@@ -23,11 +28,15 @@
  *   - preset.version MUST equal the preset-name literal (enforced here,
  *     and pinned at runtime by the PRESET_VERSIONS map key).
  *   - preset.ops MUST be a non-empty array of non-empty strings.
+ *   - discovery-v1 MUST have exactly 12 ops and every op MUST be one of
+ *     the bounded meta aliases in DISCOVERY_META_ALIAS_ALLOWLIST.
  *   - essentials-v1 MUST have exactly 150 ops (D-19 legacy invariant).
  *   - every per-product preset op MUST carry the product's `__<prefix>__`
  *     prefix literal — prevents a preset from accidentally pulling in
  *     cross-product ops.
- *   - every op MUST appear as an `alias: "..."` literal in client.ts.
+ *   - every modern op MUST appear as an `alias: "..."` literal in client.ts;
+ *     essentials-v1 legacy operationId mismatches and absent product alias
+ *     families under default codegen warn but do not fail.
  *   - output is deterministic: each per-preset alias list is sorted
  *     lexicographically so git diffs on preset evolution highlight real
  *     changes, not ordering drift.
@@ -36,13 +45,30 @@
  *
  * Invocation: chained from bin/generate-graph-client.mjs after generateMcpTools
  * and (under FULL_COVERAGE=1) runBetaPipeline + runProductPipelines. Running
- * under FULL_COVERAGE=0 will throw on the 4 subscription ops in essentials-v1
- * (absent from the legacy 212-op endpoints.json) AND on ALL 5 per-product
- * presets (product aliases only exist under full coverage). That is
- * acceptable per plan guidance — surfaces the legacy/preset gap early.
+ * under FULL_COVERAGE=0 may omit whole legacy/product alias families; those
+ * complete-family misses warn and preserve the checked-in frozen preset
+ * membership so `npm run generate` remains compatible with the default dev
+ * codegen path. Partial product misses still fail as typo/staleness signals.
  */
 import fs from 'fs';
 import path from 'path';
+
+const DISCOVERY_META_ALIAS_ALLOWLIST = Object.freeze(
+  new Set([
+    'search-tools',
+    'get-tool-schema',
+    'execute-tool',
+    'bookmark-tool',
+    'list-bookmarks',
+    'unbookmark-tool',
+    'save-recipe',
+    'list-recipes',
+    'run-recipe',
+    'record-fact',
+    'recall-facts',
+    'forget-fact',
+  ])
+);
 
 /**
  * Per-preset constraint metadata. Each entry drives:
@@ -57,11 +83,20 @@ import path from 'path';
  */
 const PRESET_SPECS = Object.freeze([
   Object.freeze({
+    version: 'discovery-v1',
+    filename: 'discovery-v1.json',
+    constName: 'DISCOVERY_V1_OPS',
+    exactCount: 12,
+    prefix: null,
+    metaAllowlist: DISCOVERY_META_ALIAS_ALLOWLIST,
+  }),
+  Object.freeze({
     version: 'essentials-v1',
     filename: 'essentials-v1.json',
     constName: 'ESSENTIALS_V1_OPS',
     exactCount: 150,
     prefix: null,
+    metaAllowlist: null,
   }),
   Object.freeze({
     version: 'powerbi-essentials',
@@ -69,6 +104,7 @@ const PRESET_SPECS = Object.freeze([
     constName: 'POWERBI_ESSENTIALS_OPS',
     exactCount: null,
     prefix: '__powerbi__',
+    metaAllowlist: null,
   }),
   Object.freeze({
     version: 'pwrapps-essentials',
@@ -76,6 +112,7 @@ const PRESET_SPECS = Object.freeze([
     constName: 'PWRAPPS_ESSENTIALS_OPS',
     exactCount: null,
     prefix: '__pwrapps__',
+    metaAllowlist: null,
   }),
   Object.freeze({
     version: 'pwrauto-essentials',
@@ -83,6 +120,7 @@ const PRESET_SPECS = Object.freeze([
     constName: 'PWRAUTO_ESSENTIALS_OPS',
     exactCount: null,
     prefix: '__pwrauto__',
+    metaAllowlist: null,
   }),
   Object.freeze({
     version: 'exo-essentials',
@@ -90,6 +128,7 @@ const PRESET_SPECS = Object.freeze([
     constName: 'EXO_ESSENTIALS_OPS',
     exactCount: null,
     prefix: '__exo__',
+    metaAllowlist: null,
   }),
   Object.freeze({
     version: 'sp-admin-essentials',
@@ -97,11 +136,12 @@ const PRESET_SPECS = Object.freeze([
     constName: 'SP_ADMIN_ESSENTIALS_OPS',
     exactCount: null,
     prefix: '__spadmin__',
+    metaAllowlist: null,
   }),
 ]);
 
 /**
- * @returns {ReadonlyArray<{version: string, filename: string, constName: string, exactCount: number | null, prefix: string | null}>}
+ * @returns {ReadonlyArray<{version: string, filename: string, constName: string, exactCount: number | null, prefix: string | null, metaAllowlist: ReadonlySet<string> | null}>}
  *   Frozen per-preset constraint table — exported for tests + the
  *   preset-loader shape assertion.
  */
@@ -114,7 +154,7 @@ export function getPresetSpecs() {
  * Returns the sorted op list for downstream emit; throws on any invariant
  * violation with a bounded error message.
  *
- * @param {{ version: string, filename: string, exactCount: number | null, prefix: string | null }} spec
+ * @param {{ version: string, filename: string, exactCount: number | null, prefix: string | null, metaAllowlist: ReadonlySet<string> | null }} spec
  * @param {string} presetJsonPath  Absolute path to the preset JSON.
  * @param {ReadonlySet<string>} registry  Aliases lifted from client.ts.
  * @returns {{ sortedOps: string[] }}
@@ -166,6 +206,19 @@ function loadAndValidatePreset(spec, presetJsonPath, registry) {
     }
   }
 
+  if (spec.metaAllowlist !== null) {
+    const disallowed = preset.ops.filter((op) => !spec.metaAllowlist.has(op));
+    if (disallowed.length > 0) {
+      const previewCount = Math.min(5, disallowed.length);
+      const preview = disallowed.slice(0, previewCount).join(', ');
+      const tail =
+        disallowed.length > previewCount ? ` (and ${disallowed.length - previewCount} more)` : '';
+      throw new Error(
+        `${spec.version}: ${disallowed.length} op(s) outside meta alias allowlist: ${preview}${tail}`
+      );
+    }
+  }
+
   // No duplicates (cheap, and protects the generated Set from silently
   // collapsing ops a human editor intended as distinct).
   const seen = new Set();
@@ -176,19 +229,43 @@ function loadAndValidatePreset(spec, presetJsonPath, registry) {
     seen.add(op);
   }
 
-  const missing = preset.ops.filter((op) => !registry.has(op));
+  const missing = spec.metaAllowlist === null ? preset.ops.filter((op) => !registry.has(op)) : [];
   if (missing.length > 0) {
     const previewCount = Math.min(10, missing.length);
     const preview = missing.slice(0, previewCount).join(', ');
     const tail =
       missing.length > previewCount ? ` (and ${missing.length - previewCount} more)` : '';
-    // T-05-06 / T-5.1-04 mitigation: a preset op that cannot be resolved
-    // against the fresh registry is almost always a typo or a stale alias.
-    // Failing codegen loudly is cheaper than shipping a preset whose
-    // `enabled_tools` set silently drops half the flagship ops.
-    throw new Error(
-      `${spec.version}: ${missing.length} preset op(s) NOT in registry: ${preview}${tail}`
-    );
+    const productRegistryAbsent =
+      spec.prefix !== null &&
+      process.env.MS365_MCP_FULL_COVERAGE !== '1' &&
+      ![...registry].some((alias) => alias.startsWith(spec.prefix));
+
+    if (spec.version === 'essentials-v1') {
+      // Legacy static tenants may still depend on the Phase 5 operationId set.
+      // Preserve that exact 150-op set rather than rewriting to an empty or
+      // partial preset when the default 212-op codegen path emits friendly
+      // aliases.
+      console.warn(
+        `⚠️  compile-preset: ${spec.version}: ${missing.length} legacy op(s) NOT in registry; preserving preset ops: ${preview}${tail}`
+      );
+    } else if (productRegistryAbsent) {
+      // Default non-full-coverage generation intentionally skips product
+      // pipelines, so the registry can lack an entire product alias family.
+      // Keep the frozen preset emitted for runtime loaders, while still
+      // treating partial misses as strict failures whenever a product family
+      // is present in the registry.
+      console.warn(
+        `⚠️  compile-preset: ${spec.version}: product alias family "${spec.prefix}" absent from registry; preserving ${missing.length} preset op(s): ${preview}${tail}`
+      );
+    } else {
+      // T-5.1-04 mitigation: a modern preset op that cannot be resolved
+      // against the fresh registry is almost always a typo or a stale alias.
+      // Failing codegen loudly is cheaper than shipping a preset whose
+      // `enabled_tools` set silently drops half the flagship ops.
+      throw new Error(
+        `${spec.version}: ${missing.length} preset op(s) NOT in registry: ${preview}${tail}`
+      );
+    }
   }
 
   // Deterministic emit order: lexicographic sort on the alias list keeps
@@ -211,14 +288,23 @@ function extractRegistry(clientTsContent) {
   return new Set([...clientTsContent.matchAll(/alias:\s*["']([^"']+)["']/g)].map((m) => m[1]));
 }
 
+function tsStringLiteral(value) {
+  return `'${value
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t')}'`;
+}
+
 /**
  * Compile every preset JSON in `presetsDir` against the generated
  * client.ts registry and emit `presetsDir/generated-index.ts`.
  *
  * Retains the plan-05-03 signature + return shape so existing callers
  * (bin/generate-graph-client.mjs Step 5, test stubs) don't need edits.
- * The emitted file now carries six ReadonlySet<string> exports plus a
- * 6-entry PRESET_VERSIONS map.
+ * The emitted file now carries seven ReadonlySet<string> exports plus a
+ * 7-entry PRESET_VERSIONS map when every preset JSON is present.
  *
  * @param {string} generatedDir  Absolute path to src/generated (carries client.ts).
  * @param {string} presetsDir    Absolute path to src/presets (carries essentials-v1.json
@@ -241,15 +327,14 @@ export function compileEssentialsPreset(generatedDir, presetsDir) {
     const clientCode = fs.readFileSync(clientPath, 'utf-8');
     const registry = extractRegistry(clientCode);
 
-    // Per-preset compile pass. essentials-v1 is always first — its JSON
-    // is the de-facto "is my preset infrastructure working" bellwether and
-    // its failure should short-circuit before product-preset validation.
+    // Per-preset compile pass. discovery-v1 is first so the generated
+    // PRESET_VERSIONS map matches the fresh-tenant default order.
     const perPresetOps = new Map();
     for (const spec of PRESET_SPECS) {
       const presetJsonPath = path.join(presetsDir, spec.filename);
-      // Per-product presets can legitimately be absent in environments
-      // that predate plan 05.1-07. The legacy essentials-v1 entry remains
-      // MANDATORY: its absence is a hard error (same as before this plan).
+      // Non-essentials presets can legitimately be absent in older tmp test
+      // fixtures. The legacy essentials-v1 entry remains MANDATORY: its
+      // absence is a hard error (same as before this plan).
       if (spec.version !== 'essentials-v1' && !fs.existsSync(presetJsonPath)) {
         continue;
       }
@@ -272,13 +357,13 @@ export function compileEssentialsPreset(generatedDir, presetsDir) {
     const loadedSpecs = PRESET_SPECS.filter((spec) => perPresetOps.has(spec.version));
     for (const spec of loadedSpecs) {
       const ops = perPresetOps.get(spec.version);
-      lines.push(
-        `export const ${spec.constName}: ReadonlySet<string> = Object.freeze(new Set<string>([`
-      );
+      lines.push(`export const ${spec.constName}: ReadonlySet<string> = Object.freeze(`);
+      lines.push('  new Set<string>([');
       for (const op of ops) {
-        lines.push(`  ${JSON.stringify(op)},`);
+        lines.push(`    ${tsStringLiteral(op)},`);
       }
-      lines.push(']));');
+      lines.push('  ])');
+      lines.push(');');
       lines.push('');
     }
 
@@ -286,7 +371,7 @@ export function compileEssentialsPreset(generatedDir, presetsDir) {
       'export const PRESET_VERSIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map(['
     );
     for (const spec of loadedSpecs) {
-      lines.push(`  [${JSON.stringify(spec.version)}, ${spec.constName}],`);
+      lines.push(`  [${tsStringLiteral(spec.version)}, ${spec.constName}],`);
     }
     lines.push(']);');
     lines.push('');

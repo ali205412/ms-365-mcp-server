@@ -35,6 +35,8 @@ import { Pool, type PoolClient } from 'pg';
 import logger from '../logger.js';
 
 let pool: Pool | null = null;
+type AfterCommitCallback = () => void | Promise<void>;
+const afterCommitCallbacks = new WeakMap<PoolClient, AfterCommitCallback[]>();
 
 const DEFAULT_MAX = 20;
 const DEFAULT_MIN = 2;
@@ -74,10 +76,21 @@ export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>)
   const client = await getPool().connect();
   try {
     await client.query('BEGIN');
+    afterCommitCallbacks.set(client, []);
     const result = await fn(client);
     await client.query('COMMIT');
+    const callbacks = afterCommitCallbacks.get(client) ?? [];
+    afterCommitCallbacks.delete(client);
+    for (const callback of callbacks) {
+      try {
+        await callback();
+      } catch (err) {
+        logger.warn({ err: (err as Error).message }, 'pg after-commit callback failed');
+      }
+    }
     return result;
   } catch (err) {
+    afterCommitCallbacks.delete(client);
     try {
       await client.query('ROLLBACK');
     } catch {
@@ -87,6 +100,12 @@ export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>)
   } finally {
     client.release();
   }
+}
+
+export function scheduleAfterCommit(client: PoolClient, callback: AfterCommitCallback): void {
+  const callbacks = afterCommitCallbacks.get(client);
+  if (!callbacks) return;
+  callbacks.push(callback);
 }
 
 /**

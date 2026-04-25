@@ -532,6 +532,7 @@ async function main(): Promise<void> {
             const set = computeEnabledToolsSet(rows[0].enabled_tools, rows[0].preset_version);
             setStdioFallback({
               enabledToolsSet: set,
+              enabledToolsExplicit: rows[0].enabled_tools !== null,
               tenantId: tenantIdArg,
               presetVersion: rows[0].preset_version,
             });
@@ -577,6 +578,7 @@ async function main(): Promise<void> {
         }
         setFallback({
           enabledToolsSet: Object.freeze(allAliases),
+          enabledToolsExplicit: false,
           tenantId: 'stdio-legacy',
           presetVersion: 'stdio-legacy',
         });
