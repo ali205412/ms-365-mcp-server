@@ -1,9 +1,10 @@
 /**
  * Plan 05-03 + 05.1-07 — essentials preset compile step.
  *
- * Compiles src/presets/*.json (currently 6 presets: the legacy
- * `essentials-v1` cross-product default, plus 5 per-product essentials
- * added in plan 05.1-07) into a single emitted src/presets/generated-index.ts.
+ * Compiles src/presets/*.json (currently 7 presets: the Phase 7
+ * `discovery-v1` meta surface, the legacy `essentials-v1` cross-product
+ * preset, plus 5 per-product essentials added in plan 05.1-07) into a
+ * single emitted src/presets/generated-index.ts.
  *
  * The compile step is the typo-resistance contract (D-19, T-05-06 +
  * T-5.1-04 mitigation): every alias in every human-editable preset JSON
@@ -12,6 +13,7 @@
  * fails codegen loudly with a bounded preview of the offending names.
  *
  * Presets compiled:
+ *   - discovery-v1         (12 meta aliases — Plan 07-02)
  *   - essentials-v1        (150 ops — Plan 05-03, cross-product Graph default)
  *   - powerbi-essentials    (plan 05.1-07, __powerbi__* subset)
  *   - pwrapps-essentials    (plan 05.1-07, __pwrapps__* subset)
@@ -23,6 +25,8 @@
  *   - preset.version MUST equal the preset-name literal (enforced here,
  *     and pinned at runtime by the PRESET_VERSIONS map key).
  *   - preset.ops MUST be a non-empty array of non-empty strings.
+ *   - discovery-v1 MUST have exactly 12 ops and every op MUST be one of
+ *     the bounded meta aliases in DISCOVERY_META_ALIAS_ALLOWLIST.
  *   - essentials-v1 MUST have exactly 150 ops (D-19 legacy invariant).
  *   - every per-product preset op MUST carry the product's `__<prefix>__`
  *     prefix literal — prevents a preset from accidentally pulling in
@@ -44,6 +48,23 @@
 import fs from 'fs';
 import path from 'path';
 
+const DISCOVERY_META_ALIAS_ALLOWLIST = Object.freeze(
+  new Set([
+    'search-tools',
+    'get-tool-schema',
+    'execute-tool',
+    'bookmark-tool',
+    'list-bookmarks',
+    'unbookmark-tool',
+    'save-recipe',
+    'list-recipes',
+    'run-recipe',
+    'record-fact',
+    'recall-facts',
+    'forget-fact',
+  ])
+);
+
 /**
  * Per-preset constraint metadata. Each entry drives:
  *   - which JSON filename to read from presetsDir
@@ -57,11 +78,20 @@ import path from 'path';
  */
 const PRESET_SPECS = Object.freeze([
   Object.freeze({
+    version: 'discovery-v1',
+    filename: 'discovery-v1.json',
+    constName: 'DISCOVERY_V1_OPS',
+    exactCount: 12,
+    prefix: null,
+    metaAllowlist: DISCOVERY_META_ALIAS_ALLOWLIST,
+  }),
+  Object.freeze({
     version: 'essentials-v1',
     filename: 'essentials-v1.json',
     constName: 'ESSENTIALS_V1_OPS',
     exactCount: 150,
     prefix: null,
+    metaAllowlist: null,
   }),
   Object.freeze({
     version: 'powerbi-essentials',
@@ -69,6 +99,7 @@ const PRESET_SPECS = Object.freeze([
     constName: 'POWERBI_ESSENTIALS_OPS',
     exactCount: null,
     prefix: '__powerbi__',
+    metaAllowlist: null,
   }),
   Object.freeze({
     version: 'pwrapps-essentials',
@@ -76,6 +107,7 @@ const PRESET_SPECS = Object.freeze([
     constName: 'PWRAPPS_ESSENTIALS_OPS',
     exactCount: null,
     prefix: '__pwrapps__',
+    metaAllowlist: null,
   }),
   Object.freeze({
     version: 'pwrauto-essentials',
@@ -83,6 +115,7 @@ const PRESET_SPECS = Object.freeze([
     constName: 'PWRAUTO_ESSENTIALS_OPS',
     exactCount: null,
     prefix: '__pwrauto__',
+    metaAllowlist: null,
   }),
   Object.freeze({
     version: 'exo-essentials',
@@ -90,6 +123,7 @@ const PRESET_SPECS = Object.freeze([
     constName: 'EXO_ESSENTIALS_OPS',
     exactCount: null,
     prefix: '__exo__',
+    metaAllowlist: null,
   }),
   Object.freeze({
     version: 'sp-admin-essentials',
@@ -97,11 +131,12 @@ const PRESET_SPECS = Object.freeze([
     constName: 'SP_ADMIN_ESSENTIALS_OPS',
     exactCount: null,
     prefix: '__spadmin__',
+    metaAllowlist: null,
   }),
 ]);
 
 /**
- * @returns {ReadonlyArray<{version: string, filename: string, constName: string, exactCount: number | null, prefix: string | null}>}
+ * @returns {ReadonlyArray<{version: string, filename: string, constName: string, exactCount: number | null, prefix: string | null, metaAllowlist: ReadonlySet<string> | null}>}
  *   Frozen per-preset constraint table — exported for tests + the
  *   preset-loader shape assertion.
  */
@@ -114,7 +149,7 @@ export function getPresetSpecs() {
  * Returns the sorted op list for downstream emit; throws on any invariant
  * violation with a bounded error message.
  *
- * @param {{ version: string, filename: string, exactCount: number | null, prefix: string | null }} spec
+ * @param {{ version: string, filename: string, exactCount: number | null, prefix: string | null, metaAllowlist: ReadonlySet<string> | null }} spec
  * @param {string} presetJsonPath  Absolute path to the preset JSON.
  * @param {ReadonlySet<string>} registry  Aliases lifted from client.ts.
  * @returns {{ sortedOps: string[] }}
@@ -166,6 +201,19 @@ function loadAndValidatePreset(spec, presetJsonPath, registry) {
     }
   }
 
+  if (spec.metaAllowlist !== null) {
+    const disallowed = preset.ops.filter((op) => !spec.metaAllowlist.has(op));
+    if (disallowed.length > 0) {
+      const previewCount = Math.min(5, disallowed.length);
+      const preview = disallowed.slice(0, previewCount).join(', ');
+      const tail =
+        disallowed.length > previewCount ? ` (and ${disallowed.length - previewCount} more)` : '';
+      throw new Error(
+        `${spec.version}: ${disallowed.length} op(s) outside meta alias allowlist: ${preview}${tail}`
+      );
+    }
+  }
+
   // No duplicates (cheap, and protects the generated Set from silently
   // collapsing ops a human editor intended as distinct).
   const seen = new Set();
@@ -176,7 +224,8 @@ function loadAndValidatePreset(spec, presetJsonPath, registry) {
     seen.add(op);
   }
 
-  const missing = preset.ops.filter((op) => !registry.has(op));
+  const missing =
+    spec.metaAllowlist === null ? preset.ops.filter((op) => !registry.has(op)) : [];
   if (missing.length > 0) {
     const previewCount = Math.min(10, missing.length);
     const preview = missing.slice(0, previewCount).join(', ');
@@ -217,8 +266,8 @@ function extractRegistry(clientTsContent) {
  *
  * Retains the plan-05-03 signature + return shape so existing callers
  * (bin/generate-graph-client.mjs Step 5, test stubs) don't need edits.
- * The emitted file now carries six ReadonlySet<string> exports plus a
- * 6-entry PRESET_VERSIONS map.
+ * The emitted file now carries seven ReadonlySet<string> exports plus a
+ * 7-entry PRESET_VERSIONS map when every preset JSON is present.
  *
  * @param {string} generatedDir  Absolute path to src/generated (carries client.ts).
  * @param {string} presetsDir    Absolute path to src/presets (carries essentials-v1.json
@@ -241,15 +290,14 @@ export function compileEssentialsPreset(generatedDir, presetsDir) {
     const clientCode = fs.readFileSync(clientPath, 'utf-8');
     const registry = extractRegistry(clientCode);
 
-    // Per-preset compile pass. essentials-v1 is always first — its JSON
-    // is the de-facto "is my preset infrastructure working" bellwether and
-    // its failure should short-circuit before product-preset validation.
+    // Per-preset compile pass. discovery-v1 is first so the generated
+    // PRESET_VERSIONS map matches the fresh-tenant default order.
     const perPresetOps = new Map();
     for (const spec of PRESET_SPECS) {
       const presetJsonPath = path.join(presetsDir, spec.filename);
-      // Per-product presets can legitimately be absent in environments
-      // that predate plan 05.1-07. The legacy essentials-v1 entry remains
-      // MANDATORY: its absence is a hard error (same as before this plan).
+      // Non-essentials presets can legitimately be absent in older tmp test
+      // fixtures. The legacy essentials-v1 entry remains MANDATORY: its
+      // absence is a hard error (same as before this plan).
       if (spec.version !== 'essentials-v1' && !fs.existsSync(presetJsonPath)) {
         continue;
       }

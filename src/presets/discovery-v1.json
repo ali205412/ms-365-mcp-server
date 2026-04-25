@@ -1,0 +1,19 @@
+{
+  "version": "discovery-v1",
+  "generated_at": "2026-04-25T00:00:00Z",
+  "_comment": "Phase 7 Plan 07-02. Visible discovery-mode meta surface. Exactly 12 aliases, no generated Graph/product aliases.",
+  "ops": [
+    "search-tools",
+    "get-tool-schema",
+    "execute-tool",
+    "bookmark-tool",
+    "list-bookmarks",
+    "unbookmark-tool",
+    "save-recipe",
+    "list-recipes",
+    "run-recipe",
+    "record-fact",
+    "recall-facts",
+    "forget-fact"
+  ]
+}
