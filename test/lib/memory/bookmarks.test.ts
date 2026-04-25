@@ -24,6 +24,7 @@ function makePool(): Pool {
   db.public.registerFunction({
     name: 'gen_random_uuid',
     returns: DataType.uuid,
+    impure: true,
     implementation: () => crypto.randomUUID(),
   });
   const { Pool: PgMemPool } = db.adapters.createPg();
