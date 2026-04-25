@@ -35,6 +35,7 @@ import {
   createToolsListFilterMiddleware,
   wrapToolsListHandler,
 } from './lib/tool-selection/tools-list-filter.js';
+import { resolveTenantSurface } from './lib/tenant-surface/surface.js';
 import crypto from 'node:crypto';
 import { pinoHttp } from 'pino-http';
 import { nanoid } from 'nanoid';
@@ -932,6 +933,10 @@ class MicrosoftGraphServer {
     // heap usage proportional to what the tenant actually exposes.
     const enabledToolsSet = (tenant as { enabled_tools_set?: ReadonlySet<string> } | undefined)
       ?.enabled_tools_set;
+    const tenantSurface = resolveTenantSurface(tenant);
+    const useDiscoverySurface = tenant
+      ? tenantSurface.isDiscoverySurface
+      : Boolean(this.options.discovery);
 
     const server = new McpServer(
       {
@@ -940,7 +945,7 @@ class MicrosoftGraphServer {
       },
       {
         instructions: buildMcpServerInstructions({
-          discovery: Boolean(this.options.discovery),
+          discovery: useDiscoverySurface,
           orgMode: Boolean(this.options.orgMode),
           readOnly: Boolean(this.options.readOnly),
           multiAccount: this.multiAccount,
@@ -953,7 +958,7 @@ class MicrosoftGraphServer {
       registerAuthTools(server, this.authManager);
     }
 
-    if (this.options.discovery) {
+    if (useDiscoverySurface) {
       registerDiscoveryTools(
         server,
         this.graphClient!,

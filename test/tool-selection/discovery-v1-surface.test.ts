@@ -45,6 +45,11 @@ vi.mock('../../src/generated/client.js', () => ({
       { alias: 'me.sendMail', method: 'post', path: '/me/sendMail' },
       { alias: 'me.ListMessages', method: 'get', path: '/me/messages' },
       { alias: '__powerbi__Groups_GetGroups', method: 'get', path: '/groups' },
+      ...Array.from({ length: 12 }, (_, i) => ({
+        alias: `users.synthetic${i}`,
+        method: 'get',
+        path: `/users/synthetic${i}`,
+      })),
     ],
   },
 }));

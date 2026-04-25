@@ -22,6 +22,7 @@ import {
   type TenantBm25Cache,
 } from './lib/tool-selection/per-tenant-bm25.js';
 import { clampTopQueryParam } from './lib/graph-tools-pure.js';
+import { resolveDiscoveryCatalog } from './lib/discovery-catalog/catalog.js';
 // Re-export pure helpers so existing callers (tests, downstream modules)
 // keep working. New callers should import directly from
 // `./lib/graph-tools-pure.js` to avoid transitively pulling the 45 MB
@@ -1408,10 +1409,18 @@ export function registerDiscoveryTools(
         };
       }
 
-      // Build (or cache-hit) the per-tenant BM25 index over the enabled
-      // subset intersected with the registered tool universe. schemaHash
-      // drift auto-invalidates when the enabled set rotates.
-      const tenantIndex = discoveryCache.get(tenant.id, tenant.enabledToolsSet, projectedRegistry);
+      const catalog = resolveDiscoveryCatalog({
+        presetVersion: tenant.presetVersion,
+        enabledToolsSet: tenant.enabledToolsSet,
+        registryAliases: projectedRegistry.keys(),
+      });
+      const catalogSet = catalog.discoveryCatalogSet;
+
+      // Build (or cache-hit) the per-tenant BM25 index over the effective
+      // discovery catalog subset intersected with the registered tool
+      // universe. For discovery-v1 tenants this is the generated Graph/product
+      // catalog, not the visible 12 meta aliases.
+      const tenantIndex = discoveryCache.get(tenant.id, catalogSet, projectedRegistry);
 
       let orderedNames: string[];
       if (query && query.trim().length > 0) {
@@ -1419,13 +1428,13 @@ export function registerDiscoveryTools(
         // (intentionally not cached — rebuild cost is ≤5ms on 5000-entry
         // enabled sets; caching would force the per-tenant cache to hold
         // the richer DiscoverySearchIndex shape and double its memory).
-        const nameTokens = buildTenantNameTokens(tenant.enabledToolsSet, projectedRegistry);
+        const nameTokens = buildTenantNameTokens(catalogSet, projectedRegistry);
         const ranked = scoreTenantDiscoveryQuery(query, tenantIndex, nameTokens);
         orderedNames = ranked.map((r) => r.id).filter(categoryFilter);
       } else {
         // No query → list every alias in the tenant's enabled set that
         // is also in the registered universe. Category filter still applies.
-        orderedNames = [...tenant.enabledToolsSet]
+        orderedNames = [...catalogSet]
           .filter((alias) => projectedRegistry.has(alias))
           .filter(categoryFilter);
       }
@@ -1442,7 +1451,7 @@ export function registerDiscoveryTools(
                 // Report the tenant's enabled-set size, not the full
                 // registry size — advertising the global total leaks
                 // cross-tenant shape (T-05-12).
-                total: tenant.enabledToolsSet.size,
+                total: catalogSet.size,
                 tools,
                 tip: 'Call get-tool-schema(tool_name) to see parameters before invoking execute-tool.',
               },
@@ -1487,7 +1496,13 @@ export function registerDiscoveryTools(
         };
       }
 
-      if (!tenant.enabledToolsSet.has(tool_name)) {
+      const catalog = resolveDiscoveryCatalog({
+        presetVersion: tenant.presetVersion,
+        enabledToolsSet: tenant.enabledToolsSet,
+        registryAliases: projectedRegistry.keys(),
+      });
+
+      if (!catalog.discoveryCatalogSet.has(tool_name)) {
         logger.info(
           { tool: tool_name, tenantId: tenant.id },
           'get-tool-schema: tool not enabled for tenant'
@@ -1548,6 +1563,46 @@ export function registerDiscoveryTools(
       openWorldHint: true,
     },
     async ({ tool_name, parameters = {} }) => {
+      const tenant = resolveTenantForDiscovery();
+      if (!tenant) {
+        logger.warn({}, 'execute-tool: no tenant context; refusing dispatch');
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                error: 'tenant context unavailable',
+                tip: 'Tenant context not seeded — contact operator.',
+              }),
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const catalog = resolveDiscoveryCatalog({
+        presetVersion: tenant.presetVersion,
+        enabledToolsSet: tenant.enabledToolsSet,
+        registryAliases: projectedRegistry.keys(),
+      });
+
+      if (!catalog.discoveryCatalogSet.has(tool_name)) {
+        logger.info({ tool: tool_name, tenantId: tenant.id }, 'execute-tool: tool not enabled');
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                error: `Tool not enabled for tenant: ${tool_name}`,
+                tenantId: tenant.id,
+                tip: 'Use search-tools to discover tools available to this tenant.',
+              }),
+            },
+          ],
+          isError: true,
+        };
+      }
+
       const toolData = toolsRegistry.get(tool_name);
       if (!toolData) {
         return {
@@ -1564,7 +1619,11 @@ export function registerDiscoveryTools(
         };
       }
 
-      return executeGraphTool(toolData.tool, toolData.config, graphClient, parameters, authManager);
+      const ctx = requestContext.getStore() ?? {};
+      return requestContext.run(
+        { ...ctx, enabledToolsSet: catalog.discoveryCatalogSet },
+        async () => executeGraphTool(toolData.tool, toolData.config, graphClient, parameters, authManager)
+      );
     }
   );
 
