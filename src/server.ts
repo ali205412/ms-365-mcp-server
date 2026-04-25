@@ -7,6 +7,7 @@ import logger, { enableConsoleLogging, rawPinoLogger } from './logger.js';
 import { registerAuthTools } from './auth-tools.js';
 import { registerGraphTools, registerDiscoveryTools } from './graph-tools.js';
 import { registerMemoryTools } from './lib/memory/tools.js';
+import { registerMcpPrompts, type RegisterMcpPromptsDeps } from './lib/mcp-prompts/register.js';
 import { buildMcpServerInstructions } from './mcp-instructions.js';
 import GraphClient from './graph-client.js';
 import AuthManager, { buildScopesFromEndpoints } from './auth.js';
@@ -881,6 +882,7 @@ class MicrosoftGraphServer {
   // (Redis TTL = 600s handles eviction; MemoryPkceStore uses Date.now()
   // comparison on read).
   private pkceStore: PkceStore;
+  private promptDeps?: RegisterMcpPromptsDeps;
 
   // Phase 3 (plan 03-01): pushed by src/index.ts before server.start() so
   // /readyz composition reflects every subsystem (Postgres in 03-01; Redis
@@ -901,7 +903,7 @@ class MicrosoftGraphServer {
     authManager: AuthManager,
     options: CommandOptions = {},
     readinessChecks: ReadinessCheck[] = [],
-    deps: { pkceStore?: PkceStore } = {}
+    deps: { pkceStore?: PkceStore; promptDeps?: RegisterMcpPromptsDeps } = {}
   ) {
     this.authManager = authManager;
     this.options = options;
@@ -910,6 +912,7 @@ class MicrosoftGraphServer {
     this.secrets = null;
     this.readinessChecks = readinessChecks;
     this.pkceStore = deps.pkceStore ?? new MemoryPkceStore();
+    this.promptDeps = deps.promptDeps;
   }
 
   /**
@@ -976,6 +979,7 @@ class MicrosoftGraphServer {
         readOnly: this.options.readOnly,
         orgMode: this.options.orgMode,
       });
+      registerMcpPrompts(server, this.promptDeps);
     } else {
       registerGraphTools(
         server,

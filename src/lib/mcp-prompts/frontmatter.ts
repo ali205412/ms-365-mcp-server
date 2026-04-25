@@ -68,7 +68,9 @@ export function parsePromptMarkdown(
   const parsedFrontmatter = PromptFrontmatterSchema.safeParse(parsedYaml);
 
   if (!parsedFrontmatter.success) {
-    throw new Error(`Invalid prompt frontmatter in ${sourcePath}: ${formatZodError(parsedFrontmatter.error)}`);
+    throw new Error(
+      `Invalid prompt frontmatter in ${sourcePath}: ${formatZodError(parsedFrontmatter.error)}`
+    );
   }
 
   return {

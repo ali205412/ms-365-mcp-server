@@ -210,18 +210,20 @@ describe('Phase 7 Plan 07-07 — MCP prompt registration', () => {
       loadPrompts: () => [parsePromptMarkdown(VALID_PROMPT, 'fixture.md')],
     });
 
-    await expect(invokePromptGet(server, 'inbox-triage', { since: '2026-04-25' })).resolves.toEqual({
-      description: 'Triage unread mail',
-      messages: [
-        {
-          role: 'user',
-          content: {
-            type: 'text',
-            text: 'Use  to triage mail since 2026-04-25.\n',
+    await expect(invokePromptGet(server, 'inbox-triage', { since: '2026-04-25' })).resolves.toEqual(
+      {
+        description: 'Triage unread mail',
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: 'Use  to triage mail since 2026-04-25.\n',
+            },
           },
-        },
-      ],
-    });
+        ],
+      }
+    );
   });
 
   it('static tenant server has no prompt capability or prompt list handler', () => {
@@ -264,10 +266,7 @@ describe('Phase 7 Plan 07-07 — bounded prompt renderer', () => {
     const result = renderPromptTemplate(
       'Run {{tool_name}} for {{account}}.',
       { tool_name: 'me.sendMail', account: 'primary' },
-      [
-        { name: 'tool_name', required: true },
-        { name: 'account' },
-      ]
+      [{ name: 'tool_name', required: true }, { name: 'account' }]
     );
 
     expect(result).toEqual({
