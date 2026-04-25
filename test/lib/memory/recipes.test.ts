@@ -5,9 +5,10 @@
  * scoped by the explicit caller tenant id, including same-name rows across
  * tenants.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { DataType, newDb } from 'pg-mem';
 import type { Pool } from 'pg';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { __setPoolForTesting } from '../../../src/lib/postgres.js';
 import {
   getRecipeByName,
@@ -15,6 +16,9 @@ import {
   mergeRecipeParams,
   saveRecipe,
 } from '../../../src/lib/memory/recipes.js';
+import { requestContext } from '../../../src/request-context.js';
+import { MemoryRedisFacade } from '../../../src/lib/redis-facade.js';
+import { AGENTIC_EVENTS_CHANNEL } from '../../../src/lib/mcp-notifications/events.js';
 
 const TENANT_A = '11111111-1111-4111-8111-111111111111';
 const TENANT_B = '22222222-2222-4222-8222-222222222222';
@@ -53,6 +57,61 @@ async function installSchema(pool: Pool): Promise<void> {
       ON tenant_tool_recipes (tenant_id);
   `);
   await pool.query(`INSERT INTO tenants (id) VALUES ($1), ($2)`, [TENANT_A, TENANT_B]);
+}
+
+interface CallToolResult {
+  content: Array<{ type: 'text'; text: string }>;
+  isError?: boolean;
+}
+
+async function callTool(
+  server: McpServer,
+  name: string,
+  args: Record<string, unknown>
+): Promise<CallToolResult> {
+  const registered = (
+    server as unknown as {
+      _registeredTools: Record<
+        string,
+        { handler: (args: unknown, extra: unknown) => Promise<CallToolResult> }
+      >;
+    }
+  )._registeredTools;
+  const tool = registered[name];
+  if (!tool || typeof tool.handler !== 'function') {
+    throw new Error(`tool "${name}" not registered on test McpServer`);
+  }
+  return tool.handler(args, { requestId: 'test' });
+}
+
+async function loadRecipeTools(
+  executeToolAlias = vi.fn(async () => ({
+    content: [{ type: 'text' as const, text: JSON.stringify({ ok: true }) }],
+  }))
+): Promise<{
+  registerRecipeTools: typeof import('../../../src/lib/memory/recipe-tools.js').registerRecipeTools;
+  executeToolAlias: typeof executeToolAlias;
+}> {
+  vi.doMock('../../../src/graph-tools.js', () => ({
+    executeToolAlias,
+  }));
+  const module = await import('../../../src/lib/memory/recipe-tools.js');
+  return { registerRecipeTools: module.registerRecipeTools, executeToolAlias };
+}
+
+async function collectRecipePublishEvents(
+  redis: MemoryRedisFacade,
+  fn: () => Promise<void>
+): Promise<Array<{ type: string; uris?: string[] }>> {
+  const events: Array<{ type: string; uris?: string[] }> = [];
+  redis.on('message', (channel, message) => {
+    if (channel === AGENTIC_EVENTS_CHANNEL) {
+      events.push(JSON.parse(message) as { type: string; uris?: string[] });
+    }
+  });
+  await redis.subscribe(AGENTIC_EVENTS_CHANNEL);
+  await fn();
+  return events;
 }
 
 describe('Phase 7 Plan 07-04 Task 1 — recipe service', () => {
@@ -149,5 +208,136 @@ describe('Phase 7 Plan 07-04 Task 1 — recipe service', () => {
 
   it('mergeRecipeParams gives paramOverrides precedence over saved params', () => {
     expect(mergeRecipeParams({ a: 1, b: 2 }, { b: 9 })).toEqual({ a: 1, b: 9 });
+  });
+});
+
+describe('Phase 7 Plan 07-04 Task 2 — recipe MCP tools', () => {
+  let pool: Pool;
+  let redis: MemoryRedisFacade;
+  let server: McpServer;
+
+  beforeEach(async () => {
+    pool = makePool();
+    await installSchema(pool);
+    __setPoolForTesting(pool);
+    redis = new MemoryRedisFacade();
+    server = new McpServer({ name: 'recipe-test', version: '0.0.0' });
+  });
+
+  afterEach(async () => {
+    vi.doUnmock('../../../src/graph-tools.js');
+    vi.resetModules();
+    __setPoolForTesting(null);
+    await redis.quit();
+    await pool.end();
+  });
+
+  it('save-recipe requires name, alias, and params', async () => {
+    const { registerRecipeTools } = await loadRecipeTools();
+    registerRecipeTools(server, { redis, graphClient: {} as never });
+
+    const missingParams = await requestContext.run({ tenantId: TENANT_A }, () =>
+      callTool(server, 'save-recipe', {
+        name: 'morning inbox',
+        alias: 'me.messages.ListMessages',
+      })
+    );
+    expect(missingParams.isError).toBe(true);
+    expect(JSON.parse(missingParams.content[0].text)).toMatchObject({ error: 'invalid_recipe' });
+  });
+
+  it('list-recipes accepts an optional filter and returns caller tenant recipes', async () => {
+    const { registerRecipeTools } = await loadRecipeTools();
+    registerRecipeTools(server, { redis, graphClient: {} as never });
+    await saveRecipe(TENANT_A, {
+      name: 'morning inbox',
+      alias: 'me.messages.ListMessages',
+      params: { top: 10 },
+    });
+    await saveRecipe(TENANT_A, {
+      name: 'send status',
+      alias: 'me.sendMail',
+      params: { subject: 'weekly' },
+    });
+
+    const result = await requestContext.run({ tenantId: TENANT_A }, () =>
+      callTool(server, 'list-recipes', { filter: 'status' })
+    );
+
+    expect(result.isError).toBeFalsy();
+    const body = JSON.parse(result.content[0].text) as { recipes: Array<{ name: string }> };
+    expect(body.recipes.map((recipe) => recipe.name)).toEqual(['send status']);
+  });
+
+  it('run-recipe merges paramOverrides, calls executeToolAlias, and marks last_run_at', async () => {
+    const executeToolAlias = vi.fn(async () => ({
+      content: [{ type: 'text' as const, text: JSON.stringify({ dispatched: true }) }],
+    }));
+    const { registerRecipeTools } = await loadRecipeTools(executeToolAlias);
+    const graphClient = { graphRequest: vi.fn() };
+    const authManager = { acquireToken: vi.fn() };
+    registerRecipeTools(server, {
+      redis,
+      graphClient: graphClient as never,
+      authManager: authManager as never,
+      readOnly: false,
+      orgMode: true,
+    });
+    await saveRecipe(TENANT_A, {
+      name: 'morning inbox',
+      alias: 'me.messages.ListMessages',
+      params: { top: 10, select: 'subject' },
+    });
+
+    const events = await collectRecipePublishEvents(redis, async () => {
+      const result = await requestContext.run({ tenantId: TENANT_A }, () =>
+        callTool(server, 'run-recipe', {
+          name: 'morning inbox',
+          paramOverrides: { top: 25 },
+        })
+      );
+      expect(result.isError).toBeFalsy();
+      expect(JSON.parse(result.content[0].text)).toEqual({ dispatched: true });
+    });
+
+    expect(executeToolAlias).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: 'me.messages.ListMessages',
+        parameters: { top: 25, select: 'subject' },
+        graphClient,
+        authManager,
+        readOnly: false,
+        orgMode: true,
+      })
+    );
+    await expect(getRecipeByName(TENANT_A, 'morning inbox')).resolves.toMatchObject({
+      lastRunAt: expect.any(String),
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'resources/updated',
+        uris: [`mcp://tenant/${TENANT_A}/recipes.json`],
+      })
+    );
+  });
+
+  it('run-recipe returns an MCP error envelope for an unknown tenant-owned recipe', async () => {
+    const executeToolAlias = vi.fn();
+    const { registerRecipeTools } = await loadRecipeTools(executeToolAlias);
+    registerRecipeTools(server, { redis, graphClient: {} as never });
+    await saveRecipe(TENANT_B, {
+      name: 'shared name',
+      alias: 'me.sendMail',
+      params: { subject: 'tenant B' },
+    });
+
+    const result = await requestContext.run({ tenantId: TENANT_A }, () =>
+      callTool(server, 'run-recipe', { name: 'shared name' })
+    );
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text)).toMatchObject({ error: 'recipe_not_found' });
+    expect(result.content[0].text).not.toContain(TENANT_B);
+    expect(executeToolAlias).not.toHaveBeenCalled();
   });
 });
