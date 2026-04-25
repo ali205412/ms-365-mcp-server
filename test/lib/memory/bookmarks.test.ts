@@ -19,6 +19,7 @@ import {
   listBookmarks,
   upsertBookmark,
 } from '../../../src/lib/memory/bookmarks.js';
+import { safeBookmarkBoost } from '../../../src/lib/memory/bookmark-boost.js';
 import { registerBookmarkTools } from '../../../src/lib/memory/bookmark-tools.js';
 import { createMemoryBookmarkRoutes } from '../../../src/lib/admin/memory-bookmarks.js';
 import { requestContext } from '../../../src/request-context.js';
@@ -260,6 +261,18 @@ describe('Phase 7 Plan 07-03 Task 1 — bookmark service', () => {
       ['me.sendMail', 1],
     ]);
     expect([...countsB.entries()]).toEqual([['me.sendMail', 1]]);
+  });
+});
+
+describe('Phase 7 Plan 07-03 Task 3 — bookmark boost math', () => {
+  it('safeBookmarkBoost applies the SPEC multiplier exactly', () => {
+    expect(safeBookmarkBoost(10, 0)).toBe(10);
+    expect(safeBookmarkBoost(10, 1)).toBe(15);
+    expect(safeBookmarkBoost(10, 2)).toBe(20);
+  });
+
+  it('safeBookmarkBoost ignores negative bookmark counts', () => {
+    expect(safeBookmarkBoost(10, -5)).toBe(10);
   });
 });
 
