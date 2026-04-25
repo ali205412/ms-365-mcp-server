@@ -1,120 +1,328 @@
-# ms-365-mcp-server v2
+# ms-365-mcp-server
 
-[![build](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/build.yml) [![integration](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/integration.yml/badge.svg?branch=main)](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/integration.yml) [![docker](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/docker-image.yml/badge.svg?branch=main)](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/docker-image.yml) [![codeql](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/codeql.yml) [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![build](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/build.yml)
+[![integration](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/integration.yml/badge.svg?branch=main)](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/integration.yml)
+[![docker](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/docker-image.yml/badge.svg?branch=main)](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/docker-image.yml)
+[![codeql](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/ali205412/ms-365-mcp-server/actions/workflows/codeql.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-Maintained by **[Ali Abdelaal (@ali205412)](https://github.com/ali205412)** at [ali205412/ms-365-mcp-server](https://github.com/ali205412/ms-365-mcp-server). The v2 multi-tenant gateway runtime — Postgres + Redis substrate, all four identity flows, per-tenant rate limiting, OTel + Prometheus observability, 5,000+ Graph operations — is the work of this repo. Container image at `ghcr.io/ali205412/ms-365-mcp-server`. Issues + PRs belong [here](https://github.com/ali205412/ms-365-mcp-server/issues).
+Enterprise Microsoft 365 MCP gateway for AI assistants. The current runtime is a Docker-first, multi-tenant gateway with tenant-scoped OAuth, encrypted token storage, Redis-backed hot state, Postgres-backed tenant registry, per-tenant rate limits, observability, and a discovery-mode tool surface over a 42k+ generated Microsoft 365 catalog.
 
-> Originally forked from [softeria/ms-365-mcp-server](https://github.com/softeria/ms-365-mcp-server), which owns the `@softeria/ms-365-mcp-server` npm name and the v1 single-user CLI. Upstream issues: [softeria tracker](https://github.com/softeria/ms-365-mcp-server/issues).
+Maintained at [ali205412/ms-365-mcp-server](https://github.com/ali205412/ms-365-mcp-server). The published container image is `ghcr.io/ali205412/ms-365-mcp-server:latest`.
 
-**Enterprise multi-tenant Microsoft 365 MCP gateway.** One Docker Compose deployment that gives AI assistants full, governed access to Microsoft Graph across many Azure AD tenants — with tenant isolation, resilient Graph transport, all four identity flows, and per-tenant observability + rate limiting.
+Originally forked from [softeria/ms-365-mcp-server](https://github.com/softeria/ms-365-mcp-server), which owns the `@softeria/ms-365-mcp-server` npm package and the legacy single-user CLI path.
 
-v2 is a clean break from v1's single-user CLI model. Same project, new runtime: Postgres + Redis substrate, runtime tenant onboarding via admin REST API, 5,000+ Graph operations exposable per-tenant, AES-GCM token-at-rest, concurrent stdio + Streamable HTTP + legacy HTTP+SSE transports.
+## What It Provides
 
----
+- Multi-tenant MCP over Streamable HTTP at `/t/:tenantId/mcp`.
+- Legacy `/mcp` bearer-token HTTP path and stdio mode for single-user workflows.
+- Delegated OAuth 2.1 with PKCE, app-only client credentials, bearer pass-through, and device-code login.
+- Default `discovery-v1` tool surface: 12 visible meta tools that search, inspect, and execute the generated catalog on demand.
+- Generated catalog across Microsoft Graph plus product admin surfaces for Power BI, Power Apps, Power Automate, Exchange Online, and SharePoint Online.
+- MCP resources, prompts, completions, logging, bookmarks, recipes, and tenant-scoped facts for discovery tenants.
+- AES-GCM tenant secret/token encryption using a KEK and per-tenant wrapped DEKs.
+- Postgres tenant registry, Redis PKCE/session/cache/pubsub state, audit log, webhook state, delta tokens, and rate limits.
+- OpenTelemetry traces and Prometheus metrics.
 
-## Table of Contents
-
-- [What's new in v2](#whats-new-in-v2)
-- [When to use v2 vs v1](#when-to-use-v2-vs-v1)
-- [Quickstart — Docker Compose (reference)](#quickstart--docker-compose-reference)
-- [Quickstart — single user (stdio)](#quickstart--single-user-stdio)
-- [Architecture](#architecture)
-- [Identity flows](#identity-flows)
-- [Multi-tenant onboarding (Admin API)](#multi-tenant-onboarding-admin-api)
-- [Tool catalog & presets](#tool-catalog--presets)
-- [Observability & rate limiting](#observability--rate-limiting)
-- [Supported clouds](#supported-clouds)
-- [CLI reference](#cli-reference)
-- [Environment variables](#environment-variables)
-- [Token storage (stdio mode)](#token-storage-stdio-mode)
-- [Azure Key Vault (stdio mode)](#azure-key-vault-stdio-mode)
-- [Migrating from v1](#migrating-from-v1)
-- [Contributing](#contributing)
-- [Support & license](#support--license)
-
----
-
-## What's new in v2
-
-| Capability               | v1                                   | v2                                                                                                                     |
-| ------------------------ | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| **Deployment**           | `npx` per user                       | Docker Compose with Postgres + Redis                                                                                   |
-| **Tenancy**              | One user per process                 | Many tenants per gateway, onboarded at runtime                                                                         |
-| **Identity**             | Device code + BYOT                   | Delegated OAuth + app-only client-credentials + bearer pass-through + device code, all concurrent, per-tenant isolated |
-| **Token storage**        | OS keychain / file (plaintext)       | AES-GCM encrypted in Postgres with KEK rotation                                                                        |
-| **Admin surface**        | None                                 | REST API dual-secured by Entra OAuth (group check) OR rotatable API keys                                               |
-| **Rate limiting**        | None                                 | Per-tenant sliding-window Redis limiter (request count + Graph point budget)                                           |
-| **Observability**        | Winston file logs                    | OTel traces via OTLP/HTTP + Prometheus `/metrics` on port 9464                                                         |
-| **Graph coverage**       | ~200 tools                           | Full v1.0 + curated beta (5,000+ ops) with per-tenant enablement                                                       |
-| **Transports**           | stdio OR HTTP (mutually exclusive)   | stdio + Streamable HTTP + legacy HTTP+SSE concurrently                                                                 |
-| **Tool surface control** | `--enabled-tools` regex / `--preset` | Per-tenant enabled-tools stored in Postgres + ~150-op "essentials" preset                                              |
-
----
-
-## When to use v2 vs v1
-
-**Use v2 if you:**
-
-- Run MCP as infrastructure for multiple users or tenants
-- Need audit trails, rate limits, and observability
-- Want a single deployment that serves Claude Desktop, Claude Code, Cursor, Continue, and bespoke integrations
-- Need production-grade token security (encrypted at rest, per-tenant isolation)
-
-**Use v1 (single-user CLI) if you:**
-
-- Just want to hook one personal or work account into Claude Desktop
-- Don't need Docker / Postgres / Redis
-- Are happy with OS keychain token storage
-
-v1 continues to work via the same `npx @softeria/ms-365-mcp-server` entry point described below. v2 is a deliberate superset; the stdio mode keeps v1 ergonomics intact.
-
----
-
-## Quickstart — Docker Compose (reference)
-
-v2's reference deployment is a single Docker Compose stack on one VM. No Kubernetes, no Azure-native services required.
+## Quick Start: Gateway
 
 ```bash
 git clone https://github.com/ali205412/ms-365-mcp-server.git
 cd ms-365-mcp-server
 cp .env.example .env
-# Edit .env — set at minimum: MS365_MCP_ADMIN_GROUP_ID, MS365_MCP_KEK, database URL, Redis URL
+```
+
+Set at least:
+
+```env
+MS365_MCP_DATABASE_URL=postgres://mcp:<password>@postgres:5432/mcp
+MS365_MCP_REDIS_URL=redis://redis:6379
+MS365_MCP_KEK=<base64-32-byte-key>
+MS365_MCP_PUBLIC_URL=https://mcp.example.com
+MS365_MCP_CORS_ORIGINS=https://claude.ai,https://mcp.example.com
+MS365_MCP_OAUTH_REDIRECT_HOSTS=claude.ai
+```
+
+Then run:
+
+```bash
 docker compose up -d
 ```
 
-Or pull the pre-built image directly:
+Or pull the image directly:
 
 ```bash
 docker pull ghcr.io/ali205412/ms-365-mcp-server:latest
 ```
 
-Once up, the gateway exposes:
+Health and readiness:
 
-| Endpoint                                     | Purpose                                                   |
-| -------------------------------------------- | --------------------------------------------------------- |
-| `/mcp`, `/t/:tenantId/mcp` (Streamable HTTP) | Primary MCP transport for modern clients                  |
-| `/t/:tenantId/sse` + `/t/:tenantId/messages` | Legacy MCP transport (older Claude Desktop, SSE clients)  |
-| `/.well-known/oauth-authorization-server`    | OAuth 2.1 metadata (consumed by Claude connectors et al.) |
-| `/authorize`, `/token`                       | OAuth PKCE flow endpoints                                 |
-| `/admin/tenants`                             | Tenant CRUD (dual-secured)                                |
-| `/admin/api-keys`                            | API-key rotation (dual-secured)                           |
-| `/metrics` (port 9464)                       | Prometheus scrape target (optionally Bearer-gated)        |
-| `/healthz`, `/readyz`                        | Liveness + readiness (Kubernetes conventions)             |
+```bash
+curl https://mcp.example.com/healthz
+curl https://mcp.example.com/readyz
+```
 
-Full deployment guide with reverse-proxy (Caddy / nginx / Traefik) SSE buffering directives, TLS termination, and production hardening: **[docs/deployment.md](docs/deployment.md)** and **[docs/observability/](docs/observability/)**.
+## Claude Connector URL
 
----
+For Claude.ai custom connectors or any OAuth-capable Streamable HTTP MCP client, use the tenant-scoped endpoint:
 
-## Quickstart — single user (stdio)
+```text
+https://mcp.example.com/t/<tenant-route-id>/mcp
+```
 
-v1-style usage still works unchanged:
+The server publishes tenant-aware OAuth metadata at:
+
+```text
+https://mcp.example.com/.well-known/oauth-authorization-server/t/<tenant-route-id>
+https://mcp.example.com/.well-known/oauth-protected-resource/t/<tenant-route-id>
+```
+
+The legacy `/mcp` endpoint still exists for bearer-token HTTP compatibility, but new multi-tenant connectors should use `/t/<tenant-route-id>/mcp`.
+
+Validate a connector endpoint with:
+
+```bash
+npx @modelcontextprotocol/inspector \
+  --url https://mcp.example.com/t/<tenant-route-id>/mcp \
+  --transport streamable-http
+```
+
+## Tenant Onboarding
+
+Tenants are runtime data, not build-time config. The tenant row controls which Entra app to use, which Azure tenant to authenticate against, which scopes are allowed, which preset is exposed, and which optional product routing settings are present.
+
+Create tenants through `/admin/tenants` when the admin API is enabled:
+
+```http
+POST /admin/tenants
+Authorization: Bearer <admin-token-or-api-key>
+Content-Type: application/json
+
+{
+  "mode": "delegated",
+  "client_id": "00000000-0000-0000-0000-000000000000",
+  "client_secret_ref": null,
+  "tenant_id": "11111111-2222-3333-4444-555555555555",
+  "cloud_type": "global",
+  "redirect_uri_allowlist": [
+    "https://claude.ai/api/mcp/auth_callback",
+    "http://localhost:6274/oauth/callback",
+    "http://localhost:6274/oauth/callback/debug"
+  ],
+  "cors_origins": ["https://claude.ai"],
+  "allowed_scopes": [
+    "openid",
+    "offline_access",
+    "profile",
+    "email",
+    "User.Read",
+    "Mail.ReadWrite",
+    "Files.ReadWrite"
+  ],
+  "preset_version": "discovery-v1",
+  "enabled_tools": null,
+  "rate_limits": {
+    "request_per_min": 1000,
+    "graph_points_per_min": 50000
+  },
+  "slug": "contoso"
+}
+```
+
+For public delegated OAuth clients, keep `client_secret_ref` as `null`. For app-only or confidential delegated clients, `client_secret_ref` must be an encrypted JSON envelope that the tenant pool can unwrap with the tenant DEK. Do not send raw client secrets to the Admin API.
+
+The Admin API is mounted only when both of these are configured:
+
+```env
+MS365_MCP_ADMIN_APP_CLIENT_ID=<admin-app-client-id>
+MS365_MCP_ADMIN_GROUP_ID=<entra-security-group-object-id>
+```
+
+Automation can use rotatable admin API keys:
+
+```http
+Authorization: Bearer mcpk_...
+```
+
+Useful tenant operations:
+
+```http
+GET    /admin/tenants
+GET    /admin/tenants/:id
+PATCH  /admin/tenants/:id
+PATCH  /admin/tenants/:id/rotate-secret
+PATCH  /admin/tenants/:id/disable
+DELETE /admin/tenants/:id
+```
+
+## Azure App Setup
+
+Create one Microsoft Entra app registration per tenant or per operational boundary. Add redirect URIs for the clients you plan to support:
+
+```text
+https://claude.ai/api/mcp/auth_callback
+http://localhost:6274/oauth/callback
+http://localhost:6274/oauth/callback/debug
+https://mcp.example.com/callback
+```
+
+Grant Microsoft 365 permissions with the bundled Azure CLI script:
+
+```bash
+az login --tenant <entra-tenant-id>
+APP_ID=<app-client-id> bash bin/azure-grant-mcp-permissions.sh --with-app-only
+```
+
+If combined admin consent hits Azure CLI or tenant limits, use the per-resource helper:
+
+```bash
+APP_ID=<app-client-id> bash bin/azure-grant-consent-per-resource.sh
+```
+
+Some product surfaces require extra tenant setup after permissions are granted:
+
+- Power BI: enable service principals in the Power BI admin portal.
+- Exchange app-only tools: assign the service principal the Exchange Administrator role.
+- SharePoint tenant admin tools: assign the service principal the SharePoint Administrator role.
+- SharePoint tenant admin routing: patch `sharepoint_domain` to the single-label SharePoint prefix, for example `contoso` for `https://contoso-admin.sharepoint.com`.
+
+```http
+PATCH /admin/tenants/:id
+Content-Type: application/json
+
+{
+  "sharepoint_domain": "contoso"
+}
+```
+
+## Discovery Mode
+
+New tenants created through supported paths default to `discovery-v1`. Instead of exposing tens of thousands of generated tools in `tools/list`, discovery mode exposes these 12 visible tools:
+
+- `search-tools`
+- `get-tool-schema`
+- `execute-tool`
+- `bookmark-tool`
+- `list-bookmarks`
+- `unbookmark-tool`
+- `save-recipe`
+- `list-recipes`
+- `run-recipe`
+- `record-fact`
+- `recall-facts`
+- `forget-fact`
+
+Normal agent flow:
+
+1. Use `search-tools` with a plain-language goal such as "find unread messages" or "list recent SharePoint files".
+2. Use `get-tool-schema` on the candidate alias.
+3. Use `execute-tool` with the validated parameters.
+4. Save useful aliases with bookmarks, recipes, or facts when the workflow should be repeatable.
+
+Existing tenants are not auto-migrated. Opt in explicitly:
+
+```bash
+node bin/migrate-tenant-to-discovery.mjs --tenant-id <tenant-route-id> --dry-run
+node bin/migrate-tenant-to-discovery.mjs --tenant-id <tenant-route-id>
+```
+
+Rollback is a normal admin patch:
+
+```http
+PATCH /admin/tenants/:id
+Content-Type: application/json
+
+{
+  "preset_version": "essentials-v1"
+}
+```
+
+See [docs/discovery-mode.md](docs/discovery-mode.md) for discovery behavior, MCP resources, prompts, completions, memory, and pgvector notes.
+
+## Presets
+
+Tenant presets are versioned and fail closed. Unknown preset names expose zero tools.
+
+Current tenant `preset_version` values:
+
+| Preset                | Purpose                                   |
+| --------------------- | ----------------------------------------- |
+| `discovery-v1`        | Default Phase 7 meta-tool surface.        |
+| `essentials-v1`       | Legacy static cross-product Graph subset. |
+| `powerbi-essentials`  | Power BI admin read-first subset.         |
+| `pwrapps-essentials`  | Power Apps admin read-first subset.       |
+| `pwrauto-essentials`  | Power Automate admin read-first subset.   |
+| `exo-essentials`      | Exchange Online REST admin subset.        |
+| `sp-admin-essentials` | SharePoint tenant admin subset.           |
+
+`enabled_tools` is additive with the selected preset when present. Leave it `null` for the preset-only surface. Static tenants expose tool lists only; discovery tenants also expose MCP resources, prompts, completions, logging, bookmarks, recipes, and facts.
+
+## Endpoint Reference
+
+| Endpoint                                              | Purpose                                            |
+| ----------------------------------------------------- | -------------------------------------------------- |
+| `/t/:tenantId/mcp`                                    | Primary multi-tenant Streamable HTTP MCP endpoint. |
+| `/t/:tenantId/sse`                                    | Legacy SSE MCP stream.                             |
+| `/t/:tenantId/messages`                               | Legacy SSE POST channel.                           |
+| `/mcp`                                                | Legacy bearer-token Streamable HTTP endpoint.      |
+| `/.well-known/oauth-authorization-server/t/:tenantId` | Tenant OAuth server metadata.                      |
+| `/.well-known/oauth-protected-resource/t/:tenantId`   | Tenant protected-resource metadata.                |
+| `/t/:tenantId/authorize`                              | Tenant OAuth authorize endpoint.                   |
+| `/t/:tenantId/token`                                  | Tenant OAuth token endpoint.                       |
+| `/admin/tenants`                                      | Tenant CRUD.                                       |
+| `/admin/api-keys`                                     | Admin API key lifecycle.                           |
+| `/admin/audit`                                        | Admin audit query surface.                         |
+| `/t/:tenantId/notifications`                          | Microsoft Graph change notification receiver.      |
+| `/healthz`                                            | Liveness.                                          |
+| `/readyz`                                             | Readiness.                                         |
+| `/metrics`                                            | Prometheus metrics when enabled.                   |
+
+## Observability And Limits
+
+Enable Prometheus:
+
+```env
+MS365_MCP_PROMETHEUS_ENABLED=1
+MS365_MCP_METRICS_PORT=9464
+MS365_MCP_METRICS_BEARER=<optional-token>
+```
+
+Enable OTLP traces:
+
+```env
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+```
+
+Main metrics include:
+
+- `mcp_tool_calls_total`
+- `mcp_tool_duration_seconds`
+- `mcp_graph_throttled_total`
+- `mcp_rate_limit_blocked_total`
+- `mcp_oauth_pkce_store_size`
+- `mcp_token_cache_hit_ratio`
+- `mcp_active_streams`
+
+Rate limits are enforced per tenant before Graph calls:
+
+```env
+MS365_MCP_DEFAULT_REQ_PER_MIN=1000
+MS365_MCP_DEFAULT_GRAPH_POINTS_PER_MIN=50000
+```
+
+Per-tenant overrides live in `tenants.rate_limits`. See [docs/observability/](docs/observability/) for the Grafana starter dashboard, runbook, and tuning notes.
+
+## Single User Stdio
+
+The legacy single-user CLI path still works:
 
 ```bash
 npx @softeria/ms-365-mcp-server --login
-# Follow the device code prompt
+npx @softeria/ms-365-mcp-server --verify-login
+npx @softeria/ms-365-mcp-server --org-mode
 ```
 
-In Claude Desktop (`settings → Developer → Edit Config`):
+Claude Desktop stdio config:
 
 ```json
 {
@@ -127,336 +335,110 @@ In Claude Desktop (`settings → Developer → Edit Config`):
 }
 ```
 
-See the [CLI reference](#cli-reference) for the full stdio flag list.
+Common CLI flags:
 
----
-
-## Quickstart — Claude connector (Claude.ai web / Claude Desktop OAuth)
-
-Claude.ai's custom-connector feature speaks MCP over Streamable HTTP with OAuth 2.1. To plug this server in:
-
-1. **Expose the gateway publicly.** `localhost` is not reachable from Claude.ai's browser origin. Use ngrok / Cloudflare Tunnel / your own reverse proxy.
-
-   ```bash
-   cloudflared tunnel --url http://localhost:3000
-   # copy the resulting https://<name>.trycloudflare.com
-   ```
-
-2. **Set the public URL** in `.env` **and restart** — Claude reads this from `/.well-known/oauth-authorization-server`, so it must be the URL Claude will hit, not `localhost`.
-
-   ```env
-   MS365_MCP_PUBLIC_URL=https://<name>.trycloudflare.com
-   MS365_MCP_CORS_ORIGINS=https://claude.ai,https://<name>.trycloudflare.com
-   ```
-
-3. **Add `https://<name>.trycloudflare.com/mcp` as a custom connector in Claude.** Claude will:
-   - Fetch `/.well-known/oauth-authorization-server` (OAuth AS discovery)
-   - Open a browser window to `/authorize` → Microsoft login
-   - POST the returned code to `/token` and cache the bearer
-   - Call `/mcp` with `Authorization: Bearer …` on every MCP request
-
-4. **Verify** with the dev Inspector before trusting the connector:
-
-   ```bash
-   npx @modelcontextprotocol/inspector \
-     --url https://<name>.trycloudflare.com/mcp \
-     --transport streamable-http
-   ```
-
-Known limitations: Claude Desktop's native MCP stdio is simpler — no OAuth needed, just point it at the binary (see above). Reach for connectors when the server must be shared across browsers / users.
-
----
-
-## Architecture
-
-```
-                  ┌─────────────────────────────────────────┐
-                  │  AI Clients (Claude, Cursor, Continue)  │
-                  └────────────────┬────────────────────────┘
-                                   │ MCP (stdio | Streamable HTTP | HTTP+SSE)
-                                   ▼
-     ┌──────────────────────────────────────────────────────────┐
-     │  ms-365-mcp-server (gateway)                             │
-     │  ┌────────────────────────────────────────────────────┐  │
-     │  │ Transports · Rate limit · Tenant resolver · Auth   │  │
-     │  └───────┬────────────────────┬──────────────────┬────┘  │
-     │          │                    │                  │       │
-     │     Tool catalog        Graph transport     Observability│
-     │   (per-tenant enabled   (retry + batch +    (OTel + Prom)│
-     │     tools, ~5000 ops)    page + etag)                    │
-     └──────┬────────────────────┬──────────────────────┬───────┘
-            │                    │                      │
-     ┌──────▼──────┐      ┌──────▼──────┐        ┌──────▼──────┐
-     │  Postgres   │      │   Redis     │        │ OTel + Prom │
-     │ (tenants,   │      │ (rate limit,│        │ (collectors,│
-     │  tokens,    │      │  PKCE, pub/ │        │   Grafana)  │
-     │  audit)     │      │  sub)       │        │             │
-     └─────────────┘      └─────────────┘        └─────────────┘
-                                   │
-                                   ▼
-                        ┌───────────────────────┐
-                        │  Microsoft Graph API  │
-                        └───────────────────────┘
+```text
+--login
+--logout
+--verify-login
+--list-accounts
+--select-account <accountId>
+--remove-account <accountId>
+--org-mode
+--read-only
+--enabled-tools <regex>
+--preset <names>
+--list-presets
+--discovery
+--cloud <global|china>
+--http [host:]port
+--public-url <url>
+--tenant-id <tenant-route-id>
 ```
 
-Detailed architecture: **[CLAUDE.md](CLAUDE.md)** (codebase conventions) and **[.planning/PROJECT.md](.planning/PROJECT.md)** (requirements + decisions).
+## Development
 
----
-
-## Identity flows
-
-All four flows run concurrently and are correctly isolated per tenant. The gateway picks the right one per incoming request.
-
-| Flow                            | Who uses it                                          | How the gateway receives credentials                                                                        |
-| ------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| **Delegated OAuth 2.1 + PKCE**  | End-users authenticating through a modern MCP client | Client redirects through `/authorize` → `/token`; server stores refresh token AES-GCM-encrypted in Postgres |
-| **App-only client credentials** | Daemons / background automation                      | Tenant registration supplies client secret or cert; gateway caches the access token per tenant              |
-| **Bearer pass-through**         | Systems that already hold a Graph token              | `Authorization: Bearer <token>` on `/mcp` request; gateway validates `tid` claim matches the URL tenant     |
-| **Device code**                 | Interactive CLI / stdio mode                         | `npx @softeria/ms-365-mcp-server --login`                                                                   |
-
-Per-tenant isolation is the security foundation: token cache, PKCE state, rate-limit counters, and audit log are all keyed by `tenantId`. Cross-tenant leak is a P0 bug, not a feature.
-
----
-
-## Multi-tenant onboarding (Admin API)
-
-Tenants are onboarded at runtime via REST API. No restart needed.
+Use Node 20, 21, or 22. Node 22 is recommended locally.
 
 ```bash
-# Register a new tenant
-curl -X POST https://gateway.example.com/admin/tenants \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "tenant_id": "contoso.onmicrosoft.com",
-    "client_id": "00000000-0000-0000-0000-000000000000",
-    "client_secret": "...",
-    "enabled_tools_preset": "essentials",
-    "rate_limits": { "request_per_min": 1000, "graph_points_per_min": 50000 }
-  }'
+npm install
+npm run generate
+npm run build
+npm test
 ```
 
-The Admin API is **dual-secured**:
-
-- **Entra OAuth** (admin app registration + group membership check) for humans via the admin portal
-- **Rotatable API keys** for automation (`Authorization: Bearer mcpk_...`)
-
-Tenant disable triggers a cryptoshred cascade: MSAL cache evicted, Redis keys flushed, DEK destroyed. Tokens cannot be recovered post-disable.
-
-Full admin API reference lives in the OpenAPI spec shipped with the server (generated doc: TODO).
-
----
-
-## Tool catalog & presets
-
-The generated catalog covers all of Microsoft Graph v1.0 plus a curated beta surface (~5,000 operations). MCP clients cannot display 5,000 tools in one catalog, so v2 ships **per-tenant enabled-tools**:
-
-- **Default create-path preset: `discovery-v1`** (12 meta tools for search, schema lookup, execution, and tenant memory)
-- **Static preset: `essentials-v1`** (~150 ops covering Mail, Calendar, Files, Users, Teams, SharePoint)
-- **Regex filter** on the generated aliases via admin API
-- **Workload presets**: `mail`, `calendar`, `files`, `personal`, `work`, `excel`, `contacts`, `tasks`, `onenote`, `search`, `users`, `powerbi`, `intune`, `exchange`, `sharepoint`, `teams-admin`, `all`
-
-New tenants created through supported gateway/admin paths default to discovery mode. Existing tenants stay pinned to their stored `preset_version` and must opt in explicitly. See **[docs/discovery-mode.md](docs/discovery-mode.md)** for migration, rollback, and discovery-mode operator details.
-
-For single-user stdio mode, use `--preset`, `--enabled-tools <regex>`, or `--discovery` (lazy load tools on demand):
+Useful commands:
 
 ```bash
-npx @softeria/ms-365-mcp-server --preset mail
-npx @softeria/ms-365-mcp-server --enabled-tools "excel|contact"
-npx @softeria/ms-365-mcp-server --discovery     # LLM searches tools on-demand
+npm run dev
+npm run dev:http
+npm run lint
+npm run format:check
+npm run verify
+npm run verify:coverage
+npm run inspector
 ```
 
-Use `--list-presets` to see the full list.
-
----
-
-## Observability & rate limiting
-
-v2 ships production-grade observability out of the box:
-
-### Traces (OTel)
-
-Every Graph request emits a span with `{tenant.id, tool.name, tool.alias, http.status_code, retry.count, graph.request_id, duration_ms}`. Export via `OTEL_EXPORTER_OTLP_ENDPOINT`.
-
-### Metrics (Prometheus)
-
-Scrape `/metrics` on port 9464 (configurable via `MS365_MCP_METRICS_PORT`):
-
-| Metric                         | Type      | Labels                                       |
-| ------------------------------ | --------- | -------------------------------------------- |
-| `mcp_tool_calls_total`         | Counter   | `tenant`, `tool` (workload prefix), `status` |
-| `mcp_tool_duration_seconds`    | Histogram | `tenant`, `tool`                             |
-| `mcp_graph_throttled_total`    | Counter   | `tenant`                                     |
-| `mcp_rate_limit_blocked_total` | Counter   | `tenant`, `reason`                           |
-| `mcp_oauth_pkce_store_size`    | Gauge     | —                                            |
-| `mcp_token_cache_hit_ratio`    | Gauge     | `tenant`                                     |
-| `mcp_active_streams`           | Gauge     | `tenant`                                     |
-
-Label cardinality is bounded: the `tool` label is the **workload prefix** (~40 values), not the full alias (~14k values). Full aliases appear as span attributes only.
-
-### Rate limits (Redis sliding window)
-
-Per-tenant budgets are enforced **before** any Graph call is made:
-
-- **Request rate**: `MS365_MCP_DEFAULT_REQ_PER_MIN` (default 1000, overridable per-tenant)
-- **Graph point budget**: `MS365_MCP_DEFAULT_GRAPH_POINTS_PER_MIN` (default 50000, observed from Graph's `x-ms-resource-unit` header)
-
-Over-budget requests return `429` with `Retry-After` and increment `mcp_rate_limit_blocked_total`.
-
-A starter Grafana dashboard (5 panels: request rate, p50/p95/p99 latency, 429 rate, token-cache hit ratio, PKCE store size) ships under **[docs/observability/grafana-starter.json](docs/observability/grafana-starter.json)**. Runbook with alert patterns and per-metric PromQL reference lives at **[docs/observability/runbook.md](docs/observability/runbook.md)**.
-
----
-
-## Supported clouds
-
-| Cloud                | Description                        | Auth endpoint               | Graph endpoint                    |
-| -------------------- | ---------------------------------- | --------------------------- | --------------------------------- |
-| **Global** (default) | Worldwide Microsoft 365            | `login.microsoftonline.com` | `graph.microsoft.com`             |
-| **China** (21Vianet) | Microsoft 365 operated by 21Vianet | `login.chinacloudapi.cn`    | `microsoftgraph.chinacloudapi.cn` |
-
-Set via `--cloud china` or `MS365_MCP_CLOUD_TYPE=china`. Per-tenant cloud override is supported via the admin API.
-
----
-
-## CLI reference
-
-For the single-user stdio path. (HTTP-mode flags are orthogonal; see [deployment.md](docs/deployment.md) for gateway config.)
-
-```
---login                   Login via device code flow
---logout                  Log out and clear saved credentials
---verify-login            Verify login without starting the server
---list-permissions        List required Graph permissions and exit (respects --org-mode, --preset, --enabled-tools)
---list-accounts           List configured MSAL accounts
---list-presets            List tool presets and exit
---org-mode                Enable work/school scope set (Teams, SharePoint, etc.)
---cloud <type>            Microsoft cloud: global (default) or china
---read-only               Disable write operations
---http [port]             Streamable HTTP transport (default port 3000)
---enable-auth-tools       Enable login/logout tools in HTTP mode (off by default)
---no-dynamic-registration Disable OAuth DCR (on by default in HTTP mode)
---enabled-tools <regex>   Filter tools by regex (e.g. "excel|contact")
---preset <names>          Comma-separated preset list
---discovery               Lazy tool discovery — loads tools on demand
---toon                    (experimental) TOON output format for 30-60% token reduction
---public-url <url>        Public base URL for OAuth when behind a reverse proxy
--v                        Verbose logging
-```
-
----
-
-## Environment variables
-
-### Identity + cloud
-
-- `MS365_MCP_CLIENT_ID` — Custom Azure app client ID (defaults to built-in)
-- `MS365_MCP_CLIENT_SECRET` — Enables confidential-client flow
-- `MS365_MCP_TENANT_ID` — Tenant ID or `common` (default)
-- `MS365_MCP_CLOUD_TYPE` — `global` (default) or `china`
-- `MS365_MCP_OAUTH_TOKEN` — Pre-supplied bearer token (BYOT)
-- `MS365_MCP_KEYVAULT_URL` — Switch secrets source to Azure Key Vault
-
-### Gateway (Docker Compose)
-
-- `MS365_MCP_DATABASE_URL` — Postgres connection string
-- `MS365_MCP_REDIS_URL` — Redis connection string
-- `MS365_MCP_KEK` — 32-byte base64 key-encryption key for token encryption at rest
-- `MS365_MCP_ADMIN_GROUP_ID` — Entra group whose members may call the admin API
-- `MS365_MCP_PUBLIC_URL` — Public base URL for browser-facing OAuth redirects (when behind a proxy)
-
-### Observability (Phase 6)
-
-- `OTEL_EXPORTER_OTLP_ENDPOINT` — OTLP/HTTP collector endpoint for traces
-- `MS365_MCP_PROMETHEUS_ENABLED` — Gate Prometheus exporter on/off (default on)
-- `MS365_MCP_METRICS_PORT` — Dedicated port for `/metrics` (default `9464`)
-- `MS365_MCP_METRICS_BEARER` — Optional Bearer token gating `/metrics`
-- `MS365_MCP_DEFAULT_REQ_PER_MIN` — Default per-tenant request budget (default `1000`)
-- `MS365_MCP_DEFAULT_GRAPH_POINTS_PER_MIN` — Default per-tenant Graph point budget (default `50000`)
-
-### Behaviour
-
-- `READ_ONLY=true|1` — Disable write operations
-- `ENABLED_TOOLS` — Regex filter
-- `MS365_MCP_ORG_MODE=true|1` — Enable work/school scopes
-- `MS365_MCP_OUTPUT_FORMAT=toon` — Switch to TOON output
-- `MS365_MCP_MAX_TOP=<n>` — Cap Graph `$top` values
-- `MS365_MCP_BODY_FORMAT=html|text` — Outlook body content type (default text)
-- `LOG_LEVEL` — Winston level (default `info`)
-- `SILENT=true|1` — Suppress console output
-
-Full env reference with per-plan provenance: **[docs/observability/env-vars.md](docs/observability/env-vars.md)**.
-
----
-
-## Token storage (stdio mode)
-
-Stdio mode uses the OS credential store via `keytar` when available, with fallback to file storage (mode `0600`). To survive npm reinstalls, set custom paths outside the package dir:
+Regenerate the full catalog from committed snapshots:
 
 ```bash
-export MS365_MCP_TOKEN_CACHE_PATH="$HOME/.config/ms365-mcp/.token-cache.json"
-export MS365_MCP_SELECTED_ACCOUNT_PATH="$HOME/.config/ms365-mcp/.selected-account.json"
+MS365_MCP_FULL_COVERAGE=1 \
+MS365_MCP_USE_SNAPSHOT=1 \
+NODE_OPTIONS=--max-old-space-size=8192 \
+npm run generate
 ```
 
-Parent directories are created automatically.
+Product codegen churn guards are intentional. Set the matching `MS365_MCP_ACCEPT_*_CHURN=1` variable only after reviewing generated diffs.
 
-> **Gateway mode** stores tokens AES-GCM-encrypted in Postgres — not on disk. The stdio token storage documented here only applies to single-user CLI mode.
+## Environment Notes
 
----
+Core gateway variables:
 
-## Azure Key Vault (stdio mode)
+| Variable                         | Purpose                                                                         |
+| -------------------------------- | ------------------------------------------------------------------------------- |
+| `MS365_MCP_DATABASE_URL`         | Postgres connection string. Required for HTTP gateway mode.                     |
+| `MS365_MCP_REDIS_URL`            | Redis connection string. Required for HTTP gateway mode.                        |
+| `MS365_MCP_KEK`                  | Base64 32-byte key encryption key for tenant DEKs.                              |
+| `MS365_MCP_PUBLIC_URL`           | Public origin used in OAuth metadata and browser redirects.                     |
+| `MS365_MCP_CORS_ORIGINS`         | Comma-separated production CORS allowlist.                                      |
+| `MS365_MCP_OAUTH_REDIRECT_HOSTS` | Extra OAuth callback hosts allowed in production, for example `claude.ai`.      |
+| `MS365_MCP_ADMIN_APP_CLIENT_ID`  | Admin Entra app client id. Required to mount `/admin/*`.                        |
+| `MS365_MCP_ADMIN_GROUP_ID`       | Entra group object id allowed to call `/admin/*`. Required to mount `/admin/*`. |
+| `MS365_MCP_ADMIN_ORIGINS`        | Browser origins allowed for admin UI calls.                                     |
+| `MS365_MCP_REQUIRE_TLS`          | Reject plain HTTP admin requests when set.                                      |
+| `MS365_MCP_TRUST_PROXY`          | Trust proxy TLS headers when behind a locked-down reverse proxy.                |
+| `MS365_MCP_PGVECTOR_ENABLED`     | Optional pgvector-backed fact embeddings for discovery memory.                  |
 
-For stdio deployments that need Key Vault instead of env vars:
+See [.env.example](.env.example), [docs/deployment.md](docs/deployment.md), and [docs/observability/env-vars.md](docs/observability/env-vars.md) for the full operational matrix.
 
-```bash
-az keyvault secret set --vault-name your-kv --name ms365-mcp-client-id --value "..."
-az keyvault secret set --vault-name your-kv --name ms365-mcp-tenant-id --value "..."
-az keyvault secret set --vault-name your-kv --name ms365-mcp-client-secret --value "..."   # optional
+## Supported Clouds
 
-MS365_MCP_KEYVAULT_URL=https://your-kv.vault.azure.net npx @softeria/ms-365-mcp-server
-```
+| Cloud  | Auth endpoint               | API endpoint                      |
+| ------ | --------------------------- | --------------------------------- |
+| Global | `login.microsoftonline.com` | `graph.microsoft.com`             |
+| China  | `login.chinacloudapi.cn`    | `microsoftgraph.chinacloudapi.cn` |
 
-Auth uses `DefaultAzureCredential` (env vars → managed identity → Azure CLI → VS Code → Azure PowerShell).
+Set `MS365_MCP_CLOUD_TYPE=china`, pass `--cloud china`, or set `cloud_type` on the tenant row.
 
-Gateway mode uses Postgres, not Key Vault; the KEK that encrypts tokens is supplied via `MS365_MCP_KEK`.
+## Security Model
 
----
+- Tenant id is part of the URL and request context for multi-tenant transports.
+- Bearer pass-through validates the token `tid` against the tenant route.
+- Tokens and tenant secrets are encrypted at rest with per-tenant DEKs wrapped by the KEK.
+- Disabling a tenant cryptoshreds its wrapped DEK and revokes tenant-scoped API keys.
+- Admin routes are disabled unless admin app and group env vars are set.
+- Static preset mistakes fail closed through an empty tool set.
+- Product admin routes require both Azure permission grants and tenant-specific routing settings where applicable.
 
-## Migrating from v1
+## More Documentation
 
-v2 is a clean break. Upgrade path:
+- [docs/discovery-mode.md](docs/discovery-mode.md)
+- [docs/deployment.md](docs/deployment.md)
+- [docs/observability/runbook.md](docs/observability/runbook.md)
+- [docs/observability/rate-limit-tuning.md](docs/observability/rate-limit-tuning.md)
+- [docs/coverage-report.md](docs/coverage-report.md)
+- [CLAUDE.md](CLAUDE.md)
 
-1. **Single user staying single user?** No change. `npx @softeria/ms-365-mcp-server` still works exactly as it did in v1.
-2. **Moving to gateway?** Stand up a v2 Docker Compose stack alongside your v1 setup. Onboard tenants via admin API. Point each MCP client at the gateway `/mcp` endpoint. Retire v1 processes once all users are migrated.
-3. **Tokens?** v1 OS-keychain tokens cannot be imported into v2's AES-GCM-encrypted Postgres store — users re-auth once via OAuth.
-4. **Config?** `--enabled-tools` / `--preset` work the same at the CLI level but in gateway mode the per-tenant equivalents live on the tenant row.
+## License
 
-Full migration guide (when the last v1 user has moved): **[docs/migration-v1-to-v2.md](docs/migration-v1-to-v2.md)**.
-
----
-
-## Contributing
-
-```bash
-npm ci
-npm run generate    # (re)generate src/generated/client.ts from Graph OpenAPI
-npm run verify      # generate + lint + format:check + build + test
-```
-
-Before submitting a PR, `npm run verify` must pass. For a full developer workflow (GSD planning / TDD loops / code review agents), see **[CLAUDE.md](CLAUDE.md)**.
-
----
-
-## Support & license
-
-**This repo (v2 multi-tenant gateway — Ali Abdelaal / @ali205412):**
-
-- Issues + PRs: https://github.com/ali205412/ms-365-mcp-server/issues
-- Container image: `ghcr.io/ali205412/ms-365-mcp-server:latest`
-
-**Upstream (v1 single-user CLI, npm package):**
-
-- Issues: https://github.com/softeria/ms-365-mcp-server/issues
-- Discussions: https://github.com/softeria/ms-365-mcp-server/discussions
-- Discord: https://discord.gg/WvGVNScrAZ
-
-MIT — original work © 2026 Softeria, v2 additions © 2026 Ali Abdelaal. See [LICENSE](./LICENSE).
+MIT. See [LICENSE](LICENSE).
