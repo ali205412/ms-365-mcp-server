@@ -65,6 +65,7 @@ function registerFakeSession(registry: McpSessionRegistry, sessionId: string): S
 }
 
 async function waitFor(condition: () => boolean, timeoutMs = 1_000): Promise<void> {
+  vi.useRealTimers();
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (condition()) return;

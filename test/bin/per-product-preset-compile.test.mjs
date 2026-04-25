@@ -186,6 +186,8 @@ describe('plan 05.1-07 — compile-preset 6-preset pipeline', () => {
   it('warns but preserves a per-product preset when the generated registry lacks that whole product family', () => {
     const essentials = loadPresetJson('essentials-v1.json');
     const powerbi = loadPresetJson('powerbi-essentials.json');
+    const previousFullCoverage = process.env.MS365_MCP_FULL_COVERAGE;
+    delete process.env.MS365_MCP_FULL_COVERAGE;
 
     fs.writeFileSync(path.join(tmp, 'generated', 'client.ts'), makeFakeClient(essentials.ops));
     copyPreset(tmp, 'essentials-v1.json');
@@ -209,6 +211,11 @@ describe('plan 05.1-07 — compile-preset 6-preset pipeline', () => {
         expectStringLiteral(out, op);
       }
     } finally {
+      if (previousFullCoverage === undefined) {
+        delete process.env.MS365_MCP_FULL_COVERAGE;
+      } else {
+        process.env.MS365_MCP_FULL_COVERAGE = previousFullCoverage;
+      }
       warnSpy.mockRestore();
     }
   });
