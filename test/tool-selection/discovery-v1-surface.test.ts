@@ -6,6 +6,7 @@
  * product aliases remain outside that visible preset.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -21,6 +22,22 @@ import {
   presetFor,
 } from '../../src/lib/tool-selection/preset-loader.js';
 import { validateSelectors } from '../../src/lib/tool-selection/registry-validator.js';
+import { requestContext } from '../../src/request-context.js';
+import { registerDiscoveryTools, discoveryCache } from '../../src/graph-tools.js';
+import {
+  DISCOVERY_META_TOOL_NAMES,
+  DISCOVERY_PRESET_VERSION,
+  resolveTenantSurface,
+} from '../../src/lib/tenant-surface/surface.js';
+import { resolveDiscoveryCatalog } from '../../src/lib/discovery-catalog/catalog.js';
+import { MemoryRedisFacade } from '../../src/lib/redis-facade.js';
+import {
+  AGENTIC_EVENTS_CHANNEL,
+  publishMcpLogMessage,
+  publishResourceUpdated,
+  publishResourcesListChanged,
+  publishToolsListChanged,
+} from '../../src/lib/mcp-notifications/events.js';
 
 vi.mock('../../src/generated/client.js', () => ({
   api: {
@@ -52,6 +69,11 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const ESSENTIALS_PRESET_PATH = path.join(REPO_ROOT, 'src', 'presets', 'essentials-v1.json');
 
 let tmpDirs: string[] = [];
+
+interface CallToolResult {
+  content: Array<{ type: 'text'; text: string }>;
+  isError?: boolean;
+}
 
 function makeTmp(): string {
   const tmp = path.join(os.tmpdir(), `plan-07-02-discovery-${crypto.randomUUID()}`);
@@ -101,7 +123,32 @@ afterEach(() => {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
   tmpDirs = [];
+  discoveryCache._clear();
 });
+
+async function callDiscoveryTool(
+  server: McpServer,
+  name: string,
+  args: Record<string, unknown>
+): Promise<CallToolResult> {
+  const registered = (
+    server as unknown as {
+      _registeredTools: Record<
+        string,
+        { handler: (args: unknown, extra: unknown) => Promise<CallToolResult> }
+      >;
+    }
+  )._registeredTools;
+  const tool = registered[name];
+  if (!tool || typeof tool.handler !== 'function') {
+    throw new Error(`tool "${name}" not registered on test McpServer`);
+  }
+  return tool.handler(args, {
+    requestId: 'test',
+    sendNotification: vi.fn(),
+    sendRequest: vi.fn(),
+  });
+}
 
 describe('Phase 7 Plan 07-02 — discovery-v1 visible preset', () => {
   it('presetFor("discovery-v1") returns exactly the 12 SPEC meta aliases and no Graph aliases', () => {
@@ -160,5 +207,162 @@ describe('Phase 7 Plan 07-02 — discovery-v1 visible preset', () => {
     expect(() =>
       compileEssentialsPreset(path.join(broken, 'generated'), path.join(broken, 'presets'))
     ).toThrow(/not-a-real-meta-tool|discovery-v1/);
+  });
+});
+
+describe('Phase 7 Plan 07-02 — discovery catalog separation', () => {
+  it('resolveTenantSurface detects discovery-v1 and exposes the frozen 12-tool visible set', () => {
+    const surface = resolveTenantSurface({ preset_version: DISCOVERY_PRESET_VERSION });
+    expect(surface.isDiscoverySurface).toBe(true);
+    expect(surface.visibleToolsSet).toBe(DISCOVERY_META_TOOL_NAMES);
+    expect(surface.visibleToolsSet.size).toBe(12);
+    expect(Object.isFrozen(surface.visibleToolsSet)).toBe(true);
+
+    const staticSurface = resolveTenantSurface({ preset_version: 'essentials-v1' });
+    expect(staticSurface.isDiscoverySurface).toBe(false);
+  });
+
+  it('resolveDiscoveryCatalog separates visible discovery tools from generated Graph/product aliases', () => {
+    const registryAliases = Object.freeze(
+      new Set([
+        'search-tools',
+        'me.sendMail',
+        'me.ListMessages',
+        '__powerbi__Groups_GetGroups',
+        ...Array.from({ length: 12 }, (_, i) => `users.synthetic${i}`),
+      ])
+    );
+
+    const resolution = resolveDiscoveryCatalog({
+      presetVersion: DISCOVERY_PRESET_VERSION,
+      enabledToolsSet: DISCOVERY_META_TOOL_NAMES,
+      registryAliases,
+    });
+
+    expect(resolution.isDiscoverySurface).toBe(true);
+    expect(resolution.visibleToolsSet.size).toBe(12);
+    expect([...resolution.visibleToolsSet].sort()).toEqual([...DISCOVERY_META_ALIASES].sort());
+    expect(resolution.discoveryCatalogSet.size).toBeGreaterThan(12);
+    expect(resolution.discoveryCatalogSet.has('me.sendMail')).toBe(true);
+    expect(resolution.discoveryCatalogSet.has('__powerbi__Groups_GetGroups')).toBe(true);
+    expect(resolution.discoveryCatalogSet.has('search-tools')).toBe(false);
+  });
+
+  it('resolveDiscoveryCatalog keeps static tenants aligned to enabledToolsSet', () => {
+    const enabledToolsSet = Object.freeze(new Set(['me.sendMail']));
+    const resolution = resolveDiscoveryCatalog({
+      presetVersion: 'essentials-v1',
+      enabledToolsSet,
+      registryAliases: new Set(['me.sendMail', 'me.ListMessages']),
+    });
+
+    expect(resolution.isDiscoverySurface).toBe(false);
+    expect(resolution.visibleToolsSet).toBe(enabledToolsSet);
+    expect(resolution.discoveryCatalogSet).toBe(enabledToolsSet);
+    expect(resolution.discoveryCatalogSet.has('me.ListMessages')).toBe(false);
+  });
+
+  it('search-tools, get-tool-schema, and execute-tool use discoveryCatalogSet for discovery tenants', async () => {
+    const server = new McpServer({ name: 'test', version: '0.0.0' });
+    const graphClient = {
+      graphRequest: vi.fn().mockResolvedValue({
+        content: [{ type: 'text', text: JSON.stringify({ ok: true }) }],
+      }),
+    };
+    registerDiscoveryTools(
+      server,
+      graphClient as unknown as Parameters<typeof registerDiscoveryTools>[1],
+      false,
+      true
+    );
+
+    const ctx = {
+      tenantId: '11111111-1111-1111-1111-111111111111',
+      enabledToolsSet: DISCOVERY_META_TOOL_NAMES,
+      presetVersion: DISCOVERY_PRESET_VERSION,
+    };
+
+    const search = await requestContext.run(ctx, () =>
+      callDiscoveryTool(server, 'search-tools', { query: 'send mail', limit: 10 })
+    );
+    const searchBody = JSON.parse(search.content[0].text) as {
+      tools: Array<{ name: string }>;
+      total: number;
+    };
+    expect(searchBody.total).toBeGreaterThan(12);
+    expect(searchBody.tools.map((t) => t.name)).toContain('me.sendMail');
+
+    const schema = await requestContext.run(ctx, () =>
+      callDiscoveryTool(server, 'get-tool-schema', { tool_name: 'me.sendMail' })
+    );
+    expect(schema.isError).toBeFalsy();
+    expect(schema.content[0].text).toContain('me.sendMail');
+
+    const executed = await requestContext.run(ctx, () =>
+      callDiscoveryTool(server, 'execute-tool', { tool_name: 'me.sendMail', parameters: {} })
+    );
+    expect(executed.isError).toBeFalsy();
+    expect(graphClient.graphRequest).toHaveBeenCalled();
+  });
+
+  it('static tenants still search only their enabledToolsSet through discovery tools', async () => {
+    const server = new McpServer({ name: 'test', version: '0.0.0' });
+    const graphClient = {
+      graphRequest: vi.fn().mockResolvedValue({
+        content: [{ type: 'text', text: JSON.stringify({ ok: true }) }],
+      }),
+    };
+    registerDiscoveryTools(
+      server,
+      graphClient as unknown as Parameters<typeof registerDiscoveryTools>[1],
+      false,
+      true
+    );
+
+    const staticEnabled = Object.freeze(new Set(['me.ListMessages']));
+    const search = await requestContext.run(
+      {
+        tenantId: '22222222-2222-2222-2222-222222222222',
+        enabledToolsSet: staticEnabled,
+        presetVersion: 'essentials-v1',
+      },
+      () => callDiscoveryTool(server, 'search-tools', { limit: 10 })
+    );
+    const body = JSON.parse(search.content[0].text) as {
+      tools: Array<{ name: string }>;
+      total: number;
+    };
+    expect(body.total).toBe(1);
+    expect(body.tools.map((t) => t.name)).toEqual(['me.ListMessages']);
+  });
+});
+
+describe('Phase 7 Plan 07-02 — agentic notification publisher contract', () => {
+  it('exports publisher functions that emit JSON-safe agentic event payloads', async () => {
+    const redis = new MemoryRedisFacade();
+    const messages: unknown[] = [];
+    redis.on('message', (_channel, message) => {
+      messages.push(JSON.parse(message));
+    });
+    await redis.subscribe(AGENTIC_EVENTS_CHANNEL);
+
+    const tenantId = '33333333-3333-3333-3333-333333333333';
+    await publishToolsListChanged(redis, tenantId, 'enabled-tools-change');
+    await publishResourcesListChanged(redis, tenantId, 'resource-registry-change');
+    await publishResourceUpdated(redis, tenantId, [`mcp://tenant/${tenantId}/bookmarks.json`]);
+    await publishMcpLogMessage(redis, tenantId, {
+      level: 'info',
+      logger: 'test',
+      data: { ok: true },
+    });
+
+    expect(messages).toHaveLength(4);
+    expect(messages.map((msg) => (msg as { type: string }).type)).toEqual([
+      'tools/list_changed',
+      'resources/list_changed',
+      'resources/updated',
+      'logging/message',
+    ]);
+    expect(messages.every((msg) => (msg as { tenantId: string }).tenantId === tenantId)).toBe(true);
   });
 });
