@@ -7,6 +7,7 @@ import { executeToolAlias } from '../../graph-tools.js';
 import { getRequestTenant } from '../../request-context.js';
 import type { RedisClient } from '../redis.js';
 import { publishResourceUpdated } from '../mcp-notifications/events.js';
+import { emitMcpLogEvent } from '../mcp-logging/register.js';
 import {
   RecipeAliasZod,
   RecipeNameZod,
@@ -114,6 +115,15 @@ export function registerRecipeTools(server: McpServer, deps: RecipeToolDeps): vo
       }
 
       const recipe = await saveRecipe(tenant.id, parsed.data);
+      await emitMcpLogEvent({
+        tenantId: tenant.id,
+        event: 'recipe.saved',
+        level: 'info',
+        data: {
+          name: parsed.data.name,
+          alias: parsed.data.alias,
+        },
+      });
       await publishRecipeChange(deps.redis, tenant.id);
       return jsonResult(recipe);
     }

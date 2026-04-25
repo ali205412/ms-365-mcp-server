@@ -25,6 +25,7 @@ import { clampTopQueryParam } from './lib/graph-tools-pure.js';
 import { resolveDiscoveryCatalog } from './lib/discovery-catalog/catalog.js';
 import { safeBookmarkBoost } from './lib/memory/bookmark-boost.js';
 import { getBookmarkCountsByAlias } from './lib/memory/bookmarks.js';
+import { emitMcpLogEvent } from './lib/mcp-logging/register.js';
 // Re-export pure helpers so existing callers (tests, downstream modules)
 // keep working. New callers should import directly from
 // `./lib/graph-tools-pure.js` to avoid transitively pulling the 45 MB
@@ -169,9 +170,81 @@ async function executeGraphTool(
   // wrap to populate the `tool.alias` attribute and the workload-prefix metric
   // label (via labelForTool).
   const existingCtx = requestContext.getStore() ?? {};
-  return requestContext.run({ ...existingCtx, toolAlias: tool.alias }, () =>
-    executeGraphToolInner(tool, config, graphClient, params, authManager)
-  );
+  return requestContext.run({ ...existingCtx, toolAlias: tool.alias }, async () => {
+    const tenantId = getRequestTenant().id;
+    const startedAt = Date.now();
+    await emitMcpLogEvent({
+      tenantId,
+      event: 'tool-call.start',
+      level: 'info',
+      data: {
+        alias: tool.alias,
+        method: tool.method.toUpperCase(),
+        paramKeys: Object.keys(params),
+      },
+    });
+
+    try {
+      const result = await executeGraphToolInner(tool, config, graphClient, params, authManager);
+      const durationMs = Date.now() - startedAt;
+      if (result.isError) {
+        await emitMcpLogEvent({
+          tenantId,
+          event: 'tool-call.error',
+          level: 'error',
+          data: {
+            alias: tool.alias,
+            durationMs,
+            code: errorCodeFromResult(result),
+          },
+        });
+      } else {
+        await emitMcpLogEvent({
+          tenantId,
+          event: 'tool-call.success',
+          level: 'info',
+          data: {
+            alias: tool.alias,
+            durationMs,
+            bytes: resultPayloadBytes(result),
+          },
+        });
+      }
+      return result;
+    } catch (error) {
+      await emitMcpLogEvent({
+        tenantId,
+        event: 'tool-call.error',
+        level: 'error',
+        data: {
+          alias: tool.alias,
+          durationMs: Date.now() - startedAt,
+          code: codeFromError(error),
+        },
+      });
+      throw error;
+    }
+  });
+}
+
+function resultPayloadBytes(result: CallToolResult): number {
+  return Buffer.byteLength(JSON.stringify(result.content ?? []), 'utf8');
+}
+
+function errorCodeFromResult(result: CallToolResult): string {
+  const code = result._meta?.errorCode;
+  return typeof code === 'string' && code.length > 0 ? code : 'tool_error';
+}
+
+function codeFromError(error: unknown): string {
+  const candidate =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? (error as { code?: unknown }).code
+      : undefined;
+  if (typeof candidate === 'string' && /^[a-zA-Z0-9_.-]{1,80}$/.test(candidate)) {
+    return candidate;
+  }
+  return error instanceof Error && error.name ? error.name : 'tool_error';
 }
 
 async function executeGraphToolInner(
@@ -601,6 +674,7 @@ async function executeGraphToolInner(
           }),
         },
       ],
+      _meta: { errorCode: codeFromError(error) },
       isError: true,
     };
   }

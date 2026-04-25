@@ -4,6 +4,7 @@ import logger from '../../logger.js';
 import { getRequestTenant } from '../../request-context.js';
 import type { RedisClient } from '../redis.js';
 import { publishResourceUpdated } from '../mcp-notifications/events.js';
+import { emitMcpLogEvent } from '../mcp-logging/register.js';
 import { publishToolSelectionInvalidation } from '../tool-selection/tool-selection-invalidation.js';
 import {
   BookmarkAliasZod,
@@ -106,6 +107,15 @@ export function registerBookmarkTools(server: McpServer, deps: BookmarkToolDeps)
       }
 
       const bookmark = await upsertBookmark(tenant.id, parsed.data);
+      await emitMcpLogEvent({
+        tenantId: tenant.id,
+        event: 'bookmark.created',
+        level: 'info',
+        data: {
+          alias: parsed.data.alias,
+          hasLabel: Boolean(parsed.data.label),
+        },
+      });
       await publishBookmarkChange(deps.redis, tenant.id);
       return jsonResult(bookmark);
     }

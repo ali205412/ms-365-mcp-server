@@ -4,6 +4,7 @@ import logger from '../../logger.js';
 import { getRequestTenant } from '../../request-context.js';
 import type { RedisClient } from '../redis.js';
 import { publishResourceUpdated } from '../mcp-notifications/events.js';
+import { emitMcpLogEvent } from '../mcp-logging/register.js';
 import { FactContentZod, FactScopeZod, forgetFact, recallFacts, recordFact } from './facts.js';
 
 const FACT_RESOURCE_REASON = 'fact-change';
@@ -92,6 +93,14 @@ export function registerFactTools(server: McpServer, deps: FactToolDeps): void {
       const fact = await recordFact(tenant.id, {
         scope: parsed.data.scope,
         content: parsed.data.fact,
+      });
+      await emitMcpLogEvent({
+        tenantId: tenant.id,
+        event: 'fact.recorded',
+        level: 'info',
+        data: {
+          scope: parsed.data.scope,
+        },
       });
       await publishFactChange(deps.redis, tenant.id);
       return jsonResult(fact);

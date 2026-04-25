@@ -9,6 +9,7 @@ import { registerGraphTools, registerDiscoveryTools } from './graph-tools.js';
 import { registerMemoryTools } from './lib/memory/tools.js';
 import { registerMcpResources } from './lib/mcp-resources/register.js';
 import { registerMcpPrompts, type RegisterMcpPromptsDeps } from './lib/mcp-prompts/register.js';
+import { registerMcpLogging } from './lib/mcp-logging/register.js';
 import {
   mcpSessionRegistry,
   subscribeToAgenticEvents,
@@ -1004,6 +1005,7 @@ class MicrosoftGraphServer {
         resourceSubscriptions: this.resourceSubscriptions,
       });
       registerMcpPrompts(server, this.promptDeps);
+      registerMcpLogging(server);
     } else {
       registerGraphTools(
         server,

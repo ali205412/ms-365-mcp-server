@@ -10,6 +10,7 @@ import {
   defaultResourceNotificationCoalescer,
   type ResourceNotificationCoalescer,
 } from './coalesce.js';
+import { clearSessionLogLevel, shouldEmitToSession } from '../mcp-logging/session-log-level.js';
 
 export type McpNotificationSurface = 'discovery' | 'static';
 
@@ -72,6 +73,7 @@ export class McpSessionRegistry {
   unregisterSession(sessionId: string): RegisteredMcpSession | undefined {
     const session = this.sessions.get(sessionId);
     if (session) {
+      clearSessionLogLevel(sessionId);
       this.sessions.delete(sessionId);
       this.coalescer.clearSession(session.tenantId, sessionId);
     }
@@ -113,9 +115,9 @@ export class McpSessionRegistry {
 
   async deliverLoggingMessage(tenantId: string, message: McpLogMessage): Promise<void> {
     await Promise.all(
-      this.matchingDiscoverySessions(tenantId).map((session) =>
-        session.server.sendLoggingMessage(message, session.sessionId)
-      )
+      this.matchingDiscoverySessions(tenantId)
+        .filter((session) => shouldEmitToSession(session.sessionId, message.level))
+        .map((session) => session.server.sendLoggingMessage(message, session.sessionId))
     );
   }
 
