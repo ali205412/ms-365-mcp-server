@@ -32,18 +32,17 @@ jobs:
     # was skipping tests; see commit retiring CI_FLAKY_QUARANTINE.
     timeout-minutes: 35
 
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: [20.x, 22.x]
+    # Single Node 22 — production target is node:22-alpine in the
+    # Dockerfile release stage. Multi-version matrix (20 + 22) was
+    # doubling cost without catching anything Docker wouldn't.
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Use Node.js ${{ matrix.node-version }}
+      - name: Use Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: '22.x'
           cache: 'npm'
 
       - name: Install patch-package (if needed)
@@ -52,7 +51,22 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Cache the 72MB generated/client.ts. Key derives from every input
+      # that could change the output: the curated catalog metadata
+      # (endpoints.json), the pinned upstream OpenAPI snapshots
+      # (bin/.last-*-snapshot.json), the generator source
+      # (bin/generate-graph-client.mjs + bin/modules/**), and the
+      # lockfile (changes to openapi-zod-client / zod). Misses cause a
+      # full ~7-min regenerate; hits skip the step entirely.
+      - name: Cache generated Graph client
+        id: gen-cache
+        uses: actions/cache@v4
+        with:
+          path: src/generated/client.ts
+          key: gen-${{ hashFiles('src/endpoints.json', 'bin/.last-*-snapshot.json', 'bin/generate-graph-client.mjs', 'bin/modules/**/*.mjs', 'package-lock.json') }}
+
       - name: Generate Graph client (full coverage)
+        if: steps.gen-cache.outputs.cache-hit != 'true'
         run: npm run generate
 
       - name: Lint
@@ -67,11 +81,26 @@ jobs:
       - name: Build TypeScript
         run: npm run build
 
-      - name: Run unit tests
+      # PR runs: only test files affected by the changeset. Push runs to
+      # `dev` (this workflow's only push trigger) and main run the full
+      # suite via Integration/Release workflows.
+      - name: Run unit tests (full)
+        if: github.event_name != 'pull_request'
         run: npm test
 
-      - name: Upload build artifacts (Node 22 only)
-        if: matrix.node-version == '22.x'
+      - name: Run unit tests (related to PR changes only)
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=50 origin "${GITHUB_BASE_REF}"
+          changed=$(git diff --name-only "origin/${GITHUB_BASE_REF}"...HEAD -- '*.ts' '*.mts' '*.tsx' '*.js' '*.mjs' | tr '\n' ' ')
+          if [ -z "$changed" ]; then
+            echo "No source changes vs base — skipping unit tests"
+            exit 0
+          fi
+          echo "Running vitest related on: $changed"
+          npx vitest run --changed "origin/${GITHUB_BASE_REF}" || npx vitest related --run $changed
+
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: dist-${{ github.sha }}
