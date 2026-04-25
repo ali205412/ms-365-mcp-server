@@ -17,7 +17,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { newDb, type IMemoryDb } from 'pg-mem';
+import { DataType, newDb, type IMemoryDb } from 'pg-mem';
 import type { Pool } from 'pg';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -41,18 +41,25 @@ function listMigrations(): MigrationPair[] {
       // pg-mem doesn't understand DROP/CREATE EXTENSION — filter at harness level.
       return {
         file,
-        up: stripPgcryptoExtensionStmts(up),
-        down: stripPgcryptoExtensionStmts(down),
+        up: stripPgMemUnsupportedStmts(up),
+        down: stripPgMemUnsupportedStmts(down),
       };
     });
 }
 
-function stripPgcryptoExtensionStmts(sql: string): string {
-  // Remove any line containing `EXTENSION ... pgcrypto`. Case-insensitive.
+function stripPgMemUnsupportedStmts(sql: string): string {
+  // Remove extension DDL and Phase 7 tsvector/pgvector statements that
+  // production Postgres supports but pg-mem cannot parse or execute.
   return sql
     .split('\n')
     .filter((line) => !/\bextension\b.*\bpgcrypto\b/i.test(line))
-    .join('\n');
+    .join('\n')
+    .replace(/\n\s*content_tsv\s+tsvector\s+GENERATED\s+ALWAYS\s+AS[\s\S]*?\s+STORED,?/i, '')
+    .replace(
+      /\nCREATE\s+INDEX\s+idx_tenant_facts_content_tsv\s+ON\s+tenant_facts\s+USING\s+gin\s+\(content_tsv\);/i,
+      ''
+    )
+    .replace(/\nDO\s+\$\$[\s\S]*?\$\$;/i, '');
 }
 
 function makePool(): { db: IMemoryDb; pool: Pool } {
@@ -62,6 +69,11 @@ function makePool(): { db: IMemoryDb; pool: Pool } {
   // succeed (though we strip those statements above defensively).
   db.registerExtension('pgcrypto', () => {
     // no-op — we never depend on gen_random_uuid at the app layer
+  });
+  db.public.registerFunction({
+    name: 'gen_random_uuid',
+    returns: DataType.uuid,
+    implementation: () => '00000000-0000-4000-8000-000000000001',
   });
   const { Pool } = db.adapters.createPg();
   return { db, pool: new Pool() as Pool };
@@ -128,6 +140,8 @@ describe('plan 03-01 — Postgres schema round-trip', () => {
       // per-tenant rate limit overrides (request_per_min,
       // graph_points_per_min).
       '20260901000000_tenant_rate_limits.sql',
+      // Plan 07-01: tenant memory tables for bookmarks, recipes, and facts.
+      '20261001000000_tenant_memory.sql',
     ]);
   });
 
