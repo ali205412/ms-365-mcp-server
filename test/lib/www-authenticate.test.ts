@@ -8,10 +8,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { Request } from 'express';
 import { buildWwwAuthenticate, resolvePublicBase } from '../../src/lib/www-authenticate.js';
 
-function makeReq(opts: {
-  protocol?: string;
-  host?: string;
-} = {}): Request {
+function makeReq(
+  opts: {
+    protocol?: string;
+    host?: string;
+  } = {}
+): Request {
   const headers: Record<string, string> = {};
   if (opts.host) headers.host = opts.host;
   return {
