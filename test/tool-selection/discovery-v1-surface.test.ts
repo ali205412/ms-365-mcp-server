@@ -36,6 +36,7 @@ import {
   publishResourcesListChanged,
   publishToolsListChanged,
 } from '../../src/lib/mcp-notifications/events.js';
+import MicrosoftGraphServer from '../../src/server.js';
 
 vi.mock('../../src/generated/client.js', () => ({
   api: {
@@ -76,6 +77,17 @@ let tmpDirs: string[] = [];
 interface CallToolResult {
   content: Array<{ type: 'text'; text: string }>;
   isError?: boolean;
+}
+
+interface ToolEntry {
+  name: string;
+  description?: string;
+  inputSchema?: unknown;
+}
+
+interface ListToolsResponse {
+  tools: ToolEntry[];
+  nextCursor?: string;
 }
 
 function makeTmp(): string {
@@ -151,6 +163,32 @@ async function callDiscoveryTool(
     sendNotification: vi.fn(),
     sendRequest: vi.fn(),
   });
+}
+
+async function invokeToolsList(server: McpServer): Promise<ListToolsResponse> {
+  const inner = (
+    server.server as unknown as {
+      _requestHandlers: Map<string, (req: unknown, extra: unknown) => Promise<ListToolsResponse>>;
+    }
+  )._requestHandlers;
+  const handler = inner.get('tools/list');
+  if (!handler) {
+    throw new Error('tools/list handler not registered on McpServer');
+  }
+  return handler(
+    { method: 'tools/list', params: {} },
+    { requestId: 'test', sendNotification: vi.fn(), sendRequest: vi.fn() }
+  );
+}
+
+function createServerFactory(): MicrosoftGraphServer {
+  return new MicrosoftGraphServer(
+    {
+      isMultiAccount: vi.fn(async () => false),
+      listAccounts: vi.fn(async () => []),
+    } as never,
+    { http: true, orgMode: true }
+  );
 }
 
 describe('Phase 7 Plan 07-02 — discovery-v1 visible preset', () => {
@@ -367,5 +405,94 @@ describe('Phase 7 Plan 07-02 — agentic notification publisher contract', () =>
       'logging/message',
     ]);
     expect(messages.every((msg) => (msg as { tenantId: string }).tenantId === tenantId)).toBe(true);
+  });
+});
+
+describe('Phase 7 Plan 07-05 — aggregate memory registration', () => {
+  it('discovery tenant tools/list contains exactly the locked 12 visible meta aliases', async () => {
+    const graphServer = createServerFactory();
+    const mcp = graphServer.createMcpServer({
+      preset_version: DISCOVERY_PRESET_VERSION,
+      enabled_tools_set: DISCOVERY_META_TOOL_NAMES,
+    } as never);
+
+    const ctx = {
+      tenantId: '11111111-1111-4111-8111-111111111111',
+      enabledToolsSet: DISCOVERY_META_TOOL_NAMES,
+      presetVersion: DISCOVERY_PRESET_VERSION,
+    };
+    const list = await requestContext.run(ctx, () => invokeToolsList(mcp));
+    const names = list.tools.map((tool) => tool.name).sort();
+
+    expect(names).toEqual([...DISCOVERY_META_TOOL_NAMES].sort());
+    expect(names).toEqual([...DISCOVERY_META_ALIASES].sort());
+    expect(names).toHaveLength(12);
+  });
+
+  it('discovery tenant exposes the 3 discovery tools plus all 9 memory tools while search uses the catalog', async () => {
+    const graphServer = createServerFactory();
+    const mcp = graphServer.createMcpServer({
+      preset_version: DISCOVERY_PRESET_VERSION,
+      enabled_tools_set: DISCOVERY_META_TOOL_NAMES,
+    } as never);
+    const ctx = {
+      tenantId: '11111111-1111-4111-8111-111111111111',
+      enabledToolsSet: DISCOVERY_META_TOOL_NAMES,
+      presetVersion: DISCOVERY_PRESET_VERSION,
+    };
+
+    const list = await requestContext.run(ctx, () => invokeToolsList(mcp));
+    const names = new Set(list.tools.map((tool) => tool.name));
+    for (const alias of DISCOVERY_META_ALIASES) {
+      expect(names.has(alias)).toBe(true);
+    }
+
+    const search = await requestContext.run(ctx, () =>
+      callDiscoveryTool(mcp, 'search-tools', { query: 'send mail', limit: 10 })
+    );
+    const body = JSON.parse(search.content[0].text) as { tools: Array<{ name: string }>; total: number };
+    expect(body.total).toBeGreaterThan(12);
+    expect(body.tools.map((tool) => tool.name)).toContain('me.sendMail');
+  });
+
+  it('static tenant tools/list contains no memory tools and no resources, prompts, or completions handlers', async () => {
+    const graphServer = createServerFactory();
+    const staticEnabled = Object.freeze(new Set(['me.sendMail', 'record-fact']));
+    const mcp = graphServer.createMcpServer({
+      preset_version: 'essentials-v1',
+      enabled_tools_set: staticEnabled,
+    } as never);
+    const ctx = {
+      tenantId: '22222222-2222-4222-8222-222222222222',
+      enabledToolsSet: staticEnabled,
+      presetVersion: 'essentials-v1',
+    };
+
+    const list = await requestContext.run(ctx, () => invokeToolsList(mcp));
+    const names = list.tools.map((tool) => tool.name);
+    expect(names).not.toContain('record-fact');
+    expect(names).not.toContain('recall-facts');
+    expect(names).not.toContain('forget-fact');
+    expect(names).not.toContain('bookmark-tool');
+    expect(names).not.toContain('save-recipe');
+
+    const handlers = (
+      mcp.server as unknown as {
+        _requestHandlers: Map<string, unknown>;
+      }
+    )._requestHandlers;
+    expect(handlers.has('resources/list')).toBe(false);
+    expect(handlers.has('prompts/list')).toBe(false);
+    expect(handlers.has('completion/complete')).toBe(false);
+  });
+
+  it('admin memory aggregate is mounted behind the existing admin auth chain', () => {
+    const routerSource = fs.readFileSync(path.join(REPO_ROOT, 'src/lib/admin/router.ts'), 'utf-8');
+    const authIndex = routerSource.indexOf('r.use(createAdminAuthMiddleware(deps))');
+    const memoryIndex = routerSource.indexOf("r.use('/tenants', createMemoryRoutes(deps))");
+
+    expect(routerSource).toContain("from './memory.js'");
+    expect(authIndex).toBeGreaterThanOrEqual(0);
+    expect(memoryIndex).toBeGreaterThan(authIndex);
   });
 });
