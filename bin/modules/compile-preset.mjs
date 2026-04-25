@@ -224,8 +224,7 @@ function loadAndValidatePreset(spec, presetJsonPath, registry) {
     seen.add(op);
   }
 
-  const missing =
-    spec.metaAllowlist === null ? preset.ops.filter((op) => !registry.has(op)) : [];
+  const missing = spec.metaAllowlist === null ? preset.ops.filter((op) => !registry.has(op)) : [];
   if (missing.length > 0) {
     const previewCount = Math.min(10, missing.length);
     const preview = missing.slice(0, previewCount).join(', ');

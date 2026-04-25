@@ -13,9 +13,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { compileEssentialsPreset } from '../../bin/modules/compile-preset.mjs';
-import {
-  computeEnabledToolsSet,
-} from '../../src/lib/tool-selection/enabled-tools-parser.js';
+import { computeEnabledToolsSet } from '../../src/lib/tool-selection/enabled-tools-parser.js';
 import {
   DEFAULT_PRESET_VERSION,
   KNOWN_PRESET_VERSIONS,

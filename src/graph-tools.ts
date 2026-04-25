@@ -1622,7 +1622,8 @@ export function registerDiscoveryTools(
       const ctx = requestContext.getStore() ?? {};
       return requestContext.run(
         { ...ctx, enabledToolsSet: catalog.discoveryCatalogSet },
-        async () => executeGraphTool(toolData.tool, toolData.config, graphClient, parameters, authManager)
+        async () =>
+          executeGraphTool(toolData.tool, toolData.config, graphClient, parameters, authManager)
       );
     }
   );
