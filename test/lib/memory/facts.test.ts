@@ -8,6 +8,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { DataType, newDb } from 'pg-mem';
 import type { Pool } from 'pg';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import express from 'express';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { __setPoolForTesting } from '../../../src/lib/postgres.js';
 import {
   __resetFactPgvectorAvailabilityForTesting,
@@ -16,6 +20,9 @@ import {
   recallFacts,
   recordFact,
 } from '../../../src/lib/memory/facts.js';
+import { requestContext } from '../../../src/request-context.js';
+import { MemoryRedisFacade } from '../../../src/lib/redis-facade.js';
+import { AGENTIC_EVENTS_CHANNEL } from '../../../src/lib/mcp-notifications/events.js';
 
 const TENANT_A = '11111111-1111-4111-8111-111111111111';
 const TENANT_B = '22222222-2222-4222-8222-222222222222';
@@ -60,6 +67,102 @@ function makeQuerySpy(rows: unknown[] = []) {
     }),
   };
   return { pool: pool as unknown as Pool, queries };
+}
+
+interface CallToolResult {
+  content: Array<{ type: 'text'; text: string }>;
+  isError?: boolean;
+}
+
+interface HttpResult {
+  status: number;
+  body: unknown;
+}
+
+async function callTool(
+  server: McpServer,
+  name: string,
+  args: Record<string, unknown>
+): Promise<CallToolResult> {
+  const registered = (
+    server as unknown as {
+      _registeredTools: Record<
+        string,
+        { handler: (args: unknown, extra: unknown) => Promise<CallToolResult> }
+      >;
+    }
+  )._registeredTools;
+  const tool = registered[name];
+  if (!tool || typeof tool.handler !== 'function') {
+    throw new Error(`tool "${name}" not registered on test McpServer`);
+  }
+  return tool.handler(args, { requestId: 'test' });
+}
+
+async function loadFactTools(): Promise<{
+  registerFactTools: typeof import('../../../src/lib/memory/fact-tools.js').registerFactTools;
+}> {
+  const module = await import('../../../src/lib/memory/fact-tools.js');
+  return { registerFactTools: module.registerFactTools };
+}
+
+async function collectFactEvents(
+  redis: MemoryRedisFacade,
+  fn: () => Promise<void>
+): Promise<Array<{ type: string; uris?: string[] }>> {
+  const events: Array<{ type: string; uris?: string[] }> = [];
+  redis.on('message', (channel, message) => {
+    if (channel === AGENTIC_EVENTS_CHANNEL) {
+      events.push(JSON.parse(message) as { type: string; uris?: string[] });
+    }
+  });
+  await redis.subscribe(AGENTIC_EVENTS_CHANNEL);
+  await fn();
+  return events;
+}
+
+async function startFactAdminServer(
+  redis: MemoryRedisFacade,
+  tenantScoped: string | null = null
+): Promise<{ url: string; close: () => Promise<void> }> {
+  const { createMemoryFactRoutes } = await import('../../../src/lib/admin/memory-facts.js');
+  const app = express();
+  app.use(express.json() as unknown as express.RequestHandler);
+  app.use((req, _res, next) => {
+    (req as unknown as {
+      admin?: { actor: string; source: 'entra'; tenantScoped: string | null };
+    }).admin = { actor: 'admin@example.com', source: 'entra', tenantScoped };
+    (req as express.Request & { id?: string }).id = 'req-fact-admin';
+    next();
+  });
+  app.use('/admin/tenants', createMemoryFactRoutes({ redis } as never));
+  const server = await new Promise<http.Server>((resolve) => {
+    const s = http.createServer(app).listen(0, () => resolve(s));
+  });
+  const port = (server.address() as AddressInfo).port;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    close: async () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      }),
+  };
+}
+
+async function doJson(method: string, url: string, body?: unknown): Promise<HttpResult> {
+  const res = await fetch(url, {
+    method,
+    headers: { 'content-type': 'application/json' },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  const text = await res.text();
+  let parsed: unknown = text;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    // plain text response
+  }
+  return { status: res.status, body: parsed };
 }
 
 describe('Phase 7 Plan 07-05 Task 1 - fact service', () => {
@@ -217,5 +320,219 @@ describe('Phase 7 Plan 07-05 Task 1 - fact service', () => {
     expect(queries.some((query) => query.sql.includes('pg_available_extensions'))).toBe(true);
     expect(queries.at(-1)?.sql).toContain('embedding <=>');
     expect(queries.at(-1)?.params).toContain('[0.1,0.2]');
+  });
+});
+
+describe('Phase 7 Plan 07-05 Task 2 - fact MCP tools', () => {
+  let pool: Pool;
+  let redis: MemoryRedisFacade;
+  let server: McpServer;
+  const originalPgvectorEnv = process.env.MS365_MCP_PGVECTOR_ENABLED;
+
+  beforeEach(async () => {
+    pool = makePool();
+    await installSchema(pool);
+    __setPoolForTesting(pool);
+    __resetFactPgvectorAvailabilityForTesting();
+    delete process.env.MS365_MCP_PGVECTOR_ENABLED;
+    redis = new MemoryRedisFacade();
+    server = new McpServer({ name: 'fact-test', version: '0.0.0' });
+  });
+
+  afterEach(async () => {
+    process.env.MS365_MCP_PGVECTOR_ENABLED = originalPgvectorEnv;
+    vi.doUnmock('../../../src/lib/memory/facts.js');
+    vi.resetModules();
+    __resetFactPgvectorAvailabilityForTesting();
+    __setPoolForTesting(null);
+    await redis.quit();
+    await pool.end();
+  });
+
+  it('record-fact requires scope and fact, and fails closed without tenant context', async () => {
+    const { registerFactTools } = await loadFactTools();
+    registerFactTools(server, { redis });
+
+    const missingFact = await requestContext.run({ tenantId: TENANT_A }, () =>
+      callTool(server, 'record-fact', { scope: 'mailbox' })
+    );
+    expect(missingFact.isError).toBe(true);
+    expect(JSON.parse(missingFact.content[0].text)).toMatchObject({ error: 'invalid_fact' });
+
+    const noTenant = await callTool(server, 'record-fact', {
+      scope: 'mailbox',
+      fact: 'Tenant prefers concise summaries.',
+    });
+    expect(noTenant.isError).toBe(true);
+    expect(JSON.parse(noTenant.content[0].text)).toMatchObject({ error: 'tenant_required' });
+  });
+
+  it('record-fact stores caller tenant content and publishes facts.json update', async () => {
+    const { registerFactTools } = await loadFactTools();
+    registerFactTools(server, { redis });
+
+    const events = await collectFactEvents(redis, async () => {
+      const result = await requestContext.run({ tenantId: TENANT_A }, () =>
+        callTool(server, 'record-fact', {
+          scope: 'mailbox',
+          fact: 'Tenant prefers concise weekly inbox summaries.',
+        })
+      );
+      expect(result.isError).toBeFalsy();
+      expect(JSON.parse(result.content[0].text)).toMatchObject({
+        scope: 'mailbox',
+        content: 'Tenant prefers concise weekly inbox summaries.',
+      });
+    });
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'resources/updated',
+        uris: [`mcp://tenant/${TENANT_A}/facts.json`],
+      })
+    );
+  });
+
+  it('recall-facts accepts optional scope, query, and limit', async () => {
+    vi.resetModules();
+    const recallFactsMock = vi.fn(async () => [
+      {
+        id: crypto.randomUUID(),
+        scope: 'mailbox',
+        content: 'Tenant prefers concise summaries.',
+        createdAt: '2026-04-25T10:00:00.000Z',
+        updatedAt: '2026-04-25T10:00:00.000Z',
+      },
+    ]);
+    vi.doMock('../../../src/lib/memory/facts.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../../../src/lib/memory/facts.js')>();
+      return { ...actual, recallFacts: recallFactsMock };
+    });
+
+    const { registerFactTools } = await loadFactTools();
+    registerFactTools(server, { redis });
+
+    const result = await requestContext.run({ tenantId: TENANT_A }, () =>
+      callTool(server, 'recall-facts', {
+        scope: 'mailbox',
+        query: 'concise summaries',
+        limit: 2,
+      })
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(recallFactsMock).toHaveBeenCalledWith(TENANT_A, {
+      scope: 'mailbox',
+      query: 'concise summaries',
+      limit: 2,
+    });
+    expect(JSON.parse(result.content[0].text)).toMatchObject({
+      facts: [{ scope: 'mailbox', content: 'Tenant prefers concise summaries.' }],
+    });
+  });
+
+  it('forget-fact requires id and returns { deleted: boolean } with facts.json update on delete', async () => {
+    const { registerFactTools } = await loadFactTools();
+    registerFactTools(server, { redis });
+    const fact = await recordFact(TENANT_A, {
+      scope: 'preferences',
+      content: 'Tenant prefers short replies.',
+    });
+
+    const missingId = await requestContext.run({ tenantId: TENANT_A }, () =>
+      callTool(server, 'forget-fact', {})
+    );
+    expect(missingId.isError).toBe(true);
+    expect(JSON.parse(missingId.content[0].text)).toMatchObject({ error: 'invalid_forget_fact' });
+
+    const events = await collectFactEvents(redis, async () => {
+      const result = await requestContext.run({ tenantId: TENANT_A }, () =>
+        callTool(server, 'forget-fact', { id: fact.id })
+      );
+      expect(result.isError).toBeFalsy();
+      expect(JSON.parse(result.content[0].text)).toEqual({ deleted: true });
+    });
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'resources/updated',
+        uris: [`mcp://tenant/${TENANT_A}/facts.json`],
+      })
+    );
+  });
+});
+
+describe('Phase 7 Plan 07-05 Task 2 - admin fact subrouter', () => {
+  let pool: Pool;
+  let redis: MemoryRedisFacade;
+
+  beforeEach(async () => {
+    pool = makePool();
+    await installSchema(pool);
+    __setPoolForTesting(pool);
+    redis = new MemoryRedisFacade();
+  });
+
+  afterEach(async () => {
+    __setPoolForTesting(null);
+    await redis.quit();
+    await pool.end();
+  });
+
+  it('GET /:id/facts lists only route tenant rows with optional scope and limit', async () => {
+    await recordFact(TENANT_A, {
+      scope: 'mailbox',
+      content: 'Tenant A mailbox preference.',
+    });
+    await recordFact(TENANT_A, {
+      scope: 'calendar',
+      content: 'Tenant A calendar preference.',
+    });
+    await recordFact(TENANT_B, {
+      scope: 'mailbox',
+      content: 'Tenant B mailbox preference.',
+    });
+    const { url, close } = await startFactAdminServer(redis);
+    try {
+      const result = await doJson(
+        'GET',
+        `${url}/admin/tenants/${TENANT_A}/facts?scope=mailbox&limit=1`
+      );
+
+      expect(result.status).toBe(200);
+      expect(result.body).toMatchObject({
+        facts: [
+          {
+            scope: 'mailbox',
+            content: 'Tenant A mailbox preference.',
+          },
+        ],
+      });
+      expect(JSON.stringify(result.body)).not.toContain('Tenant B');
+    } finally {
+      await close();
+    }
+  });
+
+  it('DELETE /:id/facts/:factId returns 404 when the row is not owned by the route tenant', async () => {
+    const factA = await recordFact(TENANT_A, {
+      scope: 'preferences',
+      content: 'Tenant A private preference.',
+    });
+    await recordFact(TENANT_B, {
+      scope: 'preferences',
+      content: 'Tenant B private preference.',
+    });
+    const { url, close } = await startFactAdminServer(redis);
+    try {
+      const denied = await doJson('DELETE', `${url}/admin/tenants/${TENANT_B}/facts/${factA.id}`);
+      expect(denied.status).toBe(404);
+
+      const result = await doJson('DELETE', `${url}/admin/tenants/${TENANT_A}/facts/${factA.id}`);
+      expect(result.status).toBe(200);
+      expect(result.body).toEqual({ deleted: true });
+    } finally {
+      await close();
+    }
   });
 });
