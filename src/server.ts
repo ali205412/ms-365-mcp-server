@@ -6,6 +6,7 @@ import express, { type Request, type Response, type RequestHandler } from 'expre
 import logger, { enableConsoleLogging, rawPinoLogger } from './logger.js';
 import { registerAuthTools } from './auth-tools.js';
 import { registerGraphTools, registerDiscoveryTools } from './graph-tools.js';
+import { registerMemoryTools } from './lib/memory/tools.js';
 import { buildMcpServerInstructions } from './mcp-instructions.js';
 import GraphClient from './graph-client.js';
 import AuthManager, { buildScopesFromEndpoints } from './auth.js';
@@ -20,6 +21,7 @@ import { mountHealth, type ReadinessCheck } from './lib/health.js';
 import { registerShutdownHooks } from './lib/shutdown.js';
 import { validateRedirectUri, type RedirectUriPolicy } from './lib/redirect-uri.js';
 import { createCorsMiddleware, type CorsMode } from './lib/cors.js';
+import { getRedis } from './lib/redis.js';
 import type { CloudType } from './cloud-config.js';
 import type { PkceStore } from './lib/pkce-store/pkce-store.js';
 import { MemoryPkceStore } from './lib/pkce-store/memory-store.js';
@@ -967,6 +969,13 @@ class MicrosoftGraphServer {
         this.authManager,
         this.multiAccount
       );
+      registerMemoryTools(server, {
+        redis: getRedis(),
+        graphClient: this.graphClient!,
+        authManager: this.authManager,
+        readOnly: this.options.readOnly,
+        orgMode: this.options.orgMode,
+      });
     } else {
       registerGraphTools(
         server,

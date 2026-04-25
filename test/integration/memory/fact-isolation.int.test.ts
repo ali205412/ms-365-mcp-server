@@ -60,9 +60,11 @@ async function startFactAdminServer(
   const app = express();
   app.use(express.json() as unknown as express.RequestHandler);
   app.use((req, _res, next) => {
-    (req as unknown as {
-      admin?: { actor: string; source: 'entra'; tenantScoped: string | null };
-    }).admin = { actor: 'admin@example.com', source: 'entra', tenantScoped: null };
+    (
+      req as unknown as {
+        admin?: { actor: string; source: 'entra'; tenantScoped: string | null };
+      }
+    ).admin = { actor: 'admin@example.com', source: 'entra', tenantScoped: null };
     (req as express.Request & { id?: string }).id = 'req-fact-admin-int';
     next();
   });

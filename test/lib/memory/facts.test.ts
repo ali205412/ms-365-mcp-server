@@ -129,9 +129,11 @@ async function startFactAdminServer(
   const app = express();
   app.use(express.json() as unknown as express.RequestHandler);
   app.use((req, _res, next) => {
-    (req as unknown as {
-      admin?: { actor: string; source: 'entra'; tenantScoped: string | null };
-    }).admin = { actor: 'admin@example.com', source: 'entra', tenantScoped };
+    (
+      req as unknown as {
+        admin?: { actor: string; source: 'entra'; tenantScoped: string | null };
+      }
+    ).admin = { actor: 'admin@example.com', source: 'entra', tenantScoped };
     (req as express.Request & { id?: string }).id = 'req-fact-admin';
     next();
   });
@@ -265,7 +267,9 @@ describe('Phase 7 Plan 07-05 Task 1 - fact service', () => {
     await expect(forgetFact(TENANT_B, factA.id)).resolves.toEqual({ deleted: false });
     await expect(forgetFact(TENANT_A, factA.id)).resolves.toEqual({ deleted: true });
 
-    const { rows } = await pool.query(`SELECT tenant_id, content FROM tenant_facts ORDER BY tenant_id`);
+    const { rows } = await pool.query(
+      `SELECT tenant_id, content FROM tenant_facts ORDER BY tenant_id`
+    );
     expect(rows).toEqual([
       {
         tenant_id: TENANT_B,

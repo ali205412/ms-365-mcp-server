@@ -450,7 +450,10 @@ describe('Phase 7 Plan 07-05 — aggregate memory registration', () => {
     const search = await requestContext.run(ctx, () =>
       callDiscoveryTool(mcp, 'search-tools', { query: 'send mail', limit: 10 })
     );
-    const body = JSON.parse(search.content[0].text) as { tools: Array<{ name: string }>; total: number };
+    const body = JSON.parse(search.content[0].text) as {
+      tools: Array<{ name: string }>;
+      total: number;
+    };
     expect(body.total).toBeGreaterThan(12);
     expect(body.tools.map((tool) => tool.name)).toContain('me.sendMail');
   });

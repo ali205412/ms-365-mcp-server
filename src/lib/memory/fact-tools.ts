@@ -4,13 +4,7 @@ import logger from '../../logger.js';
 import { getRequestTenant } from '../../request-context.js';
 import type { RedisClient } from '../redis.js';
 import { publishResourceUpdated } from '../mcp-notifications/events.js';
-import {
-  FactContentZod,
-  FactScopeZod,
-  forgetFact,
-  recallFacts,
-  recordFact,
-} from './facts.js';
+import { FactContentZod, FactScopeZod, forgetFact, recallFacts, recordFact } from './facts.js';
 
 const FACT_RESOURCE_REASON = 'fact-change';
 
@@ -33,7 +27,10 @@ export interface FactToolDeps {
   redis: RedisClient;
 }
 
-function jsonResult(value: unknown, isError = false): {
+function jsonResult(
+  value: unknown,
+  isError = false
+): {
   content: Array<{ type: 'text'; text: string }>;
   isError?: boolean;
 } {

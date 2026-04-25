@@ -104,7 +104,8 @@ function rowToFact(row: FactRow): Fact {
 function boolFromPg(value: boolean | string | number | null | undefined): boolean {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'number') return value !== 0;
-  if (typeof value === 'string') return ['1', 't', 'true', 'yes', 'on'].includes(value.toLowerCase());
+  if (typeof value === 'string')
+    return ['1', 't', 'true', 'yes', 'on'].includes(value.toLowerCase());
   return false;
 }
 
@@ -131,8 +132,7 @@ async function getPgvectorAvailability(): Promise<boolean> {
          ) AS column_available`
     );
     const row = result.rows[0] ?? {};
-    pgvectorAvailability =
-      boolFromPg(row.extension_available) && boolFromPg(row.column_available);
+    pgvectorAvailability = boolFromPg(row.extension_available) && boolFromPg(row.column_available);
   } catch (err) {
     pgvectorAvailability = false;
     logger.warn(
