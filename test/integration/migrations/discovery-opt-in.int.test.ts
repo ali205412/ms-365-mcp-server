@@ -10,7 +10,11 @@ const OTHER_TENANT_ID = '22222222-2222-4222-8222-222222222222';
 function makeRedis() {
   return {
     published: [] as Array<{ channel: string; message: string }>,
-    publish: vi.fn(async function publish(this: { published: Array<{ channel: string; message: string }> }, channel: string, message: string) {
+    publish: vi.fn(async function publish(
+      this: { published: Array<{ channel: string; message: string }> },
+      channel: string,
+      message: string
+    ) {
       this.published.push({ channel, message });
       return 1;
     }),
@@ -188,7 +192,12 @@ describe('plan 07-10 — opt-in discovery migration CLI', () => {
     ]);
     expect(redis.published[2]!.message).toContain('tools/list_changed');
 
-    const audit = await pool.query<{ actor: string; action: string; target: string; meta: unknown }>(
+    const audit = await pool.query<{
+      actor: string;
+      action: string;
+      target: string;
+      meta: unknown;
+    }>(
       `SELECT actor, action, target, meta
        FROM audit_log
        WHERE tenant_id = $1 AND action = 'tenant.discovery-migrate'`,

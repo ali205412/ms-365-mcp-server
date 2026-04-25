@@ -95,8 +95,15 @@ interface DiscoveryE2EHarness {
   graphRequests: unknown[];
   initialize(tenantId?: string): Promise<string>;
   rpc<T = unknown>(sessionId: string, method: string, params?: unknown): Promise<T>;
-  callTool(sessionId: string, name: string, args?: Record<string, unknown>): Promise<JsonRpcToolResult>;
-  waitForEvent(type: string, predicate: (event: Record<string, unknown>) => boolean): Promise<number>;
+  callTool(
+    sessionId: string,
+    name: string,
+    args?: Record<string, unknown>
+  ): Promise<JsonRpcToolResult>;
+  waitForEvent(
+    type: string,
+    predicate: (event: Record<string, unknown>) => boolean
+  ): Promise<number>;
   patchTenantPreset(tenantId: string, presetVersion: string): Promise<void>;
   close(): Promise<void>;
 }
@@ -160,13 +167,17 @@ describeE2E('Phase 7 Plan 07-10 discovery-mode E2E smoke (set MS365_MCP_E2E=1 to
       'resources/templates/list',
       {}
     );
-    expect(templates.resourceTemplates.some((template) => template.uriTemplate.includes('endpoint'))).toBe(
-      true
-    );
+    expect(
+      templates.resourceTemplates.some((template) => template.uriTemplate.includes('endpoint'))
+    ).toBe(true);
 
-    const read = await harness.rpc<{ contents: Array<{ text: string }> }>(sessionId, 'resources/read', {
-      uri: 'mcp://catalog/navigation-guide.md',
-    });
+    const read = await harness.rpc<{ contents: Array<{ text: string }> }>(
+      sessionId,
+      'resources/read',
+      {
+        uri: 'mcp://catalog/navigation-guide.md',
+      }
+    );
     expect(read.contents[0]!.text).toContain('search-tools');
 
     const prompts = await harness.rpc<{ prompts: Array<{ name: string }> }>(
@@ -314,8 +325,9 @@ async function createDiscoveryE2EHarness(): Promise<DiscoveryE2EHarness> {
     next();
   });
   app.use('/t/:tenantId', (req, _res, next) => {
-    (req as express.Request & { tenant?: TenantRow & { enabled_tools_set: ReadonlySet<string> } })
-      .tenant = tenantFor(req.params.tenantId);
+    (
+      req as express.Request & { tenant?: TenantRow & { enabled_tools_set: ReadonlySet<string> } }
+    ).tenant = tenantFor(req.params.tenantId);
     next();
   });
   app.use('/t/:tenantId', createSeedTenantContextMiddleware());
@@ -418,7 +430,9 @@ async function createDiscoveryE2EHarness(): Promise<DiscoveryE2EHarness> {
       const started = Date.now();
       const deadline = started + 2_000;
       while (Date.now() < deadline) {
-        const found = events.find((record) => record.event.type === type && predicate(record.event));
+        const found = events.find(
+          (record) => record.event.type === type && predicate(record.event)
+        );
         if (found) return Math.max(0, found.seenAt - started);
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
@@ -572,9 +586,7 @@ async function parseJsonRpcResponse<T>(response: Response): Promise<T> {
   }
 
   const contentType = response.headers.get('content-type') ?? '';
-  const payloadText = contentType.includes('text/event-stream')
-    ? parseSseData(text)
-    : text;
+  const payloadText = contentType.includes('text/event-stream') ? parseSseData(text) : text;
   const payload = JSON.parse(payloadText) as {
     result?: T;
     error?: { code?: number; message?: string };

@@ -95,10 +95,7 @@ describe('plan 03-01 + 03-04 — bin/create-tenant.mjs', () => {
       mode: string;
       wrapped_dek: unknown;
       preset_version: string;
-    }>(
-      `SELECT id, mode, wrapped_dek, preset_version FROM tenants WHERE id = $1`,
-      [id]
-    );
+    }>(`SELECT id, mode, wrapped_dek, preset_version FROM tenants WHERE id = $1`, [id]);
     expect(r.rows).toHaveLength(1);
     expect(r.rows[0]!.mode).toBe('delegated');
     expect(r.rows[0]!.preset_version).toBe('discovery-v1');
