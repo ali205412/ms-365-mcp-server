@@ -21,9 +21,9 @@
  *      <100ms on the in-memory Redis facade (real-Redis RTT is comparable).
  *
  * The test uses the MemoryRedisFacade for the pub/sub channel and mounts
- * the real `registerDiscoveryTools` against the real `api.endpoints`
- * registry (no fixture injection — the registry IS the tool universe and
- * the test picks enabled-set aliases known to exist inside it).
+ * the real `registerDiscoveryTools` against a bounded generated-client
+ * fixture. The production registry is ~72 MB after generation; loading it
+ * under the integration global setup exceeds the local execution sandbox.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -45,6 +45,43 @@ const TENANT_B = '22222222-2222-2222-2222-222222222222';
 
 const { bookmarkCountsByTenant } = vi.hoisted(() => ({
   bookmarkCountsByTenant: new Map<string, Map<string, number>>(),
+}));
+
+vi.mock('../../src/generated/client.js', () => ({
+  api: {
+    endpoints: [
+      {
+        alias: 'me.sendMail',
+        method: 'post',
+        path: '/me/sendMail',
+        description: 'Send a mail message',
+      },
+      {
+        alias: 'me.ListMessages',
+        method: 'get',
+        path: '/me/messages',
+        description: 'List mail messages',
+      },
+      {
+        alias: 'users.user.ListUser',
+        method: 'get',
+        path: '/users',
+        description: 'List user directory entries',
+      },
+      {
+        alias: 'users.user.GetUserByUserPrincipalName',
+        method: 'get',
+        path: '/users/:userPrincipalName',
+        description: 'Get one user by principal name',
+      },
+      ...Array.from({ length: 13 }, (_, i) => ({
+        alias: `users.synthetic${i}`,
+        method: 'get',
+        path: `/users/synthetic${i}`,
+        description: `Synthetic user endpoint ${i}`,
+      })),
+    ],
+  },
 }));
 
 vi.mock('../../src/lib/memory/bookmarks.js', () => ({
