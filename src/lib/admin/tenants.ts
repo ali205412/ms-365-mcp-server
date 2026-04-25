@@ -76,6 +76,7 @@ import { publishTenantInvalidation } from '../tenant/tenant-invalidation.js';
 import logger from '../../logger.js';
 import type { AdminRouterDeps } from './router.js';
 import type { RedisClient } from '../redis.js';
+import { DEFAULT_PRESET_VERSION } from '../tool-selection/preset-loader.js';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -545,11 +546,11 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
             JSON.stringify(body.cors_origins),
             JSON.stringify(body.allowed_scopes),
             body.enabled_tools ?? null,
-            // Plan 05-03 (D-19): default to essentials-v1 when the body omits
-            // preset_version. The DB column also has this default, but the
-            // explicit bind keeps the Zod default + bind surface symmetric
-            // and makes the intent visible in SQL logs.
-            body.preset_version ?? 'essentials-v1',
+            // Phase 7 Plan 07-02: supported admin create path defaults to
+            // discovery-v1 via the shared preset-loader constant. Existing
+            // tenants are not rewritten, and explicit static presets still
+            // persist verbatim.
+            body.preset_version ?? DEFAULT_PRESET_VERSION,
             // Plan 5.1-06: optional + nullable. NULL default — operators
             // PATCH later when they want to enable __spadmin__ tools.
             body.sharepoint_domain ?? null,
