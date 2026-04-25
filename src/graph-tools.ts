@@ -143,7 +143,7 @@ type ResourceContent = ResourceTextContent | ResourceBlobContent;
 
 type ContentItem = TextContent | ImageContent | AudioContent | ResourceContent;
 
-interface CallToolResult {
+export interface CallToolResult {
   content: ContentItem[];
   _meta?: Record<string, unknown>;
   isError?: boolean;
@@ -158,7 +158,7 @@ async function executeGraphTool(
   params: Record<string, unknown>,
   authManager?: AuthManager
 ): Promise<CallToolResult> {
-  logger.info(`Tool ${tool.alias} called with params: ${JSON.stringify(params)}`);
+  logger.info({ toolAlias: tool.alias, paramKeys: Object.keys(params) }, 'graph tool called');
 
   // Plan 06-02 (OPS-05, D-06): augment ALS frame with toolAlias for GraphClient
   // span attribute + workload-prefix label. Spread preserves upstream fields
@@ -1211,6 +1211,87 @@ export function buildToolsRegistry(
   return toolsMap;
 }
 
+export interface ExecuteToolAliasArgs {
+  toolName: string;
+  parameters?: Record<string, unknown>;
+  graphClient: GraphClient;
+  authManager?: AuthManager;
+  readOnly?: boolean;
+  orgMode?: boolean;
+}
+
+export async function executeToolAlias({
+  toolName,
+  parameters = {},
+  graphClient,
+  authManager,
+  readOnly = false,
+  orgMode = false,
+}: ExecuteToolAliasArgs): Promise<CallToolResult> {
+  const tenant = resolveTenantForDiscovery();
+  if (!tenant) {
+    logger.warn({}, 'executeToolAlias: no tenant context; refusing dispatch');
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            error: 'tenant context unavailable',
+            tip: 'Tenant context not seeded — contact operator.',
+          }),
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  const toolsRegistry = buildToolsRegistry(readOnly, orgMode);
+  const catalog = resolveDiscoveryCatalog({
+    presetVersion: tenant.presetVersion,
+    enabledToolsSet: tenant.enabledToolsSet,
+    registryAliases: toolsRegistry.keys(),
+  });
+
+  if (!catalog.discoveryCatalogSet.has(toolName)) {
+    logger.info({ tool: toolName, tenantId: tenant.id }, 'executeToolAlias: tool not enabled');
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            error: `Tool not enabled for tenant: ${toolName}`,
+            tenantId: tenant.id,
+            tip: 'Use search-tools to discover tools available to this tenant.',
+          }),
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  const toolData = toolsRegistry.get(toolName);
+  if (!toolData) {
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            error: `Tool not found: ${toolName}`,
+            tip: 'Use search-tools to find available tools.',
+          }),
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  const ctx = requestContext.getStore() ?? {};
+  return requestContext.run(
+    { ...ctx, enabledToolsSet: catalog.discoveryCatalogSet },
+    async () => executeGraphTool(toolData.tool, toolData.config, graphClient, parameters, authManager)
+  );
+}
+
 // `buildDiscoverySearchIndex` + `scoreDiscoveryQuery` live in
 // `./lib/graph-tools-pure.ts` so they can be consumed without transitively
 // loading the 45 MB generated client catalog. They are re-exported at the
@@ -1579,68 +1660,14 @@ export function registerDiscoveryTools(
       openWorldHint: true,
     },
     async ({ tool_name, parameters = {} }) => {
-      const tenant = resolveTenantForDiscovery();
-      if (!tenant) {
-        logger.warn({}, 'execute-tool: no tenant context; refusing dispatch');
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                error: 'tenant context unavailable',
-                tip: 'Tenant context not seeded — contact operator.',
-              }),
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      const catalog = resolveDiscoveryCatalog({
-        presetVersion: tenant.presetVersion,
-        enabledToolsSet: tenant.enabledToolsSet,
-        registryAliases: projectedRegistry.keys(),
+      return executeToolAlias({
+        toolName: tool_name,
+        parameters,
+        graphClient,
+        authManager,
+        readOnly,
+        orgMode,
       });
-
-      if (!catalog.discoveryCatalogSet.has(tool_name)) {
-        logger.info({ tool: tool_name, tenantId: tenant.id }, 'execute-tool: tool not enabled');
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                error: `Tool not enabled for tenant: ${tool_name}`,
-                tenantId: tenant.id,
-                tip: 'Use search-tools to discover tools available to this tenant.',
-              }),
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      const toolData = toolsRegistry.get(tool_name);
-      if (!toolData) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                error: `Tool not found: ${tool_name}`,
-                tip: 'Use search-tools to find available tools.',
-              }),
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      const ctx = requestContext.getStore() ?? {};
-      return requestContext.run(
-        { ...ctx, enabledToolsSet: catalog.discoveryCatalogSet },
-        async () =>
-          executeGraphTool(toolData.tool, toolData.config, graphClient, parameters, authManager)
-      );
     }
   );
 

@@ -16,7 +16,6 @@ import {
   mergeRecipeParams,
   saveRecipe,
 } from '../../../src/lib/memory/recipes.js';
-import { requestContext } from '../../../src/request-context.js';
 import { MemoryRedisFacade } from '../../../src/lib/redis-facade.js';
 import { AGENTIC_EVENTS_CHANNEL } from '../../../src/lib/mcp-notifications/events.js';
 
@@ -85,18 +84,29 @@ async function callTool(
 }
 
 async function loadRecipeTools(
+  poolForDynamicModules: Pool,
   executeToolAlias = vi.fn(async () => ({
     content: [{ type: 'text' as const, text: JSON.stringify({ ok: true }) }],
   }))
 ): Promise<{
   registerRecipeTools: typeof import('../../../src/lib/memory/recipe-tools.js').registerRecipeTools;
   executeToolAlias: typeof executeToolAlias;
+  requestContext: typeof import('../../../src/request-context.js').requestContext;
 }> {
   vi.doMock('../../../src/graph-tools.js', () => ({
     executeToolAlias,
   }));
-  const module = await import('../../../src/lib/memory/recipe-tools.js');
-  return { registerRecipeTools: module.registerRecipeTools, executeToolAlias };
+  const [module, requestContextModule, postgresModule] = await Promise.all([
+    import('../../../src/lib/memory/recipe-tools.js'),
+    import('../../../src/request-context.js'),
+    import('../../../src/lib/postgres.js'),
+  ]);
+  postgresModule.__setPoolForTesting(poolForDynamicModules);
+  return {
+    registerRecipeTools: module.registerRecipeTools,
+    executeToolAlias,
+    requestContext: requestContextModule.requestContext,
+  };
 }
 
 async function collectRecipePublishEvents(
@@ -233,7 +243,7 @@ describe('Phase 7 Plan 07-04 Task 2 — recipe MCP tools', () => {
   });
 
   it('save-recipe requires name, alias, and params', async () => {
-    const { registerRecipeTools } = await loadRecipeTools();
+    const { registerRecipeTools, requestContext } = await loadRecipeTools(pool);
     registerRecipeTools(server, { redis, graphClient: {} as never });
 
     const missingParams = await requestContext.run({ tenantId: TENANT_A }, () =>
@@ -247,7 +257,7 @@ describe('Phase 7 Plan 07-04 Task 2 — recipe MCP tools', () => {
   });
 
   it('list-recipes accepts an optional filter and returns caller tenant recipes', async () => {
-    const { registerRecipeTools } = await loadRecipeTools();
+    const { registerRecipeTools, requestContext } = await loadRecipeTools(pool);
     registerRecipeTools(server, { redis, graphClient: {} as never });
     await saveRecipe(TENANT_A, {
       name: 'morning inbox',
@@ -273,7 +283,7 @@ describe('Phase 7 Plan 07-04 Task 2 — recipe MCP tools', () => {
     const executeToolAlias = vi.fn(async () => ({
       content: [{ type: 'text' as const, text: JSON.stringify({ dispatched: true }) }],
     }));
-    const { registerRecipeTools } = await loadRecipeTools(executeToolAlias);
+    const { registerRecipeTools, requestContext } = await loadRecipeTools(pool, executeToolAlias);
     const graphClient = { graphRequest: vi.fn() };
     const authManager = { acquireToken: vi.fn() };
     registerRecipeTools(server, {
@@ -323,7 +333,7 @@ describe('Phase 7 Plan 07-04 Task 2 — recipe MCP tools', () => {
 
   it('run-recipe returns an MCP error envelope for an unknown tenant-owned recipe', async () => {
     const executeToolAlias = vi.fn();
-    const { registerRecipeTools } = await loadRecipeTools(executeToolAlias);
+    const { registerRecipeTools, requestContext } = await loadRecipeTools(pool, executeToolAlias);
     registerRecipeTools(server, { redis, graphClient: {} as never });
     await saveRecipe(TENANT_B, {
       name: 'shared name',
