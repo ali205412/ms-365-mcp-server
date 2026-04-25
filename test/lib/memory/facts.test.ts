@@ -341,8 +341,6 @@ describe('Phase 7 Plan 07-05 Task 2 - fact MCP tools', () => {
 
   afterEach(async () => {
     process.env.MS365_MCP_PGVECTOR_ENABLED = originalPgvectorEnv;
-    vi.doUnmock('../../../src/lib/memory/facts.js');
-    vi.resetModules();
     __resetFactPgvectorAvailabilityForTesting();
     __setPoolForTesting(null);
     await redis.quit();
@@ -394,20 +392,17 @@ describe('Phase 7 Plan 07-05 Task 2 - fact MCP tools', () => {
   });
 
   it('recall-facts accepts optional scope, query, and limit', async () => {
-    vi.resetModules();
-    const recallFactsMock = vi.fn(async () => [
+    const { pool: spyPool, queries } = makeQuerySpy([
       {
         id: crypto.randomUUID(),
         scope: 'mailbox',
         content: 'Tenant prefers concise summaries.',
-        createdAt: '2026-04-25T10:00:00.000Z',
-        updatedAt: '2026-04-25T10:00:00.000Z',
+        created_at: new Date('2026-04-25T10:00:00Z'),
+        updated_at: new Date('2026-04-25T10:00:00Z'),
+        score: 0.5,
       },
     ]);
-    vi.doMock('../../../src/lib/memory/facts.js', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('../../../src/lib/memory/facts.js')>();
-      return { ...actual, recallFacts: recallFactsMock };
-    });
+    __setPoolForTesting(spyPool);
 
     const { registerFactTools } = await loadFactTools();
     registerFactTools(server, { redis });
@@ -421,11 +416,7 @@ describe('Phase 7 Plan 07-05 Task 2 - fact MCP tools', () => {
     );
 
     expect(result.isError).toBeFalsy();
-    expect(recallFactsMock).toHaveBeenCalledWith(TENANT_A, {
-      scope: 'mailbox',
-      query: 'concise summaries',
-      limit: 2,
-    });
+    expect(queries[0].params).toEqual([TENANT_A, 'mailbox', 'concise summaries', 2]);
     expect(JSON.parse(result.content[0].text)).toMatchObject({
       facts: [{ scope: 'mailbox', content: 'Tenant prefers concise summaries.' }],
     });
