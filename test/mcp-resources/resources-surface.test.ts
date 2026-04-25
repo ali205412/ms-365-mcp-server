@@ -6,6 +6,8 @@ import {
   DISCOVERY_PRESET_VERSION,
 } from '../../src/lib/tenant-surface/surface.js';
 import { readMcpResource } from '../../src/lib/mcp-resources/read.js';
+import { registerMcpResources } from '../../src/lib/mcp-resources/register.js';
+import MicrosoftGraphServer from '../../src/server.js';
 
 const TENANT_A = '11111111-1111-4111-8111-111111111111';
 const TENANT_B = '22222222-2222-4222-8222-222222222222';
@@ -66,6 +68,63 @@ function discoveryContext() {
     tenantId: TENANT_A,
     enabledToolsSet: DISCOVERY_META_TOOL_NAMES,
     presetVersion: DISCOVERY_PRESET_VERSION,
+  };
+}
+
+async function invokeResourcesList(server: McpServer): Promise<{
+  resources: Array<{ uri: string; name: string; mimeType?: string }>;
+}> {
+  const handlers = (
+    server.server as unknown as {
+      _requestHandlers: Map<string, (request: unknown, extra: unknown) => Promise<unknown>>;
+    }
+  )._requestHandlers;
+  const handler = handlers.get('resources/list');
+  if (!handler) {
+    throw new Error('resources/list handler not registered on McpServer');
+  }
+  return handler(
+    { method: 'resources/list', params: {} },
+    { requestId: 'test', sendNotification: vi.fn(), sendRequest: vi.fn() }
+  ) as Promise<{ resources: Array<{ uri: string; name: string; mimeType?: string }> }>;
+}
+
+async function invokeResourceTemplatesList(server: McpServer): Promise<{
+  resourceTemplates: Array<{ uriTemplate: string; name: string; mimeType?: string }>;
+}> {
+  const handlers = (
+    server.server as unknown as {
+      _requestHandlers: Map<string, (request: unknown, extra: unknown) => Promise<unknown>>;
+    }
+  )._requestHandlers;
+  const handler = handlers.get('resources/templates/list');
+  if (!handler) {
+    throw new Error('resources/templates/list handler not registered on McpServer');
+  }
+  return handler(
+    { method: 'resources/templates/list', params: {} },
+    { requestId: 'test', sendNotification: vi.fn(), sendRequest: vi.fn() }
+  ) as Promise<{
+    resourceTemplates: Array<{ uriTemplate: string; name: string; mimeType?: string }>;
+  }>;
+}
+
+function createGraphServer(): MicrosoftGraphServer {
+  return new MicrosoftGraphServer(
+    {
+      isMultiAccount: vi.fn(async () => false),
+      listAccounts: vi.fn(async () => []),
+    } as never,
+    { http: true, orgMode: true }
+  );
+}
+
+function discoveryTenant() {
+  return {
+    id: TENANT_A,
+    preset_version: DISCOVERY_PRESET_VERSION,
+    enabled_tools_set: DISCOVERY_META_TOOL_NAMES,
+    allowed_scopes: ['Mail.Read', 'Mail.Send'],
   };
 }
 
@@ -163,7 +222,77 @@ describe('Phase 7 Plan 07-11 Task 2 - MCP resource read dispatch', () => {
 });
 
 describe('Phase 7 Plan 07-11 Task 3 - MCP resource registration', () => {
-  it('has a server fixture available for registration tests', () => {
-    expect(new McpServer({ name: 'resources-test', version: '0.0.0' })).toBeInstanceOf(McpServer);
+  it('registers static resources plus concrete caller-tenant views for discovery tenants', async () => {
+    const server = new McpServer({ name: 'resources-test', version: '0.0.0' });
+    registerMcpResources(server, {
+      tenant: discoveryTenant(),
+      orgMode: true,
+    });
+
+    const list = await requestContext.run(discoveryContext(), () => invokeResourcesList(server));
+    const uris = list.resources.map((resource) => resource.uri).sort();
+
+    expect(uris).toContain('mcp://catalog/navigation-guide.md');
+    expect(uris).toContain('mcp://catalog/scope-map.json');
+    expect(uris).toContain('mcp://catalog/workloads/mail.md');
+    expect(uris).toContain(`mcp://tenant/${TENANT_A}/enabled-tools.json`);
+    expect(uris).toContain(`mcp://tenant/${TENANT_A}/scopes.json`);
+    expect(uris).toContain(`mcp://tenant/${TENANT_A}/audit/recent.json`);
+    expect(uris).toContain(`mcp://tenant/${TENANT_A}/bookmarks.json`);
+    expect(uris).toContain(`mcp://tenant/${TENANT_A}/recipes.json`);
+    expect(uris).toContain(`mcp://tenant/${TENANT_A}/facts.json`);
+    expect(list.resources.find((resource) => resource.uri.endsWith('/scopes.json'))?.mimeType).toBe(
+      'application/json'
+    );
+  });
+
+  it('registers only workload and endpoint schema resource templates', async () => {
+    const server = new McpServer({ name: 'resources-test', version: '0.0.0' });
+    registerMcpResources(server, {
+      tenant: discoveryTenant(),
+      orgMode: true,
+    });
+
+    const list = await invokeResourceTemplatesList(server);
+    const templates = list.resourceTemplates.map((template) => template.uriTemplate).sort();
+
+    expect(templates).toEqual([
+      'mcp://catalog/workloads/{slug}.md',
+      'mcp://endpoint/{alias}.schema.json',
+    ]);
+    expect(list.resourceTemplates.find((template) => template.uriTemplate.includes('workloads'))).toMatchObject({
+      mimeType: 'text/markdown',
+    });
+    expect(list.resourceTemplates.find((template) => template.uriTemplate.includes('endpoint'))).toMatchObject({
+      mimeType: 'application/json',
+    });
+    expect(templates.some((template) => template.includes('/tenant/'))).toBe(false);
+  });
+
+  it('wires discovery tenant createMcpServer with resource handlers and concrete tenant resources', async () => {
+    const mcp = createGraphServer().createMcpServer(discoveryTenant() as never);
+    const list = await requestContext.run(discoveryContext(), () => invokeResourcesList(mcp));
+
+    expect(list.resources.map((resource) => resource.uri)).toContain(
+      `mcp://tenant/${TENANT_A}/enabled-tools.json`
+    );
+  });
+
+  it('static tenant createMcpServer has no resource capability or resource list handler', () => {
+    const mcp = createGraphServer().createMcpServer({
+      id: TENANT_B,
+      preset_version: 'essentials-v1',
+      enabled_tools_set: Object.freeze(new Set(['list-mail-messages'])),
+      allowed_scopes: ['Mail.Read'],
+    } as never);
+    const inner = mcp.server as unknown as {
+      _requestHandlers: Map<string, unknown>;
+      _capabilities: { resources?: unknown };
+    };
+
+    expect(inner._requestHandlers.has('resources/list')).toBe(false);
+    expect(inner._requestHandlers.has('resources/templates/list')).toBe(false);
+    expect(inner._requestHandlers.has('resources/read')).toBe(false);
+    expect(inner._capabilities.resources).toBeUndefined();
   });
 });
