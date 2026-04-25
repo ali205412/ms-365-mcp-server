@@ -7,7 +7,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { parsePromptMarkdown } from '../../src/lib/mcp-prompts/frontmatter.js';
+import {
+  loadPromptDirectory,
+  parsePromptMarkdown,
+  type PromptTemplateDefinition,
+} from '../../src/lib/mcp-prompts/frontmatter.js';
 import { registerMcpPrompts } from '../../src/lib/mcp-prompts/register.js';
 import { renderPromptTemplate } from '../../src/lib/mcp-prompts/renderer.js';
 import MicrosoftGraphServer from '../../src/server.js';
@@ -34,6 +38,47 @@ arguments:
 ---
 Use {{account}} to triage mail since {{since}}.
 `;
+
+const LOCKED_PROMPT_SPECS = {
+  'inbox-triage': [
+    { name: 'account', required: false },
+    { name: 'since', required: false },
+  ],
+  'calendar-summary': [
+    { name: 'account', required: false },
+    { name: 'range', required: false },
+  ],
+  'teams-digest': [
+    { name: 'team', required: false },
+    { name: 'since', required: false },
+  ],
+  'permissions-audit': [],
+  'onboard-tenant': [],
+  'file-search-deep': [
+    { name: 'query', required: true },
+    { name: 'site', required: false },
+  ],
+  'meeting-prep': [
+    { name: 'eventId', required: false },
+    { name: 'attendeeFocus', required: false },
+  ],
+  'recent-activity': [{ name: 'userId', required: false }],
+  'security-overview': [],
+  'recipe-author': [],
+} as const;
+
+const LOCKED_PROMPT_NAMES = Object.keys(LOCKED_PROMPT_SPECS).sort();
+const PROMPT_DIR = path.join(process.cwd(), 'src', 'prompts');
+const REQUIRED_REAL_PROMPT_ARGS: Record<string, Record<string, string>> = {
+  'file-search-deep': { query: 'quarterly planning documents' },
+};
+const PROMPT_TOOL_REFERENCES = [
+  'search-tools',
+  'get-tool-schema',
+  'execute-tool',
+  'bookmark-tool',
+  'save-recipe',
+] as const;
 
 let tmpDirs: string[] = [];
 
@@ -116,6 +161,14 @@ function createServerFactory(
   );
 }
 
+function loadLockedPrompts(): PromptTemplateDefinition[] {
+  return loadPromptDirectory(PROMPT_DIR);
+}
+
+function promptNames(prompts: readonly PromptTemplateDefinition[]): string[] {
+  return prompts.map((prompt) => prompt.name).sort();
+}
+
 afterEach(() => {
   for (const dir of tmpDirs) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -175,6 +228,79 @@ Body`)
       ],
       template: 'Use {{account}} to triage mail since {{since}}.\n',
     });
+  });
+});
+
+describe('Phase 7 Plan 07-12 — locked workflow prompt content', () => {
+  it('loads exactly the 10 locked SPEC prompt names from src/prompts', () => {
+    expect(promptNames(loadLockedPrompts())).toEqual(LOCKED_PROMPT_NAMES);
+  });
+
+  it('pins each prompt frontmatter argument list to the SPEC contract', () => {
+    const prompts = loadLockedPrompts();
+
+    for (const prompt of prompts) {
+      expect(prompt.name).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+      expect(prompt.name.length).toBeLessThanOrEqual(64);
+      expect(prompt.description.trim().length).toBeGreaterThan(0);
+      expect(prompt.arguments.map((arg) => ({ name: arg.name, required: arg.required === true })))
+        .toEqual(
+          LOCKED_PROMPT_SPECS[prompt.name as keyof typeof LOCKED_PROMPT_SPECS]
+        );
+    }
+  });
+
+  it('keeps prompt bodies focused on discovery and memory meta tools, not embedded schemas', () => {
+    for (const prompt of loadLockedPrompts()) {
+      expect(
+        PROMPT_TOOL_REFERENCES.some((toolName) => prompt.template.includes(toolName)),
+        prompt.name
+      ).toBe(true);
+      expect(prompt.template).not.toMatch(/"?(?:inputSchema|properties|parameters)"?\s*:/);
+      expect(prompt.template).not.toMatch(/\bz\.object\s*\(/);
+    }
+  });
+
+  it('renders every locked prompt through prompts/get with required args supplied', async () => {
+    const graphServer = createServerFactory({ promptDir: PROMPT_DIR });
+    const mcp = graphServer.createMcpServer({
+      preset_version: DISCOVERY_PRESET_VERSION,
+      enabled_tools_set: DISCOVERY_META_TOOL_NAMES,
+    } as never);
+
+    await expect(invokePromptsList(mcp)).resolves.toMatchObject({
+      prompts: LOCKED_PROMPT_NAMES.map((name) => ({
+        name,
+      })),
+    });
+
+    for (const promptName of LOCKED_PROMPT_NAMES) {
+      const result = await invokePromptGet(
+        mcp,
+        promptName,
+        REQUIRED_REAL_PROMPT_ARGS[promptName] ?? {}
+      );
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0]).toMatchObject({
+        role: 'user',
+        content: { type: 'text' },
+      });
+      expect(result.messages[0].content.text).toContain('execute-tool');
+      expect(result.messages[0].content.text).not.toContain('missing_required_argument');
+    }
+  });
+
+  it('returns a safe prompt error when file-search-deep.query is omitted', async () => {
+    const graphServer = createServerFactory({ promptDir: PROMPT_DIR });
+    const mcp = graphServer.createMcpServer({
+      preset_version: DISCOVERY_PRESET_VERSION,
+      enabled_tools_set: DISCOVERY_META_TOOL_NAMES,
+    } as never);
+
+    const result = await invokePromptGet(mcp, 'file-search-deep', {});
+
+    expect(result.messages[0].content.text).toContain('missing_required_argument');
+    expect(result.messages[0].content.text).toContain('query');
   });
 });
 
