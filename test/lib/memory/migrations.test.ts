@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { newDb, type IMemoryDb } from 'pg-mem';
+import { DataType, newDb, type IMemoryDb } from 'pg-mem';
 import type { Pool } from 'pg';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -61,6 +61,11 @@ function makePool(): { db: IMemoryDb; pool: Pool } {
   const db = newDb();
   db.registerExtension('pgcrypto', () => {
     // no-op — tests never depend on generating UUID defaults.
+  });
+  db.public.registerFunction({
+    name: 'gen_random_uuid',
+    returns: DataType.uuid,
+    implementation: () => '00000000-0000-4000-8000-000000000001',
   });
   const { Pool } = db.adapters.createPg();
   return { db, pool: new Pool() as Pool };
