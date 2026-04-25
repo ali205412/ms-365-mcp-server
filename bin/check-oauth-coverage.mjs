@@ -40,20 +40,20 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Line ranges re-verified 2026-04-24 after parseHttpOption extraction to
-// src/lib/http-option.ts shifted all handlers in src/server.ts up by 20
-// lines. When src/server.ts refactors shift handler boundaries, re-run
-// the greps in the JSDoc above and update these values. The
-// verifyLineRanges() helper enforces the invariant at every invocation.
+// Line ranges re-verified 2026-04-25 after Phase 7 agentic surface wiring
+// shifted handlers and OAuth discovery mounts in src/server.ts. When
+// src/server.ts refactors shift handler boundaries, re-run the greps in the
+// JSDoc above and update these values. The verifyLineRanges() helper enforces
+// the invariant at every invocation.
 const OAUTH_LINE_RANGES = [
-  { fn: 'createRegisterHandler', start: 88, end: 136 },
-  { fn: 'createTokenHandler', start: 185, end: 376 },
-  { fn: 'createAuthorizeHandler', start: 481, end: 636 },
-  { fn: 'createTenantTokenHandler', start: 685, end: 828 },
-  { fn: 'wellKnownAuthServerTenant', start: 1244, end: 1251 },
-  { fn: 'wellKnownProtectedResourceTenant', start: 1253, end: 1261 },
-  { fn: 'wellKnownAuthServer', start: 1615, end: 1640 },
-  { fn: 'wellKnownProtectedResource', start: 1642, end: 1656 },
+  { fn: 'createRegisterHandler', start: 102, end: 150 },
+  { fn: 'createTokenHandler', start: 199, end: 390 },
+  { fn: 'createAuthorizeHandler', start: 495, end: 650 },
+  { fn: 'createTenantTokenHandler', start: 699, end: 842 },
+  { fn: 'wellKnownAuthServerTenant', start: 1313, end: 1320 },
+  { fn: 'wellKnownProtectedResourceTenant', start: 1322, end: 1330 },
+  { fn: 'wellKnownAuthServer', start: 1687, end: 1712 },
+  { fn: 'wellKnownProtectedResource', start: 1714, end: 1728 },
 ];
 
 // D-10 target threshold is 70%. Effective threshold is temporarily lowered
