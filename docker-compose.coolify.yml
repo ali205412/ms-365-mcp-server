@@ -41,8 +41,10 @@ services:
 
   mcp:
     # Pin to :latest (tracks main) or a specific tag / digest for reproducibility.
-    # Coolify redeploys re-pull this on every /deploy API call.
+    # pull_policy: always — Coolify's `compose up -d` honours this, so we re-pull
+    # GHCR on every redeploy instead of serving a stale local image cache.
     image: ghcr.io/ali205412/ms-365-mcp-server:latest
+    pull_policy: always
     depends_on:
       postgres:
         condition: service_healthy
