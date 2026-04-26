@@ -268,7 +268,12 @@ describe('plan 05-07 Task 1 — PATCH /admin/tenants/:id/enabled-tools', () => {
       tp
     );
     try {
-      const created = await doPost(`${url}/admin/tenants`, VALID_BODY);
+      const rateLimits = { request_per_min: 42, graph_points_per_min: 420 };
+      const created = await doPost(`${url}/admin/tenants`, {
+        ...VALID_BODY,
+        sharepoint_domain: 'contoso',
+        rate_limits: rateLimits,
+      });
       expect(created.status).toBe(201);
       const id = created.body.id;
 
@@ -278,6 +283,8 @@ describe('plan 05-07 Task 1 — PATCH /admin/tenants/:id/enabled-tools', () => {
       expect(res.status).toBe(200);
       expect(res.body.id).toBe(id);
       expect(res.body.enabled_tools).toBe('users.list');
+      expect(res.body.sharepoint_domain).toBe('contoso');
+      expect(res.body.rate_limits).toEqual(rateLimits);
 
       const { rows } = await pool.query(`SELECT enabled_tools FROM tenants WHERE id = $1`, [id]);
       expect(rows[0].enabled_tools).toBe('users.list');

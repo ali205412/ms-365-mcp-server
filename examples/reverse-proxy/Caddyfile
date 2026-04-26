@@ -1,8 +1,8 @@
 # Primary reverse-proxy reference for ms-365-mcp-server v2 (OPS-10).
 #
-# Terminates TLS, preserves X-Forwarded-* (so src/server.ts `app.set('trust
-# proxy', true)` sees the real client IP + scheme), and disables buffering
-# for SSE streams so long-lived MCP notifications pass through in real time.
+# Terminates TLS, preserves X-Forwarded-* (set MS365_MCP_TRUST_PROXY=1 so
+# Express honors the real client IP + scheme), and disables buffering for SSE
+# streams so long-lived MCP notifications pass through in real time.
 #
 # Replace mcp.example.com with your public hostname. The container is
 # reachable at 127.0.0.1:3000 per examples/docker-compose/docker-compose.yml.

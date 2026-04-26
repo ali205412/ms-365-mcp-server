@@ -26,6 +26,23 @@ const memoryMocks = vi.hoisted(() => ({
   upsertBookmark: vi.fn(),
   saveRecipe: vi.fn(),
   recordFact: vi.fn(),
+  bodySchema: {
+    safeParse(value: unknown) {
+      if (
+        value &&
+        typeof value === 'object' &&
+        typeof (value as { content?: unknown }).content === 'string'
+      ) {
+        return { success: true, data: value };
+      }
+      return {
+        success: false,
+        error: {
+          issues: [{ path: ['content'], code: 'invalid_type', message: 'Expected string' }],
+        },
+      };
+    },
+  },
 }));
 
 vi.mock('../../src/generated/client.js', () => ({
@@ -36,7 +53,7 @@ vi.mock('../../src/generated/client.js', () => ({
         method: 'post',
         path: '/me/sendMail',
         description: 'Send mail as the signed-in user.',
-        parameters: [],
+        parameters: [{ name: 'body', type: 'Body', schema: memoryMocks.bodySchema }],
       },
     ],
   },
@@ -253,6 +270,27 @@ describe('Phase 7 Plan 07-09 Task 1 - MCP logging', () => {
     expect(serialized).not.toContain('raw-token-123');
     expect(serialized).not.toContain('private request body');
     expect(serialized).not.toContain('private failure body');
+  });
+
+  it('registered discovery execute-tool rejects invalid request bodies before Graph dispatch', async () => {
+    const graphClient = {
+      graphRequest: vi.fn().mockResolvedValue({
+        content: [{ type: 'text', text: JSON.stringify({ ok: true }) }],
+      }),
+    };
+    const server = new McpServer({ name: 'tool-validation-test', version: '0.0.0' });
+    registerDiscoveryTools(server, graphClient as never, false, true);
+
+    const result = await requestContext.run(discoveryContext(), () =>
+      callTool(server, 'execute-tool', {
+        tool_name: 'me.sendMail',
+        parameters: { body: { content: 123 } },
+      })
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('parameter_validation_failed');
+    expect(graphClient.graphRequest).not.toHaveBeenCalled();
   });
 
   it('registered bookmark, recipe, and fact tools emit curated success logs after writes', async () => {

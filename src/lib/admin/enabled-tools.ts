@@ -418,7 +418,7 @@ export function createEnabledToolsRoutes(deps: AdminRouterDeps): Router {
       const { rows } = await deps.pgPool.query(
         `SELECT id, mode, client_id, client_secret_ref, tenant_id, cloud_type,
                 redirect_uri_allowlist, cors_origins, allowed_scopes, enabled_tools,
-                preset_version, slug, disabled_at, created_at, updated_at
+                preset_version, sharepoint_domain, rate_limits, slug, disabled_at, created_at, updated_at
          FROM tenants WHERE id = $1`,
         [id]
       );

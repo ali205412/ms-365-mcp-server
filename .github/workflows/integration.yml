@@ -46,7 +46,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: src/generated/client.ts
-          key: gen-${{ hashFiles('src/endpoints.json', 'bin/.last-*-snapshot.json', 'bin/generate-graph-client.mjs', 'bin/modules/**/*.mjs', 'package-lock.json') }}
+          key: gen-${{ hashFiles('src/endpoints.json', 'src/presets/**/*.json', 'openapi/**/*.yaml', 'openapi/**/*.yml', 'bin/.last-*-snapshot.json', 'bin/generate-graph-client.mjs', 'bin/modules/**/*.mjs', 'package-lock.json') }}
 
       - name: Generate Graph client (full coverage)
         if: steps.gen-cache.outputs.cache-hit != 'true'
@@ -91,7 +91,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: src/generated/client.ts
-          key: gen-${{ hashFiles('src/endpoints.json', 'bin/.last-*-snapshot.json', 'bin/generate-graph-client.mjs', 'bin/modules/**/*.mjs', 'package-lock.json') }}
+          key: gen-${{ hashFiles('src/endpoints.json', 'src/presets/**/*.json', 'openapi/**/*.yaml', 'openapi/**/*.yml', 'bin/.last-*-snapshot.json', 'bin/generate-graph-client.mjs', 'bin/modules/**/*.mjs', 'package-lock.json') }}
 
       - name: Generate Graph client (full coverage)
         if: steps.gen-cache.outputs.cache-hit != 'true'

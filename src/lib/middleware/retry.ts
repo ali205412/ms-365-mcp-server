@@ -224,6 +224,11 @@ function emitThrottleMetric(status: number): void {
  * This helper is called from the non-retryable-return + retry-exhausted +
  * idempotency-gate branches in RetryHandler.execute — see call-sites below.
  */
+export function resourceUnitObservationWeight(headerValue: string | null): number {
+  if (headerValue === null) return 0;
+  return Math.max(parseResourceUnit(headerValue) - 1, 0);
+}
+
 function observeResourceUnit(response: Response): void {
   try {
     const ctx = requestContext.getStore();
@@ -234,7 +239,7 @@ function observeResourceUnit(response: Response): void {
       typeof response.headers?.get === 'function'
         ? response.headers.get('x-ms-resource-unit')
         : null;
-    const weight = parseResourceUnit(headerValue);
+    const weight = resourceUnitObservationWeight(headerValue);
     if (weight <= 0) return;
     void observe(getRedis(), tenantId, WINDOW_MS, weight).catch((err: Error) => {
       logger.warn({ err: err.message, tenantId, weight }, 'plan 06-09: rate-limit observe failed');

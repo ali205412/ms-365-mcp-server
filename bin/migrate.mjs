@@ -22,16 +22,26 @@ import { runner as migrationRunner } from 'node-pg-migrate';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, '..', 'migrations');
 const { Client } = pg;
+const VALID_COMMANDS = new Set(['up', 'down', 'status']);
+
+export function parseCommand(cmd = 'up') {
+  if (!VALID_COMMANDS.has(cmd)) {
+    throw new Error(`Invalid migrate command "${cmd}" (expected up, down, or status)`);
+  }
+  return cmd;
+}
 
 /**
  * Parse an integer CLI flag like `--count=3`. Returns Infinity when the
  * flag is absent (run-all-pending semantics) and NaN when the caller
  * supplied a non-numeric value (main() rejects).
  */
-function parseCount(rest) {
+export function parseCount(rest, cmd = 'up') {
   const arg = rest.find((a) => typeof a === 'string' && a.startsWith('--count='));
-  if (!arg) return Infinity;
-  return Number.parseInt(arg.slice('--count='.length), 10);
+  if (!arg) return cmd === 'down' ? 1 : Infinity;
+  const raw = arg.slice('--count='.length);
+  if (!/^[1-9]\d*$/.test(raw)) return NaN;
+  return Number.parseInt(raw, 10);
 }
 
 function pgvectorEnabledFromEnv() {
@@ -89,14 +99,15 @@ async function applyPgvectorSupport(client) {
  * @returns {Promise<number>}
  */
 export async function main(argv = process.argv.slice(2)) {
-  const [cmd = 'up', ...rest] = argv;
+  const [rawCmd = 'up', ...rest] = argv;
+  const cmd = parseCommand(rawCmd);
   const dryRun = rest.includes('--dry-run');
   const connectionString = process.env.MS365_MCP_DATABASE_URL;
   if (!connectionString) {
     throw new Error('MS365_MCP_DATABASE_URL required for migrations');
   }
 
-  const count = parseCount(rest);
+  const count = parseCount(rest, cmd);
   if (Number.isNaN(count)) {
     throw new Error('--count= must be a positive integer');
   }

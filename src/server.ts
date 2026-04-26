@@ -36,6 +36,7 @@ import { validateRedirectUri, type RedirectUriPolicy } from './lib/redirect-uri.
 import { createCorsMiddleware, type CorsMode } from './lib/cors.js';
 import { getRedis } from './lib/redis.js';
 import { registerAuditResourcePublisher } from './lib/audit.js';
+import { resolveTrustProxySetting } from './lib/trust-proxy.js';
 import type { CloudType } from './cloud-config.js';
 import type { PkceStore } from './lib/pkce-store/pkce-store.js';
 import { MemoryPkceStore } from './lib/pkce-store/memory-store.js';
@@ -1559,7 +1560,7 @@ class MicrosoftGraphServer {
       const { host, port } = parseHttpOption(this.options.http);
 
       const app = express();
-      app.set('trust proxy', true);
+      app.set('trust proxy', resolveTrustProxySetting());
 
       // Health endpoints (OPS-03 / OPS-04) — MUST be mounted BEFORE pino-http,
       // CORS, body parsers, and ANY auth middleware so that:

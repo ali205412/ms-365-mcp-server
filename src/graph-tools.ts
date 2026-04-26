@@ -275,6 +275,61 @@ function summarizeSerializedBody(
   };
 }
 
+function parameterValidationError(
+  toolAlias: string,
+  parameter: string,
+  error: z.ZodError
+): CallToolResult {
+  return {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          error: 'parameter_validation_failed',
+          tool: toolAlias,
+          parameter,
+          issues: error.issues.map((issue) => ({
+            path: issue.path.join('.'),
+            code: issue.code,
+            message: issue.message,
+          })),
+        }),
+      },
+    ],
+    isError: true,
+    _meta: { errorCode: 'parameter_validation_failed' },
+  };
+}
+
+function parseBodyParameter(
+  schema: z.ZodTypeAny,
+  paramName: string,
+  paramValue: unknown
+): { ok: true; value: unknown; wrapped: boolean } | { ok: false; error: z.ZodError } {
+  const direct = schema.safeParse(paramValue);
+  if (direct.success) return { ok: true, value: direct.data, wrapped: false };
+
+  const wrapped = schema.safeParse({ [paramName]: paramValue });
+  if (wrapped.success) return { ok: true, value: wrapped.data, wrapped: true };
+
+  return { ok: false, error: direct.error };
+}
+
+function validateBodyParameters(
+  tool: (typeof api.endpoints)[0],
+  params: Record<string, unknown>
+): CallToolResult | null {
+  const bodyParam = (tool.parameters ?? []).find((param) => param.type === 'Body');
+  if (!bodyParam?.schema) return null;
+
+  for (const [paramName, paramValue] of Object.entries(params)) {
+    if (paramName !== 'body' && paramName !== bodyParam.name) continue;
+    const parsed = parseBodyParameter(bodyParam.schema, paramName, paramValue);
+    if (!parsed.ok) return parameterValidationError(tool.alias, paramName, parsed.error);
+  }
+  return null;
+}
+
 function checkSyntheticGraphToolDispatch(toolAlias: string): CallToolResult | null {
   const tenantInfo = getRequestTenant();
   const rejection = checkDispatch(
@@ -327,6 +382,9 @@ async function executeGraphToolInner(
     );
     return rejection as CallToolResult;
   }
+
+  const bodyValidationError = validateBodyParameters(tool, params);
+  if (bodyValidationError) return bodyValidationError;
 
   // ── PRODUCT PREFIX ROUTING (plan 5.1-06 Task 2) ───────────────────────
   // When the tool alias carries a known product prefix (__powerbi__ /
@@ -505,21 +563,16 @@ async function executeGraphToolInner(
 
           case 'Body':
             if (paramDef.schema) {
-              const parseResult = paramDef.schema.safeParse(paramValue);
-              if (!parseResult.success) {
-                const wrapped = { [paramName]: paramValue };
-                const wrappedResult = paramDef.schema.safeParse(wrapped);
-                if (wrappedResult.success) {
-                  logger.info(
-                    `Auto-corrected parameter '${paramName}': AI passed nested field directly, wrapped it as {${paramName}: ...}`
-                  );
-                  body = wrapped;
-                } else {
-                  body = paramValue;
-                }
-              } else {
-                body = paramValue;
+              const parsed = parseBodyParameter(paramDef.schema, paramName, paramValue);
+              if (!parsed.ok) {
+                return parameterValidationError(tool.alias, paramName, parsed.error);
               }
+              if (parsed.wrapped) {
+                logger.info(
+                  `Auto-corrected parameter '${paramName}': AI passed nested field directly, wrapped it as {${paramName}: ...}`
+                );
+              }
+              body = parsed.value;
             } else {
               body = paramValue;
             }
@@ -530,7 +583,16 @@ async function executeGraphToolInner(
             break;
         }
       } else if (paramName === 'body') {
-        body = paramValue;
+        const bodyParam = parameterDefinitions.find((param) => param.type === 'Body');
+        if (bodyParam?.schema) {
+          const parsed = parseBodyParameter(bodyParam.schema, paramName, paramValue);
+          if (!parsed.ok) {
+            return parameterValidationError(tool.alias, paramName, parsed.error);
+          }
+          body = parsed.value;
+        } else {
+          body = paramValue;
+        }
         logger.info({ body: summarizeBodyValue(body) }, 'Set body param');
       } else if (
         path.includes(`:${paramName}`) ||
