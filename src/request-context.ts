@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import type { TenantRow } from './lib/tenant/tenant-row.js';
 
 /**
  * Phase 3 plan 03-05 addition: authentication flow carried in request
@@ -12,10 +13,12 @@ export type AuthFlow = 'delegated' | 'app-only' | 'bearer' | 'device-code';
 
 export interface RequestContext {
   accessToken?: string; // was required — now OPTIONAL (non-HTTP callers may not set it)
+  clientAccessToken?: string; // Stable MCP bearer presented by the HTTP client.
   refreshToken?: string;
   // Phase 1 additions:
   requestId?: string;
   tenantId?: string | null; // Phase 1 placeholder; set by 03-08 loadTenant middleware
+  tenantRow?: TenantRow;
   // Phase 2 additions (plan 02-01 scaffold; populated by 02-02 RetryHandler):
   retryCount?: number; // Number of retries performed by RetryHandler (02-02)
   lastStatus?: number; // HTTP status of the final response returned by the pipeline

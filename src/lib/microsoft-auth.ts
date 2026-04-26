@@ -7,8 +7,8 @@
  * middleware that read the refresh-token from a custom HTTP header is gone.
  *
  * Graph 401 refresh path (src/graph-client.ts) consults SessionStore using
- * sha256(accessToken) to look up the refresh token — no custom header ever
- * reaches a middleware or handler.
+ * sha256(clientAccessToken) to look up the delegated session — no custom
+ * header ever reaches a middleware or handler.
  *
  * Breaking change for v1 HTTP-mode users: see docs/migration-v1-to-v2.md.
  *
@@ -185,6 +185,7 @@ export function createBearerMiddleware(
         accessToken: token,
         flow: 'bearer',
         authClientId: undefined,
+        tenantRow: tenant,
       },
       () => next()
     );

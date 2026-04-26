@@ -13,8 +13,10 @@
  *           rotates the session key on rt-rotation, retries Graph → 200.
  *   Test 3: TenantPool.getDekForTenant surfaces the per-tenant DEK for
  *           callers (server, graph-client) to build SessionStore instances.
- *   Test 4: sessionStore.put is NOT called when MSAL returns no refreshToken
- *           (e.g., first-leg acquire on a silent-refresh-only path).
+ *   Test 4: sessionStore.put still records account metadata when MSAL returns
+ *           no raw refreshToken.
+ *   Test 5: Graph 401 refresh can use MSAL acquireTokenSilent when the raw
+ *           refresh token is hidden inside MSAL's cache.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express, { type Request, type Response, type NextFunction } from 'express';
@@ -85,7 +87,12 @@ async function startApp(tenantOverrides: Partial<TenantRow> = {}): Promise<Harne
   }));
 
   const mockTenantPool = {
-    acquire: vi.fn(async () => ({ acquireTokenByCode: mockMsal })),
+    acquire: vi.fn(async () => ({
+      acquireTokenByCode: mockMsal,
+      getTokenCache: () => ({
+        serialize: () => 'serialized-msal-cache',
+      }),
+    })),
     buildCachePlugin: vi.fn(),
     evict: vi.fn(),
     getDekForTenant: vi.fn(() => dek),
@@ -202,6 +209,8 @@ describe('plan 03-07 Task 2 — refresh-token server-side session migration', ()
     expect(record?.clientId).toBe(harness.tenant.client_id);
     expect(record?.accountHomeId).toBe('home-1');
     expect(record?.scopes).toEqual(harness.tenant.allowed_scopes);
+    expect(record?.msalCache).toBe('serialized-msal-cache');
+    expect(record?.graphAccessToken).toBe('access-AAA-initial');
   });
 
   // ── Test 2: 401 refresh path uses SessionStore, not request header ─────────
@@ -249,12 +258,12 @@ describe('plan 03-07 Task 2 — refresh-token server-side session migration', ()
     // Fresh access token returned
     expect(result.accessToken).toBe('access-NEW-xyz');
 
-    // New session exists under the NEW access token with the NEW refresh token
-    const newSession = await harness.sessionStore.get(harness.tenant.id, 'access-NEW-xyz');
-    expect(newSession?.refreshToken).toBe('rt-NEW-SECRET');
-    // Old session key is gone
+    // Client-facing session key remains stable; current Graph token rotates inside it.
     const oldSession = await harness.sessionStore.get(harness.tenant.id, oldAccess);
-    expect(oldSession).toBeNull();
+    expect(oldSession?.refreshToken).toBe('rt-NEW-SECRET');
+    expect(oldSession?.graphAccessToken).toBe('access-NEW-xyz');
+    const newSession = await harness.sessionStore.get(harness.tenant.id, 'access-NEW-xyz');
+    expect(newSession).toBeNull();
 
     // No entries leak plaintext under mcp:session:*
     const keys = await harness.redis.keys('mcp:session:*');
@@ -283,10 +292,9 @@ describe('plan 03-07 Task 2 — refresh-token server-side session migration', ()
     await pool.drain();
   });
 
-  // ── Test 4: no refresh token in MSAL response → no sessionStore.put ────────
-  it('Test 4: MSAL acquire returning no refreshToken skips sessionStore.put', async () => {
+  // ── Test 4: no refresh token in MSAL response → account-backed session ────
+  it('Test 4: MSAL acquire returning no refreshToken writes account-backed session', async () => {
     harness = await startApp();
-    // Override the MSAL mock on this harness
     harness.mockMsal.mockImplementationOnce(async () => ({
       accessToken: 'access-no-rt',
       // refreshToken intentionally absent
@@ -300,8 +308,69 @@ describe('plan 03-07 Task 2 — refresh-token server-side session migration', ()
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.access_token).toBe('access-no-rt');
 
-    // No session entry should have been written (cannot persist what MSAL didn't give)
     const keys = await harness.redis.keys('mcp:session:*');
-    expect(keys.length).toBe(0);
+    expect(keys.length).toBe(1);
+    const record = await harness.sessionStore.get(harness.tenant.id, 'access-no-rt');
+    expect(record?.refreshToken).toBeUndefined();
+    expect(record?.accountHomeId).toBe('home-1');
+    expect(record?.clientId).toBe(harness.tenant.client_id);
+    expect(record?.graphAccessToken).toBe('access-no-rt');
+  });
+
+  it('Test 5: Graph 401 refresh uses acquireTokenSilent when refreshToken is cache-hidden', async () => {
+    harness = await startApp();
+    const oldAccess = 'access-OLD-cache-hidden';
+    await harness.sessionStore.put(harness.tenant.id, oldAccess, {
+      tenantId: harness.tenant.id,
+      accountHomeId: 'home-1',
+      msalCache: 'serialized-cache-before',
+      clientId: harness.tenant.client_id,
+      scopes: harness.tenant.allowed_scopes,
+      createdAt: Date.now(),
+    });
+
+    const account = { homeAccountId: 'home-1', username: 'user@example.com' };
+    const mockGetAccountByHomeId = vi.fn(async () => account);
+    const mockDeserialize = vi.fn();
+    const mockSerialize = vi.fn(() => 'serialized-cache-after');
+    const mockAcquireSilent = vi.fn(async () => ({
+      accessToken: 'access-SILENT-xyz',
+      expiresOn: new Date(Date.now() + 3600 * 1000),
+      account,
+    }));
+    const fakeMsal = {
+      acquireTokenSilent: mockAcquireSilent,
+      getTokenCache: () => ({
+        getAccountByHomeId: mockGetAccountByHomeId,
+        deserialize: mockDeserialize,
+        serialize: mockSerialize,
+      }),
+    };
+    const mockTenantPool = {
+      acquire: vi.fn(async () => fakeMsal),
+      getDekForTenant: vi.fn(() => harness!.dek),
+    };
+
+    const { refreshSessionAndRetry } = await import('../../src/graph-client.js');
+    const result = await refreshSessionAndRetry({
+      tenant: harness.tenant,
+      oldAccessToken: oldAccess,
+      tenantPool: mockTenantPool as never,
+      redis: harness.redis,
+    });
+
+    expect(mockDeserialize).toHaveBeenCalledWith('serialized-cache-before');
+    expect(mockGetAccountByHomeId).toHaveBeenCalledWith('home-1');
+    expect(mockAcquireSilent).toHaveBeenCalledWith({
+      account,
+      scopes: harness.tenant.allowed_scopes,
+      forceRefresh: true,
+    });
+    expect(result.accessToken).toBe('access-SILENT-xyz');
+    const oldSession = await harness.sessionStore.get(harness.tenant.id, oldAccess);
+    expect(oldSession?.graphAccessToken).toBe('access-SILENT-xyz');
+    expect(oldSession?.msalCache).toBe('serialized-cache-after');
+    const newSession = await harness.sessionStore.get(harness.tenant.id, 'access-SILENT-xyz');
+    expect(newSession).toBeNull();
   });
 });

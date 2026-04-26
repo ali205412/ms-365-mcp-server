@@ -3,16 +3,16 @@
  *
  * Replaces v1's custom-header refresh-token read path (see
  * docs/migration-v1-to-v2.md for the deleted header name + migration notes).
- * Refresh tokens live in Redis under
- * `mcp:session:{tenantId}:{sha256(accessToken)}`, envelope-encrypted with
- * the per-tenant DEK (same DEK the MSAL cache plugin uses — supplied by
+ * Delegated sessions live in Redis under
+ * `mcp:session:{tenantId}:{sha256(clientAccessToken)}`, envelope-encrypted
+ * with the per-tenant DEK (same DEK the MSAL cache plugin uses — supplied by
  * TenantPool.getDekForTenant or plugin caller).
  *
- * Why sha256(accessToken) as the key? The access token is opaque to our
- * server (issued by Microsoft). Hashing it prevents the session key itself
- * from exposing the access token in Redis key-listing. Graph-client 401
- * handler hashes the expired accessToken and retrieves the matching session
- * to get the refresh token.
+ * Why sha256(clientAccessToken) as the key? The client-facing MCP bearer is
+ * opaque to our server and must stay stable for clients that do not receive a
+ * refresh token. Hashing it prevents the session key itself from exposing the
+ * bearer in Redis key-listing. Graph-client 401 handling retrieves the matching
+ * session and rotates the encrypted graphAccessToken inside the same record.
  *
  * TTL: defaults to 14 days (Entra refresh-token validity window), configurable
  * via `MS365_MCP_SESSION_TTL_SECONDS`. This is the UPPER bound — MSAL will
@@ -37,8 +37,11 @@ import logger from '../logger.js';
 
 export interface SessionRecord {
   tenantId: string;
-  refreshToken: string;
+  refreshToken?: string;
   accountHomeId?: string;
+  msalCache?: string;
+  graphAccessToken?: string;
+  graphAccessTokenExpiresOn?: string;
   clientId: string;
   scopes: string[];
   createdAt: number;
@@ -78,7 +81,7 @@ export class SessionStore {
   }
 
   /**
-   * Persist a session record keyed by (tenantId, sha256(accessToken)) in
+   * Persist a session record keyed by (tenantId, sha256(clientAccessToken)) in
    * Redis as an envelope-encrypted blob. Overwrites any existing entry.
    *
    * **Contract (WR-09):** put() MUST be called with a unique
@@ -132,9 +135,8 @@ export class SessionStore {
   }
 
   /**
-   * Remove a session entry. Used by graph-client.ts's 401 handler after a
-   * successful refresh (the old accessToken is no longer valid; the session
-   * has been re-keyed under the new accessToken's hash).
+   * Remove a session entry. Used when a delegated session is corrupt, expired,
+   * revoked, or explicitly invalidated.
    */
   async delete(tenantId: string, accessToken: string): Promise<void> {
     await this.redis.del(this.key(tenantId, accessToken));
