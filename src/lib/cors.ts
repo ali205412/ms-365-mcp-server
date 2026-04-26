@@ -68,7 +68,7 @@ const DEV_ORIGIN_REGEX = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
 
 const ALLOWED_METHODS = 'GET, POST, PUT, DELETE, OPTIONS';
 const ALLOWED_HEADERS =
-  'Origin, X-Requested-With, Content-Type, Accept, Authorization, mcp-protocol-version';
+  'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-MCP-App-Key, mcp-protocol-version';
 
 /**
  * Build a CORS middleware handler for the given mode + allowlist.

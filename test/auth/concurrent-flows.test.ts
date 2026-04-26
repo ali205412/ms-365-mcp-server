@@ -4,7 +4,7 @@
  * Proves that ONE Express instance can serve all three HTTP identity flows
  * concurrently:
  *   (a) delegated OAuth — /authorize ↔ /token round-trip with two-leg PKCE
- *   (b) app-only       — POST /mcp with tenant.mode='app-only' (no Authorization)
+ *   (b) app-only       — POST /mcp with tenant.mode='app-only' + gateway key
  *   (c) bearer         — POST /mcp with Authorization: Bearer <jwt{tid}>
  *
  * Device-code (stdio) is covered separately by a programmatic stub test
@@ -115,6 +115,7 @@ describe('Concurrent flows integration (AUTH-05 / SC#3)', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    vi.stubEnv('MS365_MCP_APP_ONLY_API_KEY', 'test-app-only-key');
     capturedFlows.length = 0;
     capturedTenants.length = 0;
 
@@ -195,6 +196,7 @@ describe('Concurrent flows integration (AUTH-05 / SC#3)', () => {
       await new Promise<void>((r) => server!.close(() => r()));
       server = undefined;
     }
+    vi.unstubAllEnvs();
   });
 
   it('runs delegated + app-only + bearer concurrently on one server instance (SC#3)', async () => {
@@ -232,7 +234,7 @@ describe('Concurrent flows integration (AUTH-05 / SC#3)', () => {
     // ── (b) app-only ───────────────────────────────────────────────────
     const appOnlyPromise = fetch(`${baseUrl}/t/${tenantB.id}/mcp`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-MCP-App-Key': 'test-app-only-key' },
       body: JSON.stringify({ jsonrpc: '2.0', method: 'test', id: 1 }),
     });
 

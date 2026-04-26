@@ -142,9 +142,14 @@ async function startApp(
 
 describe('App-only (client credentials) flow (AUTH-02)', () => {
   let harness: AppHarness | undefined;
+  const appOnlyHeaders = {
+    'Content-Type': 'application/json',
+    'X-MCP-App-Key': 'test-app-only-key',
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv('MS365_MCP_APP_ONLY_API_KEY', 'test-app-only-key');
   });
 
   afterEach(async () => {
@@ -152,14 +157,30 @@ describe('App-only (client credentials) flow (AUTH-02)', () => {
       await harness.close();
       harness = undefined;
     }
+    vi.unstubAllEnvs();
   });
 
-  it('Test 1: app-only tenant → MSAL acquireTokenByClientCredential called with .default', async () => {
+  it('Test 1: app-only tenant without gateway key → 401 and no MSAL acquire', async () => {
     harness = await startApp();
 
     const res = await fetch(`${harness.url}/mcp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'test', id: 1 }),
+    });
+
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('app_only_gateway_key_required');
+    expect(harness.mockAcquireByCredential).not.toHaveBeenCalled();
+  });
+
+  it('Test 2: app-only tenant with gateway key → MSAL acquireTokenByClientCredential called with .default', async () => {
+    harness = await startApp();
+
+    const res = await fetch(`${harness.url}/mcp`, {
+      method: 'POST',
+      headers: appOnlyHeaders,
       body: JSON.stringify({ jsonrpc: '2.0', method: 'test', id: 1 }),
     });
 
@@ -171,12 +192,12 @@ describe('App-only (client credentials) flow (AUTH-02)', () => {
     expect(args.scopes).toContain('https://graph.microsoft.com/.default');
   });
 
-  it('Test 2: requestContext.flow = "app-only" during downstream handler execution', async () => {
+  it('Test 3: requestContext.flow = "app-only" during downstream handler execution', async () => {
     harness = await startApp();
 
     const res = await fetch(`${harness.url}/mcp`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: appOnlyHeaders,
       body: JSON.stringify({ jsonrpc: '2.0', method: 'test', id: 1 }),
     });
 
@@ -187,12 +208,12 @@ describe('App-only (client credentials) flow (AUTH-02)', () => {
     expect(harness.capturedFlow.value).toBe('app-only');
   });
 
-  it('Test 3: buildCachePlugin called with userOid="appOnly"', async () => {
+  it('Test 4: buildCachePlugin called with userOid="appOnly"', async () => {
     harness = await startApp();
 
     await fetch(`${harness.url}/mcp`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: appOnlyHeaders,
       body: JSON.stringify({ jsonrpc: '2.0', method: 'test', id: 1 }),
     });
 
@@ -202,14 +223,14 @@ describe('App-only (client credentials) flow (AUTH-02)', () => {
     expect(call[1]).toBe('appOnly');
   });
 
-  it('Test 4: MSAL acquire failure → 502 app_only_acquire_failed', async () => {
+  it('Test 5: MSAL acquire failure → 502 app_only_acquire_failed', async () => {
     harness = await startApp({
       acquireImpl: async () => ({ accessToken: '' }) as unknown as { accessToken: string },
     });
 
     const res = await fetch(`${harness.url}/mcp`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: appOnlyHeaders,
       body: JSON.stringify({ jsonrpc: '2.0', method: 'test', id: 1 }),
     });
 
@@ -218,7 +239,7 @@ describe('App-only (client credentials) flow (AUTH-02)', () => {
     expect(body.error).toBe('app_only_acquire_failed');
   });
 
-  it('Test 5: Authorization: Bearer header present → selector delegates to bearer middleware (not app-only)', async () => {
+  it('Test 6: Authorization: Bearer header present → selector delegates to bearer middleware (not app-only)', async () => {
     harness = await startApp();
 
     // A bearer header WITHOUT a correctly-shaped JWT should bypass the app-only

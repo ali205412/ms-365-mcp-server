@@ -102,6 +102,7 @@ describe('Plan 03-10 — four flows + audit rows (SC#3)', () => {
   let pkceStore: RedisPkceStore;
 
   beforeEach(async () => {
+    vi.stubEnv('MS365_MCP_APP_ONLY_API_KEY', 'test-app-only-key');
     pool = await makePool();
     redis = new MemoryRedisFacade();
     pkceStore = new RedisPkceStore(redis);
@@ -212,6 +213,7 @@ describe('Plan 03-10 — four flows + audit rows (SC#3)', () => {
       await new Promise<void>((r) => server!.close(() => r()));
       server = undefined;
     }
+    vi.unstubAllEnvs();
     await redis.quit();
   });
 
@@ -245,7 +247,7 @@ describe('Plan 03-10 — four flows + audit rows (SC#3)', () => {
     // (b) app-only
     const appOnlyRes = await fetch(`${baseUrl}/t/${TENANT_APP_ONLY}/mcp`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-MCP-App-Key': 'test-app-only-key' },
       body: JSON.stringify({}),
     });
     expect(appOnlyRes.status).toBe(200);

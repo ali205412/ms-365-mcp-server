@@ -321,6 +321,7 @@ Core gateway variables:
 | `MS365_MCP_PUBLIC_URL`           | Public origin used in OAuth metadata and browser redirects.                     |
 | `MS365_MCP_CORS_ORIGINS`         | Comma-separated production CORS allowlist.                                      |
 | `MS365_MCP_OAUTH_REDIRECT_HOSTS` | Extra OAuth callback hosts allowed in production, for example `claude.ai`.      |
+| `MS365_MCP_APP_ONLY_API_KEY`     | Required gateway secret for tenant app-only MCP calls via `X-MCP-App-Key`.      |
 | `MS365_MCP_ADMIN_APP_CLIENT_ID`  | Admin Entra app client id. Required to mount `/admin/*`.                        |
 | `MS365_MCP_ADMIN_GROUP_ID`       | Entra group object id allowed to call `/admin/*`. Required to mount `/admin/*`. |
 | `MS365_MCP_ADMIN_ORIGINS`        | Browser origins allowed for admin UI calls.                                     |

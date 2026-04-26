@@ -42,6 +42,7 @@ const REDACT_PATHS: string[] = [
   'req.headers["x-microsoft-refresh-token"]',
   'req.headers["x-tenant-*"]',
   'req.headers["x-admin-api-key"]',
+  'req.headers["x-mcp-app-key"]',
   'req.body',
   'res.body',
   '*.refresh_token',
