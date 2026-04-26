@@ -41,6 +41,7 @@ The follow-up pass also fixed the highest-confidence P2/P3 issues that were smal
 - `npm run test:int -- src/lib/admin/__tests__/enabled-tools-patch.int.test.ts`
 - `npm test -- test/tool-selection/discovery-v1-surface.test.ts test/graph-batch-tool.test.ts`
 - `bash -n bin/azure-grant-mcp-permissions.sh`
+- `npm run generate` with the CI full-coverage Graph/product catalog environment
 - `npm run build`
 - `npm run lint`
 - `npm run format:check`
