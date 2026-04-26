@@ -7,6 +7,17 @@
   "bin": {
     "ms-365-mcp-server": "dist/index.js"
   },
+  "files": [
+    "dist/",
+    "bin/*.cjs",
+    "bin/*.mjs",
+    "bin/*.sh",
+    "migrations/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "SECURITY.md"
+  ],
   "scripts": {
     "generate": "node bin/generate-graph-client.mjs",
     "build": "tsup",
