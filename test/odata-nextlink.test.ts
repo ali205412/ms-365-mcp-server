@@ -87,4 +87,20 @@ describe('OData nextLink preservation', () => {
 
     mockFetch.mockRestore();
   });
+
+  it('uses an explicit product baseUrl instead of Microsoft Graph', async () => {
+    const mockFetch = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({ value: [] }), { status: 200 })
+    );
+
+    await graphClient.graphRequest('/groups', {
+      baseUrl: 'https://api.powerbi.com/v1.0/myorg',
+    });
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url] = mockFetch.mock.calls[0];
+    expect(String(url)).toBe('https://api.powerbi.com/v1.0/myorg/groups');
+
+    mockFetch.mockRestore();
+  });
 });

@@ -38,13 +38,14 @@ http:
   routers:
     # Main MCP + OAuth + health router. All paths on the container's
     # primary listener go through here. Path matching matches Caddyfile
-    # + nginx.conf — /mcp, /authorize, /token, /register, /.well-known/*,
-    # /healthz, /readyz all hit the same upstream.
+    # + nginx.conf — /t/*, /mcp, /authorize, /token, /register,
+    # /.well-known/*, /healthz, /readyz all hit the same upstream.
     ms365-mcp:
       rule: >-
         Host(`mcp.example.com`) &&
         (
           PathPrefix(`/mcp`) ||
+          PathPrefix(`/t/`) ||
           PathPrefix(`/authorize`) ||
           PathPrefix(`/token`) ||
           PathPrefix(`/register`) ||
@@ -64,7 +65,7 @@ http:
     # the basic-auth middleware (see the commented block further down)
     # to require credentials.
     ms365-mcp-metrics:
-      rule: 'Host(`mcp.example.com`) && Path(`/metrics`)'
+      rule: 'Host(`metrics.example.com`) && Path(`/metrics`)'
       service: ms365-mcp-metrics
       entryPoints:
         - websecure

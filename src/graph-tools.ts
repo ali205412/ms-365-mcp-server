@@ -362,11 +362,21 @@ async function executeGraphToolInner(
       };
     }
     const ctx = requestContext.getStore();
-    const productResult = await executeProductTool(tool.alias, params, authManager, graphClient, {
-      tenantId: ctx?.tenantId ?? 'unknown',
-      tenantAzureId: ctx?.tenantAzureId,
-      sharepointDomain: ctx?.sharepointDomain,
-    });
+    const productResult = await executeProductTool(
+      tool.alias,
+      params,
+      authManager,
+      graphClient,
+      {
+        tenantId: ctx?.tenantId ?? 'unknown',
+        tenantAzureId: ctx?.tenantAzureId,
+        sharepointDomain: ctx?.sharepointDomain,
+      },
+      {
+        path: tool.path,
+        method: tool.method.toUpperCase(),
+      }
+    );
     return productResult as CallToolResult;
   }
 

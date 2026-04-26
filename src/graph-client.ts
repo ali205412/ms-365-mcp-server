@@ -118,6 +118,7 @@ interface GraphRequestOptions {
   excludeResponse?: boolean;
   accessToken?: string;
   refreshToken?: string;
+  baseUrl?: string;
 
   [key: string]: unknown;
 }
@@ -336,7 +337,13 @@ class GraphClient {
     options: GraphRequestOptions
   ): Promise<Response> {
     const cloudEndpoints = getCloudEndpoints(this.secrets.cloudType);
-    const url = `${cloudEndpoints.graphApi}/v1.0${endpoint}`;
+    const baseUrl = options.baseUrl ?? `${cloudEndpoints.graphApi}/v1.0`;
+    const parsedBaseUrl = new URL(baseUrl);
+    if (parsedBaseUrl.protocol !== 'https:') {
+      throw new Error(`GraphClient baseUrl must use https: ${baseUrl}`);
+    }
+    const endpointPath = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+    const url = `${baseUrl.replace(/\/+$/, '')}${endpointPath}`;
 
     logger.info(`[GRAPH CLIENT] Final URL being sent to Microsoft: ${url}`);
 

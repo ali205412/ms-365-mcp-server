@@ -31,6 +31,11 @@ server {
     add_header X-Frame-Options "DENY" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 
+    # Admin is intentionally not reachable from the public MCP hostname.
+    location ^~ /admin {
+        return 404;
+    }
+
     # SSE + streaming HTTP — CRITICAL buffering settings
     location ~ ^/t/[^/]+/(sse|messages|mcp) {
         proxy_pass http://ms365_mcp_server;

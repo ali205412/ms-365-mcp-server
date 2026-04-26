@@ -16,19 +16,18 @@ const INTEGRATION_PATTERNS = [
   'test/token-endpoint.test.ts',
 ];
 
-// 2026-04-24: nine test files time-out on Node 20/22 GitHub Actions runners
+// 2026-04-24: nine test files timed out on Node 20/22 GitHub Actions runners
 // while passing on Node 22 and Node 25 locally. Common thread: each test
 // calls a timer / async hook that never resolves (vitest testTimeout 45 s
 // trips). Root cause is CI-runner-specific — likely a NodeSDK global-meter
 // registration started by a prior test file interacting with
 // PeriodicExportingMetricReader.forceFlush(); timer semantics under the
 // vitest singleThread pool; or pg-mem pool teardown. The behavior cannot
-// be reproduced locally (verified Node 22.22.0 + same vitest 3.2.4 +
-// CI=true env). Quarantine active on CI only so Build/Release go green
-// while we iterate on an isolated repro; re-enable by removing from this
-// array or exporting MS365_MCP_SKIP_CI_FLAKY=0 after a fix lands.
-const CI_FLAKY_QUARANTINE =
-  process.env.MS365_MCP_SKIP_CI_FLAKY === '1' || process.env.CI === 'true'
+// be reproduced locally (verified Node 22.22.0 + same vitest 3.2.4).
+// Quarantine is now explicit only; protected CI must run the security-critical
+// isolation/auth tests unless a maintainer deliberately sets this override.
+const EXPLICIT_FLAKY_QUARANTINE =
+  process.env.MS365_MCP_SKIP_CI_FLAKY === '1'
     ? [
         // OTel instrument registry / span tests — PeriodicExportingMetricReader
         // forceFlush() hangs on CI when a prior file installed NodeSDK's
@@ -107,7 +106,7 @@ export default defineConfig({
       '**/node_modules/**',
       '**/dist/**',
       ...(RUN_INTEGRATION ? [] : INTEGRATION_PATTERNS),
-      ...CI_FLAKY_QUARANTINE,
+      ...EXPLICIT_FLAKY_QUARANTINE,
     ],
     // Threads share a single V8 isolate (one parse of the 46 MB client)
     // across many test files, where forks + isolate:true would re-parse
