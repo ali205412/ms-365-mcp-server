@@ -23,11 +23,9 @@
  *
  * Idempotent: a second SIGTERM during an in-flight drain is a no-op via the
  * isDraining() guard at handler entry. Guards against operators hitting
- * Ctrl-C twice in a panic. Also defends against double-registration from
- * stdio + HTTP startup paths (src/index.ts registers null-server hooks
- * early, src/server.ts re-registers with the real http.Server once
- * app.listen returns). The removeAllListeners guard below makes the LAST
- * registration win so the http.Server variant supersedes the null one.
+ * Ctrl-C twice in a panic. Also defends against registration from stdio, the
+ * main HTTP listener, and the metrics listener: each call adds its server
+ * handle to a shared registry, and one signal handler closes them all.
  *
  * Threat dispositions (from plan 01-05 <threat_model>):
  *   - T-01-05a: Handler runs because Dockerfile STOPSIGNAL SIGTERM (plan 01-03)
@@ -58,6 +56,70 @@ export interface ShutdownLogger {
 const GRACE_MS = Number.parseInt(process.env.MS365_MCP_SHUTDOWN_GRACE_MS ?? '25000', 10);
 
 const OTEL_SHUTDOWN_TIMEOUT_MS = 10_000;
+const registeredServers = new Set<Server>();
+let activeLogger: ShutdownLogger | null = null;
+let hooksRegistered = false;
+
+async function closeServer(server: Server): Promise<void> {
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+}
+
+async function closeRegisteredServers(): Promise<void> {
+  await Promise.all([...registeredServers].map(closeServer));
+}
+
+async function shutdown(signal: string): Promise<void> {
+  const logger = activeLogger;
+  if (!logger || isDraining()) {
+    // Idempotent: double-signal is a no-op. Guards against operator double
+    // Ctrl-C and against re-entry from cascading subsystems.
+    return;
+  }
+  setDraining(true);
+  logger.info({ signal, graceMs: GRACE_MS }, 'Graceful shutdown initiated');
+
+  // Failsafe deadline — if the drain sequence stalls past GRACE_MS, force
+  // exit(1). unref() so the timer does not keep the event loop alive when
+  // shutdown completes faster.
+  const deadline = setTimeout(() => {
+    logger.error({ graceMs: GRACE_MS }, 'Graceful shutdown deadline exceeded; forcing exit');
+    process.exit(1);
+  }, GRACE_MS);
+  deadline.unref();
+
+  // 1. Stop accepting new HTTP connections; await in-flight to drain.
+  await closeRegisteredServers();
+
+  // 2. Flush pino logger (sync on stdout destination in pino v10).
+  try {
+    logger.flush?.();
+  } catch {
+    // Swallow — we are exiting anyway; a flush failure must not block the
+    // remaining shutdown steps.
+  }
+
+  // 3. Shut down OTel SDK with a 10s race ceiling. A dead OTLP collector
+  // can hang sdk.shutdown indefinitely; the race guarantees exit bounds.
+  try {
+    await Promise.race([
+      otel.shutdown(),
+      new Promise<void>((_, reject) =>
+        setTimeout(() => reject(new Error('OTel shutdown timed out')), OTEL_SHUTDOWN_TIMEOUT_MS)
+      ),
+    ]);
+  } catch (err) {
+    logger.error(
+      { err: err instanceof Error ? err.message : String(err) },
+      'OTel shutdown did not complete within timeout; proceeding to exit'
+    );
+  }
+
+  clearTimeout(deadline);
+  logger.info('Graceful shutdown complete');
+  process.exit(0);
+}
 
 /**
  * Register SIGTERM + SIGINT handlers that run the graceful drain sequence.
@@ -69,67 +131,14 @@ const OTEL_SHUTDOWN_TIMEOUT_MS = 10_000;
  *   is optional so logger mocks without .flush still work.
  */
 export function registerShutdownHooks(server: Server | null, logger: ShutdownLogger): void {
-  const shutdown = async (signal: string): Promise<void> => {
-    if (isDraining()) {
-      // Idempotent: double-signal is a no-op. Guards against operator double
-      // Ctrl-C and against re-entry from cascading subsystems.
-      return;
-    }
-    setDraining(true);
-    logger.info({ signal, graceMs: GRACE_MS }, 'Graceful shutdown initiated');
+  activeLogger = logger;
+  if (server) {
+    registeredServers.add(server);
+  }
 
-    // Failsafe deadline — if the drain sequence stalls past GRACE_MS, force
-    // exit(1). unref() so the timer does not keep the event loop alive when
-    // shutdown completes faster.
-    const deadline = setTimeout(() => {
-      logger.error({ graceMs: GRACE_MS }, 'Graceful shutdown deadline exceeded; forcing exit');
-      process.exit(1);
-    }, GRACE_MS);
-    deadline.unref();
-
-    // 1. Stop accepting new HTTP connections; await in-flight to drain.
-    if (server) {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
-
-    // 2. Flush pino logger (sync on stdout destination in pino v10).
-    try {
-      logger.flush?.();
-    } catch {
-      // Swallow — we are exiting anyway; a flush failure must not block the
-      // remaining shutdown steps.
-    }
-
-    // 3. Shut down OTel SDK with a 10s race ceiling. A dead OTLP collector
-    // can hang sdk.shutdown indefinitely; the race guarantees exit bounds.
-    try {
-      await Promise.race([
-        otel.shutdown(),
-        new Promise<void>((_, reject) =>
-          setTimeout(() => reject(new Error('OTel shutdown timed out')), OTEL_SHUTDOWN_TIMEOUT_MS)
-        ),
-      ]);
-    } catch (err) {
-      logger.error(
-        { err: err instanceof Error ? err.message : String(err) },
-        'OTel shutdown did not complete within timeout; proceeding to exit'
-      );
-    }
-
-    clearTimeout(deadline);
-    logger.info('Graceful shutdown complete');
-    process.exit(0);
-  };
-
-  // Replace any prior SIGTERM/SIGINT handlers so the LAST call to
-  // registerShutdownHooks wins. In HTTP mode, src/index.ts registers a
-  // null-server variant early; once src/server.ts re-registers with the
-  // real http.Server, we want the http-aware handler to supersede.
-  process.removeAllListeners('SIGTERM');
-  process.removeAllListeners('SIGINT');
-
-  process.on('SIGTERM', () => void shutdown('SIGTERM'));
-  process.on('SIGINT', () => void shutdown('SIGINT'));
+  if (!hooksRegistered) {
+    hooksRegistered = true;
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
+  }
 }

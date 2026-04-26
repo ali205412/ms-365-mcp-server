@@ -164,6 +164,11 @@ export interface TokenHandlerSecrets {
   cloudType: CloudType;
 }
 
+function stripRefreshToken<T extends Record<string, unknown>>(result: T): Omit<T, 'refresh_token'> {
+  const { refresh_token: _refreshToken, ...publicResult } = result;
+  return publicResult;
+}
+
 /**
  * /token handler config (plan 03-03).
  *
@@ -317,7 +322,7 @@ export function createTokenHandler(config: TokenHandlerConfig) {
           serverCodeVerifier || (body.code_verifier as string | undefined),
           secrets.cloudType
         );
-        res.json(result);
+        res.json(stripRefreshToken(result));
       } else if (body.grant_type === 'refresh_token') {
         // WR-01 fix: the legacy /token refresh_token branch accepted a
         // refresh token from the request body, which violated the SECUR-02
@@ -355,7 +360,7 @@ export function createTokenHandler(config: TokenHandlerConfig) {
             tenantId,
             secrets.cloudType
           );
-          res.json(result);
+          res.json(stripRefreshToken(result));
         } else {
           res.status(400).json({
             error: 'unsupported_grant_type',
@@ -1596,16 +1601,11 @@ class MicrosoftGraphServer {
         requestContext.run({ requestId: req.id as string, tenantId: null }, next);
       });
 
-      // Body-parser limit raised for MWARE-05 large uploads (plan 02-06). MCP
-      // tool payloads (e.g., base64-encoded file content routed through the
-      // graph-upload-large-file tool) can approach the chunk ceiling (60 MiB
-      // per D-08). Default '60mb' is safe for single-tenant; Phase 3 may add
-      // per-tenant overrides.
-      //
-      // express default is 100 KB for JSON and 100 KB for urlencoded — far
-      // below the 60 MiB upload ceiling, so without this raise large-file
-      // uploads over HTTP transport would 413 before reaching the tool.
-      const bodyParserLimit = process.env.MS365_MCP_BODY_PARSER_LIMIT || '60mb';
+      // Keep the global parser small because it runs before tenant auth and
+      // rate limiting. Operators that intentionally expose large HTTP MCP
+      // upload payloads can opt in with MS365_MCP_BODY_PARSER_LIMIT, but the
+      // default must fail closed for unauthenticated requests.
+      const bodyParserLimit = process.env.MS365_MCP_BODY_PARSER_LIMIT || '1mb';
       // body-parser's NextHandleFunction predates Express 5's RequestHandler;
       // the cast bridges the @types gap. See the webhook-receiver mount for
       // the matching discussion.
@@ -2081,10 +2081,8 @@ class MicrosoftGraphServer {
       });
 
       // Bind the http.Server return value so we can register graceful-shutdown
-      // hooks against it (plan 01-05). registerShutdownHooks internally calls
-      // process.removeAllListeners('SIGTERM'|'SIGINT') first, so this
-      // HTTP-mode registration supersedes any earlier stdio-mode registration
-      // from src/index.ts.
+      // hooks against it (plan 01-05). The shutdown registry closes every
+      // registered listener (main HTTP and optional metrics) on the same signal.
       let httpServer: import('node:http').Server;
       if (host) {
         httpServer = app.listen(port, host, () => {

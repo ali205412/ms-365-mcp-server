@@ -247,6 +247,34 @@ function codeFromError(error: unknown): string {
   return error instanceof Error && error.name ? error.name : 'tool_error';
 }
 
+function summarizeBodyValue(body: unknown): Record<string, unknown> {
+  if (body === undefined || body === null) {
+    return { present: false };
+  }
+  if (typeof body === 'string') {
+    return { present: true, type: 'string', bytes: Buffer.byteLength(body, 'utf8') };
+  }
+  if (Buffer.isBuffer(body)) {
+    return { present: true, type: 'buffer', bytes: body.byteLength };
+  }
+  if (typeof body === 'object') {
+    return { present: true, type: 'object', keys: Object.keys(body as Record<string, unknown>) };
+  }
+  return { present: true, type: typeof body };
+}
+
+function summarizeSerializedBody(
+  body: string | undefined,
+  headers: Record<string, string>
+): Record<string, unknown> | undefined {
+  if (body === undefined) return undefined;
+  return {
+    present: true,
+    bytes: Buffer.byteLength(body, 'utf8'),
+    contentType: headers['Content-Type'] ?? headers['content-type'],
+  };
+}
+
 function checkSyntheticGraphToolDispatch(toolAlias: string): CallToolResult | null {
   const tenantInfo = getRequestTenant();
   const rejection = checkDispatch(
@@ -493,7 +521,7 @@ async function executeGraphToolInner(
         }
       } else if (paramName === 'body') {
         body = paramValue;
-        logger.info(`Set body param: ${JSON.stringify(body)}`);
+        logger.info({ body: summarizeBodyValue(body) }, 'Set body param');
       } else if (
         path.includes(`:${paramName}`) ||
         path.includes(`{${paramName}}`) ||
@@ -615,10 +643,13 @@ async function executeGraphToolInner(
       options.accessToken = accountAccessToken;
     }
 
-    // Redact accessToken from log output to prevent credential leakage
-    const { accessToken: _redacted, ...safeOptions } = options;
+    // Redact accessToken and body content from log output to prevent
+    // credential, message body, file, and calendar PII leakage.
+    const { accessToken: _redacted, body: _body, ...safeOptions } = options;
+    const bodySummary = summarizeSerializedBody(_body, options.headers);
+    const loggableOptions = bodySummary ? { ...safeOptions, body: bodySummary } : safeOptions;
     logger.info(
-      `Making graph request to ${path} with options: ${JSON.stringify(safeOptions)}${_redacted ? ' [accessToken=REDACTED]' : ''}`
+      `Making graph request to ${path} with options: ${JSON.stringify(loggableOptions)}${_redacted ? ' [accessToken=REDACTED]' : ''}`
     );
 
     let response = await graphClient.graphRequest(path, options);
