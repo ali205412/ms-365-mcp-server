@@ -12,14 +12,20 @@ export type TrustProxySetting = false | true | number | string;
 export function resolveTrustProxySetting(
   raw = process.env.MS365_MCP_TRUST_PROXY
 ): TrustProxySetting {
-  if (raw === undefined || raw === '' || raw === '0' || raw.toLowerCase() === 'false') {
+  const normalized = raw?.trim();
+  if (
+    normalized === undefined ||
+    normalized === '' ||
+    normalized === '0' ||
+    normalized.toLowerCase() === 'false'
+  ) {
     return false;
   }
-  if (raw === '1' || raw.toLowerCase() === 'true') {
+  if (normalized === '1' || normalized.toLowerCase() === 'true') {
     return 1;
   }
-  if (/^[1-9]\d*$/.test(raw)) {
-    return Number.parseInt(raw, 10);
+  if (/^[1-9]\d*$/.test(normalized)) {
+    return Number.parseInt(normalized, 10);
   }
-  return raw;
+  return normalized;
 }

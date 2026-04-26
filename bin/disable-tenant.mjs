@@ -119,7 +119,7 @@ async function scanDel(redis, pattern) {
  *   redis?: { getRedis: () => any },
  *   tenantPool?: { evict: (id: string) => void, has: (id: string) => boolean },
  * }} [deps]
- * @returns {Promise<{ disabled: string, cacheKeysDeleted: number, pkceKeysDeleted: number, apiKeysRevoked: number }>}
+ * @returns {Promise<{ disabled: string, cacheKeysDeleted: number, pkceKeysDeleted: number, revokedCredentialCount: number }>}
  */
 export async function main(argv = process.argv.slice(2), deps = {}) {
   const tenantId = argv[0];
@@ -165,17 +165,22 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   }
 
   // Atomic DB write — one txn, two UPDATEs. If either fails, BOTH roll back.
-  const revokedApiKeyIds = await pgMod.withTransaction(async (client) => {
-    await client.query(
-      'UPDATE tenants SET disabled_at = NOW(), wrapped_dek = NULL, updated_at = NOW() WHERE id = $1',
-      [tenantId]
-    );
-    const { rows } = await client.query(
-      'UPDATE api_keys SET revoked_at = NOW() WHERE tenant_id = $1 AND revoked_at IS NULL RETURNING id',
-      [tenantId]
-    );
-    return rows.map((row) => row.id);
-  });
+  const { revokeNoticeIds, revokedCredentialCount } = await pgMod.withTransaction(
+    async (client) => {
+      await client.query(
+        'UPDATE tenants SET disabled_at = NOW(), wrapped_dek = NULL, updated_at = NOW() WHERE id = $1',
+        [tenantId]
+      );
+      const { rows, rowCount } = await client.query(
+        'UPDATE api_keys SET revoked_at = NOW() WHERE tenant_id = $1 AND revoked_at IS NULL RETURNING id',
+        [tenantId]
+      );
+      return {
+        revokeNoticeIds: rows.map((row) => row.id),
+        revokedCredentialCount: rowCount ?? 0,
+      };
+    }
+  );
 
   // WR-03 fix: SCAN-based deletion (was redis.keys() — O(n) blocking
   // single-threaded command queue over the entire keyspace). After-commit
@@ -185,7 +190,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const cacheKeysDeleted = await scanDel(redis, `mcp:cache:${tenantId}:*`);
   const pkceKeysDeleted = await scanDel(redis, `mcp:pkce:${tenantId}:*`);
 
-  for (const keyId of revokedApiKeyIds) {
+  for (const keyId of revokeNoticeIds) {
     await redis.publish(API_KEY_REVOKE_CHANNEL, keyId);
   }
 
@@ -209,7 +214,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       ip: null,
       requestId: `cli-${Date.now()}`,
       result: 'success',
-      meta: { cacheKeysDeleted, pkceKeysDeleted, apiKeysRevoked: revokedApiKeyIds.length },
+      meta: { cacheKeysDeleted, pkceKeysDeleted, revokedCredentialCount },
     });
   }
 
@@ -217,7 +222,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     disabled: tenantId,
     cacheKeysDeleted,
     pkceKeysDeleted,
-    apiKeysRevoked: revokedApiKeyIds.length,
+    revokedCredentialCount,
   };
 }
 

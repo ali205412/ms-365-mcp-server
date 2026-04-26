@@ -139,7 +139,7 @@ describe('plan 03-05 Task 3 — bin/disable-tenant.mjs cascade (SC#4, TENANT-07)
     expect(result.disabled).toBe(id);
     expect(result.cacheKeysDeleted).toBe(2);
     expect(result.pkceKeysDeleted).toBe(1);
-    expect(result.apiKeysRevoked).toBe(1);
+    expect(result.revokedCredentialCount).toBe(1);
 
     // DB assertions
     const tRows = await pool.query(`SELECT wrapped_dek, disabled_at FROM tenants WHERE id = $1`, [

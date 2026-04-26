@@ -54,8 +54,8 @@ import { scheduleAfterCommit } from './postgres.js';
  *   Phase 4 admin.* (ADMIN-01..06):
  *   admin.tenant.create            { tenantId, clientId, mode, cloudType }
  *   admin.tenant.update            { tenantId, fieldsChanged: string[] }
- *   admin.tenant.disable           { tenantId, cacheKeysDeleted, pkceKeysDeleted, apiKeysRevoked }
- *   admin.tenant.delete            { tenantId, apiKeysRevoked }
+ *   admin.tenant.disable           { tenantId, cacheKeysDeleted, pkceKeysDeleted, revokedCredentialCount }
+ *   admin.tenant.delete            { tenantId, revokedCredentialCount }
  *   admin.tenant.rotate-secret     { tenantId, oldWrappedDekHash, newWrappedDekHash }
  *   admin.api-key.mint             { keyId, displaySuffix, tenantId }
  *   admin.api-key.revoke           { keyId, tenantId }

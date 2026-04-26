@@ -413,7 +413,7 @@ describe('plan 04-06 Task 2 — audit rollback + shadow log (ADMIN-06, D-13, T-0
       const meta = row.meta as Record<string, unknown>;
       expect(typeof meta.cacheKeysDeleted).toBe('number');
       expect(typeof meta.pkceKeysDeleted).toBe('number');
-      expect(typeof meta.apiKeysRevoked).toBe('number');
+      expect(typeof meta.revokedCredentialCount).toBe('number');
     } finally {
       await close();
     }

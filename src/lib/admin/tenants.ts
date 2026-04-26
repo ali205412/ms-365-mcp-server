@@ -484,12 +484,12 @@ async function evictRevokedApiKeys(
   tenantId: string,
   operation: 'disable' | 'delete'
 ): Promise<void> {
-  for (const keyId of keyIds) {
+  for (const [keyIndex, keyId] of keyIds.entries()) {
     try {
       evictApiKeyFromCacheByKeyId(keyId);
     } catch (err) {
       logger.warn(
-        { tenantId, keyId, err: (err as Error).message },
+        { tenantId, keyIndex, err: (err as Error).message },
         `admin-tenants: api-key cache eviction failed on ${operation}`
       );
     }
@@ -497,7 +497,7 @@ async function evictRevokedApiKeys(
       await redis.publish(API_KEY_REVOKE_CHANNEL, keyId);
     } catch (err) {
       logger.warn(
-        { tenantId, keyId, err: (err as Error).message },
+        { tenantId, keyIndex, err: (err as Error).message },
         `admin-tenants: api-key revoke publish failed on ${operation}`
       );
     }
@@ -1071,7 +1071,12 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
     if (!redisReadyOrAbort(res, deps.redis, req.id)) return;
 
     type DisableOutcome =
-      | { kind: 'ok'; disabledAt: Date; revokedApiKeyIds: string[] }
+      | {
+          kind: 'ok';
+          disabledAt: Date;
+          revokeNoticeIds: string[];
+          revokedCredentialCount: number;
+        }
       | { kind: 'not_found' }
       | { kind: 'already_disabled' };
 
@@ -1099,10 +1104,12 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
              RETURNING id`,
           [id]
         );
+        const revokeNoticeIds = keyUpd.rows.map((row) => row.id);
         return {
           kind: 'ok',
           disabledAt: upd.rows[0]!.disabled_at,
-          revokedApiKeyIds: keyUpd.rows.map((row) => row.id),
+          revokeNoticeIds,
+          revokedCredentialCount: keyUpd.rowCount ?? 0,
         };
       });
     } catch (err) {
@@ -1158,7 +1165,8 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
         'admin-tenants: publishTenantInvalidation failed on disable'
       );
     }
-    await evictRevokedApiKeys(deps.redis, outcome.revokedApiKeyIds, id, 'disable');
+    const revokedCredentialCount = outcome.revokedCredentialCount;
+    await evictRevokedApiKeys(deps.redis, outcome.revokeNoticeIds, id, 'disable');
 
     await writeAuditStandalone(deps.pgPool, {
       tenantId: id,
@@ -1172,7 +1180,7 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
         tenantId: id,
         cacheKeysDeleted,
         pkceKeysDeleted,
-        apiKeysRevoked: outcome.revokedApiKeyIds.length,
+        revokedCredentialCount,
       },
     });
 
@@ -1182,7 +1190,7 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
         actor: admin.actor,
         cacheKeysDeleted,
         pkceKeysDeleted,
-        apiKeysRevoked: outcome.revokedApiKeyIds.length,
+        revokedCredentialCount,
       },
       'admin-tenants: disabled'
     );
@@ -1215,7 +1223,9 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
     }
     if (!redisReadyOrAbort(res, deps.redis, req.id)) return;
 
-    type DelOutcome = { kind: 'ok'; revokedApiKeyIds: string[] } | { kind: 'not_found' };
+    type DelOutcome =
+      | { kind: 'ok'; revokeNoticeIds: string[]; revokedCredentialCount: number }
+      | { kind: 'not_found' };
 
     let outcome: DelOutcome;
     try {
@@ -1240,7 +1250,8 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
              RETURNING id`,
           [id]
         );
-        const revokedApiKeyIds = keyUpd.rows.map((row) => row.id);
+        const revokeNoticeIds = keyUpd.rows.map((row) => row.id);
+        const revokedCredentialCount = keyUpd.rowCount ?? 0;
         // Emit the delete audit row BEFORE DELETE FROM tenants so FK CASCADE
         // wipes it along with the tenant — keeps the audit trail internally
         // consistent (no orphan audit rows). External durability provided by
@@ -1253,10 +1264,10 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
           ip: req.ip ?? null,
           requestId: req.id ?? 'unknown',
           result: 'success',
-          meta: { tenantId: id, apiKeysRevoked: revokedApiKeyIds.length },
+          meta: { tenantId: id, revokedCredentialCount },
         });
         await client.query(`DELETE FROM tenants WHERE id = $1`, [id]);
-        return { kind: 'ok', revokedApiKeyIds };
+        return { kind: 'ok', revokeNoticeIds, revokedCredentialCount };
       });
     } catch (err) {
       logger.error(
@@ -1318,7 +1329,8 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
         'admin-tenants: publishTenantInvalidation failed on delete'
       );
     }
-    await evictRevokedApiKeys(deps.redis, outcome.revokedApiKeyIds, id, 'delete');
+    const revokedCredentialCount = outcome.revokedCredentialCount;
+    await evictRevokedApiKeys(deps.redis, outcome.revokeNoticeIds, id, 'delete');
 
     // Post-delete structured log — the durable record because the in-txn
     // audit row CASCADE-deletes with the tenant.
@@ -1330,7 +1342,7 @@ export function createTenantsRoutes(deps: AdminRouterDeps): Router {
         cacheKeysDeleted,
         pkceKeysDeleted,
         webhookDedupKeysDeleted,
-        apiKeysRevoked: outcome.revokedApiKeyIds.length,
+        revokedCredentialCount,
         requestId: req.id ?? 'unknown',
       },
       'admin-tenants: deleted'

@@ -503,7 +503,7 @@ describe('plan 04-02 Task 2 — /admin/tenants rotate-secret + disable + delete'
         typeof auditRows[0].meta === 'string' ? JSON.parse(auditRows[0].meta) : auditRows[0].meta;
       expect(meta.cacheKeysDeleted).toBe(2);
       expect(meta.pkceKeysDeleted).toBe(1);
-      expect(meta.apiKeysRevoked).toBe(1);
+      expect(meta.revokedCredentialCount).toBe(1);
       // wrapped_dek MUST NOT appear in audit meta
       expect(JSON.stringify(meta).toLowerCase()).not.toContain('wrapped_dek');
       expect(JSON.stringify(meta).toLowerCase()).not.toContain('wrappeddek');

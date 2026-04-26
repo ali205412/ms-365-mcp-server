@@ -121,6 +121,16 @@ async function shutdown(signal: string): Promise<void> {
   process.exit(0);
 }
 
+function runShutdown(signal: string): Promise<void> {
+  return shutdown(signal).catch((err: unknown) => {
+    activeLogger?.error(
+      { err: err instanceof Error ? err.message : String(err), signal },
+      'Graceful shutdown failed unexpectedly'
+    );
+    process.exit(1);
+  });
+}
+
 /**
  * Register SIGTERM + SIGINT handlers that run the graceful drain sequence.
  *
@@ -138,7 +148,7 @@ export function registerShutdownHooks(server: Server | null, logger: ShutdownLog
 
   if (!hooksRegistered) {
     hooksRegistered = true;
-    process.on('SIGTERM', () => shutdown('SIGTERM'));
-    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => runShutdown('SIGTERM'));
+    process.on('SIGINT', () => runShutdown('SIGINT'));
   }
 }

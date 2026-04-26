@@ -3,6 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import express, { type Request, type Response, type RequestHandler } from 'express';
+import expressRateLimit from 'express-rate-limit';
 import logger, { enableConsoleLogging, rawPinoLogger } from './logger.js';
 import { registerAuthTools } from './auth-tools.js';
 import { registerGraphTools, registerDiscoveryTools } from './graph-tools.js';
@@ -37,6 +38,7 @@ import { createCorsMiddleware, type CorsMode } from './lib/cors.js';
 import { getRedis } from './lib/redis.js';
 import { registerAuditResourcePublisher } from './lib/audit.js';
 import { resolveTrustProxySetting } from './lib/trust-proxy.js';
+import { createRateLimitMiddleware } from './lib/rate-limit/middleware.js';
 import type { CloudType } from './cloud-config.js';
 import type { PkceStore } from './lib/pkce-store/pkce-store.js';
 import { MemoryPkceStore } from './lib/pkce-store/memory-store.js';
@@ -72,6 +74,20 @@ import { nanoid } from 'nanoid';
  * legacy mount entirely; at that point this sentinel disappears.
  */
 const LEGACY_SINGLE_TENANT_KEY = '_';
+
+function createHttpRouteRateLimit(): RequestHandler {
+  const rawLimit = process.env.MS365_MCP_HTTP_ROUTE_RATE_LIMIT_PER_MIN;
+  const parsedLimit = rawLimit ? Number.parseInt(rawLimit, 10) : 600;
+  const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 600;
+
+  return expressRateLimit({
+    windowMs: 60_000,
+    limit,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'rate_limited', reason: 'route_rate' },
+  }) as unknown as RequestHandler;
+}
 
 /**
  * Parse HTTP option into host and port components.
@@ -1428,34 +1444,52 @@ class MicrosoftGraphServer {
     // route JSON-RPC responses through Express's response methods.
     const toolsListFilter = createToolsListFilterMiddleware();
 
-    app.get('/t/:tenantId/sse', seedTenantContext, authSelector, legacySseGet);
+    // region:phase6-rate-limit (plan 06-09 — closes OPS-08 gap from 06-04 Task 3)
+    // Mount the per-tenant rate-limit middleware BETWEEN the existing chain
+    // members and transport handlers. Both request-rate and graph-points
+    // budgets are gated (per ROADMAP SC#3 + RESEARCH.md §Open Question #5).
+    const routeRateLimit = createHttpRouteRateLimit();
+    const rateLimit = createRateLimitMiddleware({ redis });
+
+    // codeql[js/missing-rate-limiting]: createRateLimitMiddleware gates this route before the transport handler.
+    app.get(
+      '/t/:tenantId/sse',
+      seedTenantContext,
+      routeRateLimit,
+      authSelector,
+      rateLimit,
+      legacySseGet
+    );
     app.post(
       '/t/:tenantId/messages',
       seedTenantContext,
+      routeRateLimit,
       authSelector,
       toolsListFilter,
+      rateLimit,
       legacySsePost
     );
-    // region:phase6-rate-limit (plan 06-09 — closes OPS-08 gap from 06-04 Task 3)
-    // Mount the per-tenant rate-limit middleware BETWEEN the existing chain
-    // members and the streamableHttp handler. Both request-rate and
-    // graph-points budgets are gated (per ROADMAP SC#3 + RESEARCH.md
-    // §Open Question #5). legacy SSE routes (/t/:tenantId/sse +
-    // /t/:tenantId/messages) are INTENTIONALLY NOT gated — SSE streams are
-    // long-lived; per-request gating would break MCP streaming semantics.
-    // D-04 per-tenant granularity is still preserved because the SAME tenant's
-    // Streamable HTTP requests (below) carry the budget.
-    const { createRateLimitMiddleware } = await import('./lib/rate-limit/middleware.js');
-    const rateLimit = createRateLimitMiddleware({ redis });
+
+    // codeql[js/missing-rate-limiting]: createRateLimitMiddleware gates this route before the transport handler.
     app.post(
       '/t/:tenantId/mcp',
       seedTenantContext,
+      routeRateLimit,
       authSelector,
       toolsListFilter,
       rateLimit,
       streamableHttp
     );
-    app.get('/t/:tenantId/mcp', seedTenantContext, authSelector, rateLimit, streamableHttp);
+
+    // codeql[js/missing-rate-limiting]: createRateLimitMiddleware gates this route before the transport handler.
+    app.get(
+      '/t/:tenantId/mcp',
+      seedTenantContext,
+      routeRateLimit,
+      authSelector,
+      rateLimit,
+      streamableHttp
+    );
     // endregion:phase6-rate-limit
 
     // region:phase4-webhook-receiver
@@ -1928,6 +1962,13 @@ class MicrosoftGraphServer {
       // not match. Plan 03-09 retires this entire legacy mount; until then,
       // this is the inline guard.
       const legacySecrets = this.secrets;
+      const legacyMcpRouteRateLimit = createHttpRouteRateLimit();
+      const legacyMcpRateLimit = createRateLimitMiddleware({ redis: getRedis() });
+      const seedLegacyRateLimitTenant: RequestHandler = (req, _res, next) => {
+        const tenantReq = req as Request & { tenant?: TenantRow };
+        tenantReq.tenant ??= { id: LEGACY_SINGLE_TENANT_KEY, rate_limits: null } as TenantRow;
+        next();
+      };
       const legacyMcpAccessTokenExtractor = async (
         req: Request & { microsoftAuth?: { accessToken: string } },
         res: Response,
@@ -1972,8 +2013,12 @@ class MicrosoftGraphServer {
       };
 
       // Handle both GET and POST methods as required by MCP Streamable HTTP specification
+      // codeql[js/missing-rate-limiting]: legacyMcpRateLimit gates this route before bearer-token handling.
       app.get(
         '/mcp',
+        legacyMcpRouteRateLimit,
+        seedLegacyRateLimitTenant,
+        legacyMcpRateLimit,
         legacyMcpAccessTokenExtractor,
         async (req: Request & { microsoftAuth?: { accessToken: string } }, res: Response) => {
           const handler = async () => {
@@ -2025,8 +2070,12 @@ class MicrosoftGraphServer {
         }
       );
 
+      // codeql[js/missing-rate-limiting]: legacyMcpRateLimit gates this route before bearer-token handling.
       app.post(
         '/mcp',
+        legacyMcpRouteRateLimit,
+        seedLegacyRateLimitTenant,
+        legacyMcpRateLimit,
         legacyMcpAccessTokenExtractor,
         async (req: Request & { microsoftAuth?: { accessToken: string } }, res: Response) => {
           const handler = async () => {

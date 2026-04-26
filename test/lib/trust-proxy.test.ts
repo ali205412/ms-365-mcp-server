@@ -13,7 +13,10 @@ describe('resolveTrustProxySetting', () => {
     expect(resolveTrustProxySetting('1')).toBe(1);
     expect(resolveTrustProxySetting('true')).toBe(1);
     expect(resolveTrustProxySetting('2')).toBe(2);
+    expect(resolveTrustProxySetting(' true ')).toBe(1);
+    expect(resolveTrustProxySetting(' 3 ')).toBe(3);
     expect(resolveTrustProxySetting('loopback')).toBe('loopback');
+    expect(resolveTrustProxySetting(' loopback ')).toBe('loopback');
     expect(resolveTrustProxySetting('10.0.0.0/8')).toBe('10.0.0.0/8');
   });
 });
