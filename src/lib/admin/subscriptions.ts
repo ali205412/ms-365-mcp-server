@@ -506,12 +506,10 @@ function errorContent(err: unknown): {
   };
 }
 
-function guardSubscriptionTool(alias: string):
-  | {
-      content: Array<{ type: 'text'; text: string }>;
-      isError: true;
-    }
-  | null {
+function guardSubscriptionTool(alias: string): {
+  content: Array<{ type: 'text'; text: string }>;
+  isError: true;
+} | null {
   const tenant = getRequestTenant();
   const rejection = checkDispatch(alias, tenant.enabledToolsSet, tenant.id, tenant.presetVersion);
   if (!rejection) return null;

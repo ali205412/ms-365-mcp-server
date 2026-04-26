@@ -19,10 +19,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { decodeJwt } from 'jose';
 import type { Request, Response, NextFunction } from 'express';
-import {
-  createBearerMiddleware,
-  type BearerTokenVerifier,
-} from '../../src/lib/microsoft-auth.js';
+import { createBearerMiddleware, type BearerTokenVerifier } from '../../src/lib/microsoft-auth.js';
 import { requestContext, getRequestTokens } from '../../src/request-context.js';
 import type { TenantRow } from '../../src/lib/tenant/tenant-row.js';
 

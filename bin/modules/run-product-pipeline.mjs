@@ -173,9 +173,7 @@ export async function runProductPipeline(opts) {
     fs.writeFileSync(tempFragmentPath, code);
 
     // Extract product aliases and enforce the namespace invariant.
-    const allProductFragmentAliases = [...code.matchAll(/alias:\s*["']([^"']*)/g)].map(
-      (m) => m[1]
-    );
+    const allProductFragmentAliases = [...code.matchAll(/alias:\s*["']([^"']*)/g)].map((m) => m[1]);
     const unprefixedProductAliases = allProductFragmentAliases.filter(
       (a) => !a.startsWith(opts.prefix)
     );

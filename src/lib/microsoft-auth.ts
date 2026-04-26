@@ -92,11 +92,7 @@ export async function verifyMicrosoftBearerToken({
  */
 export function createBearerMiddleware(
   deps: { verifyToken?: BearerTokenVerifier } = {}
-): (
-  req: Request,
-  res: Response,
-  next: NextFunction
-) => Promise<void> {
+): (req: Request, res: Response, next: NextFunction) => Promise<void> {
   const verifyToken = deps.verifyToken ?? verifyMicrosoftBearerToken;
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -143,7 +139,7 @@ export function createBearerMiddleware(
             errorDescription: 'JWT verification failed',
           })
         )
-      .json({ error: 'invalid_token' });
+        .json({ error: 'invalid_token' });
       return;
     }
 
