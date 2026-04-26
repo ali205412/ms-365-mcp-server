@@ -9,7 +9,7 @@
 -- Schema is intentionally narrow — delta_link opaque strings from Graph can
 -- be arbitrarily long; relying on text with no length bound matches the
 -- Microsoft docs contract.
-CREATE TABLE delta_tokens (
+CREATE TABLE IF NOT EXISTS delta_tokens (
   tenant_id    uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   resource     text NOT NULL,
   delta_link   text NOT NULL,

@@ -12,7 +12,7 @@
 --     regular Up migrations when MS365_MCP_PGVECTOR_ENABLED is enabled and
 --     pg_available_extensions advertises the vector extension.
 
-CREATE TABLE tenant_tool_bookmarks (
+CREATE TABLE IF NOT EXISTS tenant_tool_bookmarks (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   alias text NOT NULL,
@@ -23,10 +23,10 @@ CREATE TABLE tenant_tool_bookmarks (
   UNIQUE (tenant_id, alias)
 );
 
-CREATE INDEX idx_tenant_tool_bookmarks_tenant
+CREATE INDEX IF NOT EXISTS idx_tenant_tool_bookmarks_tenant
   ON tenant_tool_bookmarks (tenant_id);
 
-CREATE TABLE tenant_tool_recipes (
+CREATE TABLE IF NOT EXISTS tenant_tool_recipes (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   name text NOT NULL,
@@ -38,10 +38,10 @@ CREATE TABLE tenant_tool_recipes (
   UNIQUE (tenant_id, name)
 );
 
-CREATE INDEX idx_tenant_tool_recipes_tenant
+CREATE INDEX IF NOT EXISTS idx_tenant_tool_recipes_tenant
   ON tenant_tool_recipes (tenant_id);
 
-CREATE TABLE tenant_facts (
+CREATE TABLE IF NOT EXISTS tenant_facts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   scope text NOT NULL,
@@ -51,10 +51,10 @@ CREATE TABLE tenant_facts (
   updated_at timestamptz NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_tenant_facts_tenant_scope
+CREATE INDEX IF NOT EXISTS idx_tenant_facts_tenant_scope
   ON tenant_facts (tenant_id, scope);
 
-CREATE INDEX idx_tenant_facts_content_tsv
+CREATE INDEX IF NOT EXISTS idx_tenant_facts_content_tsv
   ON tenant_facts USING gin (content_tsv);
 
 -- Down Migration

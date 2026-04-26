@@ -27,14 +27,18 @@
 import type { Request, Response, NextFunction } from 'express';
 import type { TenantRow } from './tenant/tenant-row.js';
 import type { TenantPool } from './tenant/tenant-pool.js';
+import type { RedisClient } from './redis.js';
 import { createBearerMiddleware, type BearerTokenVerifier } from './microsoft-auth.js';
 import { requestContext, getRequestTokens } from '../request-context.js';
 import { buildWwwAuthenticate } from './www-authenticate.js';
 import logger from '../logger.js';
 import { timingSafeEqual } from 'node:crypto';
+import { hasDelegatedAccessToken } from './delegated-access-tokens.js';
+import { SessionStore } from './session-store.js';
 
 export interface AuthSelectorDeps {
-  tenantPool: Pick<TenantPool, 'acquire' | 'buildCachePlugin'>;
+  tenantPool: Pick<TenantPool, 'acquire' | 'buildCachePlugin' | 'getDekForTenant'>;
+  redis?: RedisClient;
   bearerVerifier?: BearerTokenVerifier;
 }
 
@@ -94,10 +98,57 @@ export function createAuthSelectorMiddleware(
       return;
     }
 
-    // 1. Bearer header wins over any tenant.mode — the bearer middleware
-    //    owns its own requestContext.run and delegates to next() on match.
+    // 1. Bearer header wins over any tenant.mode. Delegated OAuth tokens
+    //    returned by /t/:tenantId/token are admitted by a server-side Redis
+    //    marker first; direct bearer tokens fall back to the strict Microsoft
+    //    JWT verifier below.
     const hasAuthHeader = req.headers.authorization?.startsWith('Bearer ');
     if (hasAuthHeader) {
+      const token = req.headers.authorization!.substring(7);
+      if (tenant.mode === 'delegated' && deps.redis) {
+        try {
+          const wasIssuedHere = await hasDelegatedAccessToken({
+            redis: deps.redis,
+            tenantId: tenant.id,
+            accessToken: token,
+          });
+          if (wasIssuedHere) {
+            let graphAccessToken = token;
+            try {
+              await deps.tenantPool.acquire(tenant);
+              const dek = deps.tenantPool.getDekForTenant(tenant.id);
+              const sessionStore = new SessionStore(deps.redis, dek);
+              const session = await sessionStore.get(tenant.id, token);
+              graphAccessToken = session?.graphAccessToken ?? token;
+            } catch (err) {
+              logger.warn(
+                { err: (err as Error).message, tenantId: tenant.id },
+                'delegated session lookup failed; falling back to presented bearer'
+              );
+            }
+            const existing = getRequestTokens() ?? {};
+            requestContext.run(
+              {
+                ...existing,
+                accessToken: graphAccessToken,
+                clientAccessToken: token,
+                flow: 'delegated',
+                authClientId: tenant.client_id,
+                tenantRow: tenant,
+              },
+              () => next()
+            );
+            return;
+          }
+        } catch (err) {
+          logger.error(
+            { err: (err as Error).message, tenantId: tenant.id },
+            'delegated access marker lookup failed'
+          );
+          res.status(502).json({ error: 'delegated_access_lookup_failed' });
+          return;
+        }
+      }
       await bearer(req, res, next);
       return;
     }
@@ -145,6 +196,7 @@ export function createAuthSelectorMiddleware(
             accessToken: resp.accessToken,
             flow: 'app-only',
             authClientId: tenant.client_id,
+            tenantRow: tenant,
           },
           () => next()
         );

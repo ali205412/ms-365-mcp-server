@@ -39,6 +39,10 @@ import { getRedis } from './lib/redis.js';
 import { registerAuditResourcePublisher } from './lib/audit.js';
 import { resolveTrustProxySetting } from './lib/trust-proxy.js';
 import { createRateLimitMiddleware } from './lib/rate-limit/middleware.js';
+import {
+  delegatedAccessTokenTtlSeconds,
+  rememberDelegatedAccessToken,
+} from './lib/delegated-access-tokens.js';
 import type { CloudType } from './cloud-config.js';
 import type { PkceStore } from './lib/pkce-store/pkce-store.js';
 import { MemoryPkceStore } from './lib/pkce-store/memory-store.js';
@@ -344,9 +348,9 @@ export function createTokenHandler(config: TokenHandlerConfig) {
         // WR-01 fix: the legacy /token refresh_token branch accepted a
         // refresh token from the request body, which violated the SECUR-02
         // invariant that "refresh tokens NEVER cross the client boundary
-        // in v2" (the Phase 3 SessionStore wraps refresh tokens server-side
-        // keyed by sha256(accessToken); the Graph 401 path consults the
-        // store rather than reading any client-supplied token).
+        // in v2" (the Phase 3 SessionStore wraps refresh tokens server-side;
+        // the Graph 401 path consults the store rather than reading any
+        // client-supplied token).
         //
         // Plan 03-09 retires the entire legacy mount; in the meantime
         // operators on a v1-style HTTP deployment that still posts to
@@ -702,6 +706,19 @@ function isDelegatedMsalClient(client: unknown): client is DelegatedMsalClient {
   );
 }
 
+function serializeMsalCache(client: unknown): string | undefined {
+  if (
+    typeof client !== 'object' ||
+    client === null ||
+    !('getTokenCache' in client) ||
+    typeof (client as { getTokenCache: unknown }).getTokenCache !== 'function'
+  ) {
+    return undefined;
+  }
+  const cache = (client as { getTokenCache: () => { serialize?: () => string } }).getTokenCache();
+  return typeof cache.serialize === 'function' ? cache.serialize() : undefined;
+}
+
 /**
  * /token handler (tenant-aware per plan 03-06 + plan 03-07 SECUR-02).
  *
@@ -712,11 +729,11 @@ function isDelegatedMsalClient(client: unknown): client is DelegatedMsalClient {
  * 4. Calls `tenantPool.acquire(tenant)` to get the tenant's MSAL client.
  * 5. Calls `client.acquireTokenByCode({code, codeVerifier, redirectUri, scopes})`
  *    with the server-side verifier (two-leg PKCE).
- * 6. **Plan 03-07 SECUR-02**: if MSAL returned a refresh_token, envelope-
- *    encrypt it (per-tenant DEK) and persist a SessionRecord at
- *    `mcp:session:{tenantId}:{sha256(accessToken)}` via SessionStore. The
- *    Graph 401 handler (graph-client.ts refreshSessionAndRetry) consults
- *    this store instead of a custom HTTP header.
+ * 6. **Plan 03-07 SECUR-02**: persist a SessionRecord at
+ *    `mcp:session:{tenantId}:{sha256(clientAccessToken)}` via SessionStore.
+ *    The record contains either the exposed refresh token or the serialized
+ *    MSAL cache and the current Graph access token; the Graph 401 handler
+ *    consults this store instead of a custom HTTP header.
  * 7. Responds with `{access_token, token_type, expires_in}` — the response
  *    body NEVER contains `refresh_token` (SECUR-02: refresh tokens never
  *    cross the client trust boundary in v2).
@@ -814,41 +831,59 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
         return;
       }
 
-      // Plan 03-07 SECUR-02: persist the refresh token server-side, wrapped
-      // with the per-tenant DEK. The response body below carries ONLY the
-      // access token + token_type + expires_in — never refresh_token.
-      // MSAL's AuthenticationResult type doesn't expose refreshToken (by
-      // design — refresh tokens live in MSAL's cache). At runtime the
-      // authority echoes it back on the acquire call; we narrow via a
-      // local cast rather than pollute the callsite with `as any`.
+      // Plan 03-07 SECUR-02: persist a server-side delegated session. The
+      // response body below carries ONLY the access token + token_type +
+      // expires_in — never refresh_token. MSAL Node usually keeps refresh
+      // tokens inside its cache and exposes only account metadata, so the
+      // session record supports both raw-refresh-token and silent-refresh
+      // paths.
       const refreshTokenFromAuthority = (result as { refreshToken?: string }).refreshToken;
-      if (refreshTokenFromAuthority) {
-        try {
-          const dek = tenantPool.getDekForTenant(tenant.id);
-          const { SessionStore } = await import('./lib/session-store.js');
-          const sessionStore = new SessionStore(redis, dek);
-          await sessionStore.put(tenant.id, result.accessToken, {
-            tenantId: tenant.id,
-            refreshToken: refreshTokenFromAuthority,
-            accountHomeId: result.account?.homeAccountId,
-            clientId: tenant.client_id,
-            scopes,
-            createdAt: Date.now(),
-          });
-        } catch (sessionErr) {
-          // Session-store failure must NOT break the OAuth flow — the client
-          // still gets a valid access token; the 401-refresh path will fall
-          // back to a fresh OAuth round-trip if the session entry isn't
-          // present. Log the failure so operators can investigate.
-          logger.warn(
-            { tenantId: tenant.id, err: (sessionErr as Error).message },
-            'SessionStore put failed; proceeding without server-side refresh token'
-          );
-        }
+      try {
+        const dek = tenantPool.getDekForTenant(tenant.id);
+        const { SessionStore } = await import('./lib/session-store.js');
+        const sessionStore = new SessionStore(redis, dek);
+        await sessionStore.put(tenant.id, result.accessToken, {
+          tenantId: tenant.id,
+          refreshToken: refreshTokenFromAuthority,
+          accountHomeId: result.account?.homeAccountId,
+          msalCache: serializeMsalCache(msal),
+          graphAccessToken: result.accessToken,
+          graphAccessTokenExpiresOn: result.expiresOn?.toISOString(),
+          clientId: tenant.client_id,
+          scopes,
+          createdAt: Date.now(),
+        });
+      } catch (sessionErr) {
+        logger.error(
+          { tenantId: tenant.id, err: (sessionErr as Error).message },
+          'SessionStore put failed; refusing unusable delegated token'
+        );
+        emitTokenAudit(tenant.id, 'failure', { error: 'delegated_session_store_failed' }, req);
+        res.status(502).json({ error: 'delegated_session_store_failed' });
+        return;
       }
 
-      const expiresMs = result.expiresOn ? Math.max(0, result.expiresOn.getTime() - Date.now()) : 0;
-      const expiresIn = Math.max(60, Math.floor(expiresMs / 1000));
+      // The client-facing MCP bearer is backed by the server-side delegated
+      // session. It must remain usable after the underlying Graph access token
+      // expires so the server can refresh Graph credentials behind the scenes.
+      const expiresIn = delegatedAccessTokenTtlSeconds();
+
+      try {
+        await rememberDelegatedAccessToken({
+          redis,
+          tenantId: tenant.id,
+          accessToken: result.accessToken,
+          expiresOn: result.expiresOn,
+        });
+      } catch (markerErr) {
+        logger.error(
+          { err: (markerErr as Error).message, tenantId: tenant.id },
+          'delegated access marker write failed'
+        );
+        emitTokenAudit(tenant.id, 'failure', { error: 'delegated_access_store_failed' }, req);
+        res.status(502).json({ error: 'delegated_access_store_failed' });
+        return;
+      }
 
       // Plan 03-10: success audit row — meta carries clientId + scopes (no PII).
       emitTokenAudit(tenant.id, 'success', { clientId: tenant.client_id, scopes }, req);
@@ -1275,8 +1310,8 @@ class MicrosoftGraphServer {
 
     // Per-tenant OAuth discovery — /.well-known/* URLs scoped to a tenant
     // segment so downstream clients bind the right issuer. publicBase
-    // (MS365_MCP_PUBLIC_URL) is the browser-facing origin for the authorize
-    // endpoint; token endpoint stays on the request origin for s2s clients.
+    // (MS365_MCP_PUBLIC_URL) is the canonical external origin for all OAuth
+    // metadata. Falling back to the request origin is dev-only behavior.
     //
     // We expose BOTH discovery shapes for each metadata document:
     //   - /t/:tenantId/.well-known/<suffix>     (OIDC-discovery shape, well-known
@@ -1289,9 +1324,9 @@ class MicrosoftGraphServer {
     const buildAuthServerMetadata = (tenant: TenantRow, req: Request): Record<string, unknown> => {
       const protocol = req.secure ? 'https' : 'http';
       const requestOrigin = `${protocol}://${req.get('host')}`;
-      const browserBase = publicBase ?? requestOrigin;
-      const tenantBase = `${browserBase}/t/${tenant.id}`;
-      const tokenBase = `${requestOrigin}/t/${tenant.id}`;
+      const externalBase = publicBase ?? requestOrigin;
+      const tenantBase = `${externalBase}/t/${tenant.id}`;
+      const tokenBase = `${externalBase}/t/${tenant.id}`;
       const scopes = tenant.allowed_scopes.length
         ? tenant.allowed_scopes
         : buildScopesFromEndpoints(this.options.orgMode, this.options.enabledTools);
@@ -1307,9 +1342,9 @@ class MicrosoftGraphServer {
         scopes_supported: scopes,
       };
       // Advertise DCR (RFC 7591). The /register endpoint is mounted globally
-      // (not per-tenant) so we point at the requestOrigin's /register.
+      // (not per-tenant) so we point at the canonical external /register.
       if (this.options.enableDynamicRegistration) {
-        metadata.registration_endpoint = `${requestOrigin}/register`;
+        metadata.registration_endpoint = `${externalBase}/register`;
       }
       return metadata;
     };
@@ -1320,13 +1355,13 @@ class MicrosoftGraphServer {
     ): Record<string, unknown> => {
       const protocol = req.secure ? 'https' : 'http';
       const requestOrigin = `${protocol}://${req.get('host')}`;
-      const browserBase = publicBase ?? requestOrigin;
-      const tenantBase = `${browserBase}/t/${tenant.id}`;
+      const externalBase = publicBase ?? requestOrigin;
+      const tenantBase = `${externalBase}/t/${tenant.id}`;
       const scopes = tenant.allowed_scopes.length
         ? tenant.allowed_scopes
         : buildScopesFromEndpoints(this.options.orgMode, this.options.enabledTools);
       return {
-        resource: `${requestOrigin}/t/${tenant.id}/mcp`,
+        resource: `${externalBase}/t/${tenant.id}/mcp`,
         authorization_servers: [tenantBase],
         scopes_supported: scopes,
         bearer_methods_supported: ['header'],
@@ -1407,7 +1442,7 @@ class MicrosoftGraphServer {
     // All three share the SAME createMcpServer(tenant) factory (TRANS-05)
     // so tool registration is identical across transports. The closure
     // captures `this` + tenantPool + redis from the bootstrap scope.
-    const authSelector = createAuthSelectorMiddleware({ tenantPool });
+    const authSelector = createAuthSelectorMiddleware({ tenantPool, redis });
     // NOT cached: MCP SDK's Server.connect(transport) is strictly 1:1 —
     // reusing a server across requests fails with "Already connected to
     // a transport". Per-tenant caching was attempted (commit d6706e3)
@@ -1725,14 +1760,14 @@ class MicrosoftGraphServer {
       app.get('/.well-known/oauth-authorization-server', async (req, res) => {
         const protocol = req.secure ? 'https' : 'http';
         const requestOrigin = `${protocol}://${req.get('host')}`;
-        const browserBase = publicBase ?? requestOrigin;
+        const externalBase = publicBase ?? requestOrigin;
 
         const scopes = buildScopesFromEndpoints(this.options.orgMode, this.options.enabledTools);
 
         const metadata: Record<string, unknown> = {
-          issuer: browserBase,
-          authorization_endpoint: `${browserBase}/authorize`,
-          token_endpoint: `${requestOrigin}/token`,
+          issuer: externalBase,
+          authorization_endpoint: `${externalBase}/authorize`,
+          token_endpoint: `${externalBase}/token`,
           response_types_supported: ['code'],
           response_modes_supported: ['query'],
           grant_types_supported: ['authorization_code', 'refresh_token'],
@@ -1742,7 +1777,7 @@ class MicrosoftGraphServer {
         };
 
         if (this.options.enableDynamicRegistration) {
-          metadata.registration_endpoint = `${requestOrigin}/register`;
+          metadata.registration_endpoint = `${externalBase}/register`;
         }
 
         res.json(metadata);
@@ -1752,16 +1787,16 @@ class MicrosoftGraphServer {
       app.get('/.well-known/oauth-protected-resource', async (req, res) => {
         const protocol = req.secure ? 'https' : 'http';
         const requestOrigin = `${protocol}://${req.get('host')}`;
-        const browserBase = publicBase ?? requestOrigin;
+        const externalBase = publicBase ?? requestOrigin;
 
         const scopes = buildScopesFromEndpoints(this.options.orgMode, this.options.enabledTools);
 
         res.json({
-          resource: `${requestOrigin}/mcp`,
-          authorization_servers: [browserBase],
+          resource: `${externalBase}/mcp`,
+          authorization_servers: [externalBase],
           scopes_supported: scopes,
           bearer_methods_supported: ['header'],
-          resource_documentation: browserBase,
+          resource_documentation: externalBase,
         });
       });
 
@@ -1942,10 +1977,9 @@ class MicrosoftGraphServer {
       // Plan 03-07 (SECUR-02): the v1 legacy bearer middleware that read the
       // refresh-token custom header is gone. This inline middleware performs
       // ONLY the access-token extraction that the /mcp streamable-HTTP handler
-      // needs. The refresh-token custom header is NOT read — refresh tokens
-      // live in the SessionStore keyed by sha256(accessToken); the Graph 401
-      // refresh path (graph-client.ts refreshSessionAndRetry) consults the
-      // store rather than any header.
+      // needs. The refresh-token custom header is NOT read — HTTP-mode
+      // refresh state lives in the encrypted SessionStore and the Graph 401
+      // refresh path consults the store rather than any header.
       //
       // 03-09 replaces this legacy /mcp mount with the full per-tenant
       // /t/:tenantId/mcp route + authSelector (createBearerMiddleware +
@@ -2040,9 +2074,9 @@ class MicrosoftGraphServer {
             if (req.microsoftAuth) {
               // Merge access token into the existing ALS context (which already
               // carries requestId + tenantId from the pino-http middleware
-              // above). Refresh token is NOT populated — the Graph 401 handler
-              // consults SessionStore keyed by sha256(accessToken) instead of
-              // reading a custom request header (plan 03-07, SECUR-02).
+              // above). Refresh token is NOT populated; the Graph 401 handler
+              // consults SessionStore instead of reading a custom request
+              // header (plan 03-07, SECUR-02).
               const existing = getRequestTokens() ?? {};
               await requestContext.run(
                 {

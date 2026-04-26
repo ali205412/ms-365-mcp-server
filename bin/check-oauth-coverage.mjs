@@ -46,14 +46,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // JSDoc above and update these values. The verifyLineRanges() helper enforces
 // the invariant at every invocation.
 const OAUTH_LINE_RANGES = [
-  { fn: 'createRegisterHandler', start: 122, end: 170 },
-  { fn: 'createTokenHandler', start: 224, end: 415 },
-  { fn: 'createAuthorizeHandler', start: 520, end: 675 },
-  { fn: 'createTenantTokenHandler', start: 724, end: 867 },
-  { fn: 'wellKnownAuthServerTenant', start: 1338, end: 1345 },
-  { fn: 'wellKnownProtectedResourceTenant', start: 1347, end: 1355 },
-  { fn: 'wellKnownAuthServer', start: 1725, end: 1750 },
-  { fn: 'wellKnownProtectedResource', start: 1752, end: 1766 },
+  { fn: 'createRegisterHandler', start: 126, end: 174 },
+  { fn: 'createTokenHandler', start: 228, end: 419 },
+  { fn: 'createAuthorizeHandler', start: 524, end: 679 },
+  { fn: 'createTenantTokenHandler', start: 741, end: 902 },
+  { fn: 'wellKnownAuthServerTenant', start: 1373, end: 1380 },
+  { fn: 'wellKnownProtectedResourceTenant', start: 1382, end: 1389 },
+  { fn: 'wellKnownAuthServer', start: 1760, end: 1784 },
+  { fn: 'wellKnownProtectedResource', start: 1787, end: 1801 },
 ];
 
 // D-10 target threshold is 70%. CI enforces the real target; local developers

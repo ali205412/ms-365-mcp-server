@@ -23,6 +23,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, '..', 'migrations');
 const { Client } = pg;
 const VALID_COMMANDS = new Set(['up', 'down', 'status']);
+const NODE_PG_MIGRATE_TIMESTAMP_WARNING = /^Can't determine timestamp for \d+$/;
 
 export function parseCommand(cmd = 'up') {
   if (!VALID_COMMANDS.has(cmd)) {
@@ -123,7 +124,14 @@ export async function main(argv = process.argv.slice(2)) {
       logger: {
         info: () => {},
         warn: (msg) => process.stderr.write(`${msg}\n`),
-        error: (msg) => process.stderr.write(`${msg}\n`),
+        error: (msg) => {
+          // node-pg-migrate accepts only 13-digit millisecond or 17-digit UTC
+          // filename prefixes without warning. This project uses stable
+          // 14-digit YYYYMMDDHHMMSS prefixes; the library still sorts them
+          // numerically, so suppress only that noisy non-actionable message.
+          if (NODE_PG_MIGRATE_TIMESTAMP_WARNING.test(String(msg))) return;
+          process.stderr.write(`${msg}\n`);
+        },
         debug: () => {},
       },
     };

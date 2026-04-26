@@ -52,7 +52,7 @@ function stripPgMemUnsupportedMemorySql(sql: string): string {
   return sql
     .replace(/\n\s*content_tsv\s+tsvector\s+GENERATED\s+ALWAYS\s+AS[\s\S]*?\s+STORED,?/i, '')
     .replace(
-      /\nCREATE\s+INDEX\s+idx_tenant_facts_content_tsv\s+ON\s+tenant_facts\s+USING\s+gin\s+\(content_tsv\);/i,
+      /\nCREATE\s+INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?idx_tenant_facts_content_tsv\s+ON\s+tenant_facts\s+USING\s+gin\s+\(content_tsv\);/i,
       ''
     )
     .replace(/\nDO\s+\$\$[\s\S]*?\$\$;/i, '');
@@ -84,7 +84,10 @@ async function listTables(pool: Pool, names: string[]): Promise<string[]> {
 
 function tableBlock(sql: string, tableName: string): string {
   const match = sql.match(
-    new RegExp(`CREATE\\s+TABLE\\s+${tableName}\\s*\\([\\s\\S]*?\\n\\);`, 'i')
+    new RegExp(
+      `CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?${tableName}\\s*\\([\\s\\S]*?\\n\\);`,
+      'i'
+    )
   );
   return match?.[0] ?? '';
 }
@@ -132,7 +135,7 @@ describe('plan 07-01 — tenant memory migration', () => {
       /content_tsv\s+tsvector\s+GENERATED\s+ALWAYS\s+AS\s+\(to_tsvector\('english',\s*content\)\)\s+STORED/i
     );
     expect(sql).toMatch(
-      /CREATE\s+INDEX\s+idx_tenant_facts_content_tsv\s+ON\s+tenant_facts\s+USING\s+gin\s+\(content_tsv\)/i
+      /CREATE\s+INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?idx_tenant_facts_content_tsv\s+ON\s+tenant_facts\s+USING\s+gin\s+\(content_tsv\)/i
     );
   });
 

@@ -160,7 +160,7 @@ describe('plan 05-03 task 2 — tenants.preset_version migration', () => {
     expect(preset).toBeDefined();
     const upSql = preset!.up;
     expect(upSql).toMatch(
-      /ALTER\s+TABLE\s+tenants[\s\S]*ADD\s+COLUMN\s+preset_version\s+text\s+NOT\s+NULL\s+DEFAULT\s+'essentials-v1'/i
+      /ALTER\s+TABLE\s+tenants[\s\S]*ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?preset_version\s+text\s+NOT\s+NULL\s+DEFAULT\s+'essentials-v1'/i
     );
     expect(upSql).toMatch(
       /UPDATE\s+tenants[\s\S]*SET\s+preset_version\s*=\s*'essentials-v1'[\s\S]*WHERE\s+preset_version\s+IS\s+NULL/i

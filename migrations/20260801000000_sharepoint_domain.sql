@@ -27,7 +27,7 @@
 --     extending the SELECT column list + Zod wire schema is additive.
 
 ALTER TABLE tenants
-  ADD COLUMN sharepoint_domain text NULL;
+  ADD COLUMN IF NOT EXISTS sharepoint_domain text NULL;
 
 -- Down Migration
 ALTER TABLE tenants DROP COLUMN IF EXISTS sharepoint_domain;

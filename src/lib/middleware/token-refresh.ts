@@ -29,6 +29,10 @@ import { requestContext } from '../../request-context.js';
 import type AuthManager from '../../auth.js';
 import type { AppSecrets } from '../../secrets.js';
 import type { GraphMiddleware, GraphRequest } from './types.js';
+import { getRedis } from '../redis.js';
+import { getTenantPool } from '../tenant/tenant-pool.js';
+import { refreshSessionAndRetry } from '../session-refresh.js';
+import { rememberDelegatedAccessToken } from '../delegated-access-tokens.js';
 
 const tracer = trace.getTracer('graph-middleware');
 
@@ -47,6 +51,37 @@ export class TokenRefreshMiddleware implements GraphMiddleware {
         if (response.status !== 401) return response;
 
         const ctx = requestContext.getStore();
+        if (ctx?.flow === 'delegated' && ctx.accessToken && ctx.tenantRow) {
+          const tenantPool = getTenantPool();
+          if (tenantPool) {
+            try {
+              const redis = getRedis();
+              const clientAccessToken = ctx.clientAccessToken ?? ctx.accessToken;
+              const fresh = await refreshSessionAndRetry({
+                tenant: ctx.tenantRow,
+                oldAccessToken: clientAccessToken,
+                tenantPool,
+                redis,
+              });
+              ctx.accessToken = fresh.accessToken;
+              req.headers.Authorization = `Bearer ${fresh.accessToken}`;
+              await rememberDelegatedAccessToken({
+                redis,
+                tenantId: ctx.tenantRow.id,
+                accessToken: clientAccessToken,
+                expiresOn: fresh.expiresOn,
+              });
+              return await next();
+            } catch (err) {
+              logger.info(
+                { tenantId: ctx.tenantRow.id, err: (err as Error).message },
+                'TokenRefresh: delegated session refresh failed'
+              );
+              return response;
+            }
+          }
+        }
+
         const refreshToken = ctx?.refreshToken;
         if (!refreshToken) return response; // No refresh available — propagate 401
 
