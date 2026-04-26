@@ -247,6 +247,30 @@ function codeFromError(error: unknown): string {
   return error instanceof Error && error.name ? error.name : 'tool_error';
 }
 
+function checkSyntheticGraphToolDispatch(toolAlias: string): CallToolResult | null {
+  const tenantInfo = getRequestTenant();
+  const rejection = checkDispatch(
+    toolAlias,
+    tenantInfo.enabledToolsSet,
+    tenantInfo.id,
+    tenantInfo.presetVersion
+  );
+  if (!rejection) return null;
+  logger.info(
+    { tool: toolAlias, tenantId: tenantInfo.id, preset: tenantInfo.presetVersion },
+    'dispatch-guard: synthetic tool not enabled for tenant'
+  );
+  return rejection as CallToolResult;
+}
+
+function isReadSafeDiscoveryTool(
+  tool: (typeof api.endpoints)[0],
+  config: EndpointConfig | undefined
+): boolean {
+  const method = tool.method.toUpperCase();
+  return method === 'GET' || (method === 'POST' && config?.readOnly === true);
+}
+
 async function executeGraphToolInner(
   tool: (typeof api.endpoints)[0],
   config: EndpointConfig | undefined,
@@ -1019,6 +1043,9 @@ export function registerGraphTools(
           openWorldHint: true,
         },
         async ({ requests }) => {
+          const dispatchRejection = checkSyntheticGraphToolDispatch('graph-batch');
+          if (dispatchRejection) return dispatchRejection;
+
           try {
             const { batch } = await import('./lib/middleware/batch.js');
             const results = await batch(requests, graphClient);
@@ -1121,6 +1148,9 @@ export function registerGraphTools(
           openWorldHint: true,
         },
         async ({ driveItemPath, contentBase64, chunkSize, conflictBehavior, fileName }) => {
+          const dispatchRejection = checkSyntheticGraphToolDispatch('graph-upload-large-file');
+          if (dispatchRejection) return dispatchRejection;
+
           try {
             const { UploadSessionHelper } = await import('./lib/upload-session.js');
             const buffer = Buffer.from(contentBase64, 'base64');
@@ -1353,6 +1383,30 @@ export async function executeToolAlias({
           text: JSON.stringify({
             error: `Tool not found: ${toolName}`,
             tip: 'Use search-tools to find available tools.',
+          }),
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  if (
+    catalog.isDiscoverySurface &&
+    !tenant.enabledToolsExplicit &&
+    !isReadSafeDiscoveryTool(toolData.tool, toolData.config)
+  ) {
+    logger.info(
+      { tool: toolName, tenantId: tenant.id, method: toolData.tool.method.toUpperCase() },
+      'executeToolAlias: write tool requires explicit tenant enablement'
+    );
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            error: `Tool requires explicit tenant enablement: ${toolName}`,
+            tenantId: tenant.id,
+            tip: 'Ask an admin to add this write-capable alias to enabled_tools before using execute-tool.',
           }),
         },
       ],

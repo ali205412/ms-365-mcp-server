@@ -211,7 +211,7 @@ Normal agent flow:
 
 1. Use `search-tools` with a plain-language goal such as "find unread messages" or "list recent SharePoint files".
 2. Use `get-tool-schema` on the candidate alias.
-3. Use `execute-tool` with the validated parameters.
+3. Use `execute-tool` with the validated parameters. Default discovery tenants can execute read-only catalog aliases; write-capable aliases require explicit tenant enablement.
 4. Save useful aliases with bookmarks, recipes, or facts when the workflow should be repeatable.
 
 Existing tenant rows should be moved to the discovery surface explicitly:

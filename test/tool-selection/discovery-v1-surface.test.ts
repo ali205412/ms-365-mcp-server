@@ -323,7 +323,7 @@ describe('Phase 7 Plan 07-02 — discovery catalog separation', () => {
     expect(resolution.discoveryCatalogSet.has('me.ListMessages')).toBe(false);
   });
 
-  it('search-tools, get-tool-schema, and execute-tool use discoveryCatalogSet for discovery tenants', async () => {
+  it('search-tools and get-tool-schema use discoveryCatalogSet; execute-tool blocks default write aliases', async () => {
     const server = new McpServer({ name: 'test', version: '0.0.0' });
     const graphClient = {
       graphRequest: vi.fn().mockResolvedValue({
@@ -359,11 +359,19 @@ describe('Phase 7 Plan 07-02 — discovery catalog separation', () => {
     expect(schema.isError).toBeFalsy();
     expect(schema.content[0].text).toContain('me.sendMail');
 
-    const executed = await requestContext.run(ctx, () =>
+    const readExecuted = await requestContext.run(ctx, () =>
+      callDiscoveryTool(server, 'execute-tool', { tool_name: 'me.ListMessages', parameters: {} })
+    );
+    expect(readExecuted.isError).toBeFalsy();
+    expect(graphClient.graphRequest).toHaveBeenCalled();
+
+    graphClient.graphRequest.mockClear();
+    const writeExecuted = await requestContext.run(ctx, () =>
       callDiscoveryTool(server, 'execute-tool', { tool_name: 'me.sendMail', parameters: {} })
     );
-    expect(executed.isError).toBeFalsy();
-    expect(graphClient.graphRequest).toHaveBeenCalled();
+    expect(writeExecuted.isError).toBe(true);
+    expect(writeExecuted.content[0].text).toContain('explicit tenant enablement');
+    expect(graphClient.graphRequest).not.toHaveBeenCalled();
   });
 
   it('discovery tools enforce explicit tenant allowlists before schema or execution', async () => {

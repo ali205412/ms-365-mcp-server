@@ -73,7 +73,8 @@ interface RequestHandlerExtra {
 function discoveryContext() {
   return {
     tenantId: TENANT_A,
-    enabledToolsSet: DISCOVERY_META_TOOL_NAMES,
+    enabledToolsSet: new Set([...DISCOVERY_META_TOOL_NAMES, 'me.sendMail']),
+    enabledToolsExplicit: true,
     presetVersion: DISCOVERY_PRESET_VERSION,
   };
 }
