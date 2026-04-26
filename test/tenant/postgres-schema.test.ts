@@ -56,7 +56,7 @@ function stripPgMemUnsupportedStmts(sql: string): string {
     .join('\n')
     .replace(/\n\s*content_tsv\s+tsvector\s+GENERATED\s+ALWAYS\s+AS[\s\S]*?\s+STORED,?/i, '')
     .replace(
-      /\nCREATE\s+INDEX\s+idx_tenant_facts_content_tsv\s+ON\s+tenant_facts\s+USING\s+gin\s+\(content_tsv\);/i,
+      /\nCREATE\s+INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?idx_tenant_facts_content_tsv\s+ON\s+tenant_facts\s+USING\s+gin\s+\(content_tsv\);/i,
       ''
     )
     .replace(/\nDO\s+\$\$[\s\S]*?\$\$;/i, '');
@@ -152,6 +152,39 @@ describe('plan 03-01 — Postgres schema round-trip', () => {
     }
     const tables = await listTables(pool, ['tenants', 'audit_log', 'delta_tokens', 'api_keys']);
     expect(tables).toEqual(['api_keys', 'audit_log', 'delta_tokens', 'tenants']);
+  });
+
+  it('keeps additive Up migrations idempotent for schema-present/bookkeeping-missing recovery', () => {
+    const migrations = listMigrations();
+    const byFile = new Map(migrations.map((m) => [m.file, m.up]));
+
+    expect(byFile.get('20260501000000_tenants.sql')).toMatch(
+      /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+tenants/i
+    );
+    expect(byFile.get('20260501000100_audit_log.sql')).toMatch(
+      /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+audit_log/i
+    );
+    expect(byFile.get('20260501000200_delta_tokens.sql')).toMatch(
+      /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+delta_tokens/i
+    );
+    expect(byFile.get('20260501000300_api_keys.sql')).toMatch(
+      /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+api_keys/i
+    );
+    expect(byFile.get('20260601000000_subscriptions.sql')).toMatch(
+      /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+subscriptions/i
+    );
+    expect(byFile.get('20260702000000_preset_version.sql')).toMatch(
+      /ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+preset_version/i
+    );
+    expect(byFile.get('20260801000000_sharepoint_domain.sql')).toMatch(
+      /ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+sharepoint_domain/i
+    );
+    expect(byFile.get('20260901000000_tenant_rate_limits.sql')).toMatch(
+      /ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+rate_limits/i
+    );
+    expect(byFile.get('20261001000000_tenant_memory.sql')).toMatch(
+      /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+tenant_facts/i
+    );
   });
 
   it('creates the tenants table with the expected columns + wrapped_dek JSONB', async () => {
