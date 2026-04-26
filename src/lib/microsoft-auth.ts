@@ -13,7 +13,7 @@
  * Breaking change for v1 HTTP-mode users: see docs/migration-v1-to-v2.md.
  *
  * Remaining surface:
- *   - createBearerMiddleware (03-06): decode-only JWT tid-routing middleware
+ *   - createBearerMiddleware (03-06): verifies bearer JWTs before tenant routing
  *   - exchangeCodeForToken: POST to Microsoft's /token endpoint (used by the
  *     stdio-mode OAuth callback and legacy /auth/callback handler)
  *   - refreshAccessToken: POST grant_type=refresh_token (kept for stdio-mode
@@ -21,40 +21,85 @@
  *     via the pool + session store)
  */
 import { Request, Response, NextFunction } from 'express';
-import { decodeJwt } from 'jose';
+import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import logger from '../logger.js';
 import { getCloudEndpoints, type CloudType } from '../cloud-config.js';
 import { requestContext, getRequestTokens } from '../request-context.js';
 import { buildWwwAuthenticate } from './www-authenticate.js';
+import type { TenantRow } from './tenant/tenant-row.js';
+
+const MICROSOFT_GRAPH_APP_ID = '00000003-0000-0000-c000-000000000000';
+const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
+
+export interface BearerTokenVerificationInput {
+  token: string;
+  tenantId: string;
+  clientId?: string;
+  cloudType?: CloudType;
+}
+
+export type BearerTokenVerifier = (input: BearerTokenVerificationInput) => Promise<JWTPayload>;
+
+function getJwks(url: string): ReturnType<typeof createRemoteJWKSet> {
+  const cached = jwksCache.get(url);
+  if (cached) return cached;
+  const jwks = createRemoteJWKSet(new URL(url));
+  jwksCache.set(url, jwks);
+  return jwks;
+}
+
+function acceptedAudiences(clientId: string | undefined, cloudType: CloudType): string[] {
+  const cloudEndpoints = getCloudEndpoints(cloudType);
+  const audiences = new Set<string>([MICROSOFT_GRAPH_APP_ID, cloudEndpoints.graphApi]);
+  if (clientId) {
+    audiences.add(clientId);
+    audiences.add(`api://${clientId}`);
+  }
+  return [...audiences];
+}
+
+export async function verifyMicrosoftBearerToken({
+  token,
+  tenantId,
+  clientId,
+  cloudType = 'global',
+}: BearerTokenVerificationInput): Promise<JWTPayload> {
+  const cloudEndpoints = getCloudEndpoints(cloudType);
+  const issuer = `${cloudEndpoints.authority}/${tenantId}/v2.0`;
+  const jwksUrl = `${cloudEndpoints.authority}/${tenantId}/discovery/v2.0/keys`;
+  const { payload } = await jwtVerify(token, getJwks(jwksUrl), {
+    issuer,
+    audience: acceptedAudiences(clientId, cloudType),
+  });
+  return payload;
+}
 
 /**
- * Decode-only bearer middleware (plan 03-06, AUTH-03, D-13).
+ * Bearer middleware (AUTH-03).
  *
- * DECODE ONLY. The middleware calls `jose.decodeJwt` which parses the JWT
- * payload WITHOUT verifying the signature. Do NOT derive authorization
- * decisions from the decoded claims beyond routing on `tid` (Pitfall 5 in
- * 03-RESEARCH.md). Microsoft Graph validates the signature on every call —
- * we only need the `tid` claim to route the request to the correct tenant.
- * Anything beyond tid routing (reading scp, roles, sub, etc.) opens a
- * forgery-vulnerability door because the signature is not checked here.
+ * Verifies Microsoft-issued bearer JWTs before seeding requestContext. The
+ * token is still forwarded as-is to Graph, but local MCP resources/tools are
+ * no longer authorized by an unverified decoded payload.
  *
- * On match (tid === URL tenantId): sets requestContext.accessToken = raw token,
- * flow = 'bearer'. Graph-calling code reads accessToken from requestContext
- * and forwards it to Graph as-is (no MSAL acquire; bearer is pass-through).
- *
+ * On match (tid === tenant.tenant_id): sets requestContext.accessToken = raw
+ * token, flow = 'bearer'.
  * On mismatch: 401 tenant_mismatch.
  * On missing tid: 401 invalid_token / missing_tid_claim.
- * On malformed JWT: 401 invalid_token.
+ * On malformed/unverified JWT: 401 invalid_token.
  * On missing Authorization header: calls next() without populating anything
  *   (pass-through to the next auth strategy, e.g., app-only selector).
  * On bearer without URL tenantId: 400 bearer_requires_tenant_context.
  */
-export function createBearerMiddleware(): (
+export function createBearerMiddleware(
+  deps: { verifyToken?: BearerTokenVerifier } = {}
+): (
   req: Request,
   res: Response,
   next: NextFunction
-) => void {
-  return (req: Request, res: Response, next: NextFunction): void => {
+) => Promise<void> {
+  const verifyToken = deps.verifyToken ?? verifyMicrosoftBearerToken;
+
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
       next();
@@ -67,49 +112,26 @@ export function createBearerMiddleware(): (
     const tenantForChallenge =
       typeof urlTenantIdEarly === 'string' && urlTenantIdEarly ? urlTenantIdEarly : undefined;
 
-    let tid: string;
-    try {
-      const payload = decodeJwt(token);
-      if (typeof payload.tid !== 'string') {
-        res
-          .status(401)
-          .set(
-            'WWW-Authenticate',
-            buildWwwAuthenticate({
-              req,
-              tenantId: tenantForChallenge,
-              error: 'invalid_token',
-              errorDescription: 'missing tid claim',
-            })
-          )
-          .json({ error: 'invalid_token', detail: 'missing_tid_claim' });
-        return;
-      }
-      tid = payload.tid;
-    } catch (err) {
-      logger.info({ err: (err as Error).message }, 'bearer: JWT decode failed');
-      res
-        .status(401)
-        .set(
-          'WWW-Authenticate',
-          buildWwwAuthenticate({
-            req,
-            tenantId: tenantForChallenge,
-            error: 'invalid_token',
-            errorDescription: 'malformed JWT',
-          })
-        )
-        .json({ error: 'invalid_token' });
-      return;
-    }
-
     if (!tenantForChallenge) {
       // Bearer flows in Phase 3 are always per-tenant — refuse a bearer
       // request that arrived outside a tenant-scoped route.
       res.status(400).json({ error: 'bearer_requires_tenant_context' });
       return;
     }
-    if (tid.toLowerCase() !== tenantForChallenge.toLowerCase()) {
+
+    const tenant = (req as Request & { tenant?: TenantRow }).tenant;
+    const expectedTenantId = tenant?.tenant_id ?? tenantForChallenge;
+
+    let payload: JWTPayload;
+    try {
+      payload = await verifyToken({
+        token,
+        tenantId: expectedTenantId,
+        clientId: tenant?.client_id,
+        cloudType: tenant?.cloud_type ?? 'global',
+      });
+    } catch (err) {
+      logger.info({ err: (err as Error).message }, 'bearer: JWT verification failed');
       res
         .status(401)
         .set(
@@ -118,12 +140,44 @@ export function createBearerMiddleware(): (
             req,
             tenantId: tenantForChallenge,
             error: 'invalid_token',
-            errorDescription: 'JWT tid does not match URL tenantId',
+            errorDescription: 'JWT verification failed',
+          })
+        )
+      .json({ error: 'invalid_token' });
+      return;
+    }
+
+    if (typeof payload.tid !== 'string') {
+      res
+        .status(401)
+        .set(
+          'WWW-Authenticate',
+          buildWwwAuthenticate({
+            req,
+            tenantId: tenantForChallenge,
+            error: 'invalid_token',
+            errorDescription: 'missing tid claim',
+          })
+        )
+        .json({ error: 'invalid_token', detail: 'missing_tid_claim' });
+      return;
+    }
+
+    if (payload.tid.toLowerCase() !== expectedTenantId.toLowerCase()) {
+      res
+        .status(401)
+        .set(
+          'WWW-Authenticate',
+          buildWwwAuthenticate({
+            req,
+            tenantId: tenantForChallenge,
+            error: 'invalid_token',
+            errorDescription: 'JWT tid does not match tenant',
           })
         )
         .json({
           error: 'tenant_mismatch',
-          detail: 'JWT tid does not match URL tenantId',
+          detail: 'JWT tid does not match tenant',
         });
       return;
     }

@@ -27,7 +27,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import type { TenantRow } from './tenant/tenant-row.js';
 import type { TenantPool } from './tenant/tenant-pool.js';
-import { createBearerMiddleware } from './microsoft-auth.js';
+import { createBearerMiddleware, type BearerTokenVerifier } from './microsoft-auth.js';
 import { requestContext, getRequestTokens } from '../request-context.js';
 import { buildWwwAuthenticate } from './www-authenticate.js';
 import logger from '../logger.js';
@@ -35,6 +35,7 @@ import { timingSafeEqual } from 'node:crypto';
 
 export interface AuthSelectorDeps {
   tenantPool: Pick<TenantPool, 'acquire' | 'buildCachePlugin'>;
+  bearerVerifier?: BearerTokenVerifier;
 }
 
 /**
@@ -84,7 +85,7 @@ function hasValidAppOnlyGatewayKey(req: Request): boolean {
 export function createAuthSelectorMiddleware(
   deps: AuthSelectorDeps
 ): (req: Request, res: Response, next: NextFunction) => Promise<void> {
-  const bearer = createBearerMiddleware();
+  const bearer = createBearerMiddleware({ verifyToken: deps.bearerVerifier });
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const tenant = (req as Request & { tenant?: TenantRow }).tenant;
@@ -97,7 +98,7 @@ export function createAuthSelectorMiddleware(
     //    owns its own requestContext.run and delegates to next() on match.
     const hasAuthHeader = req.headers.authorization?.startsWith('Bearer ');
     if (hasAuthHeader) {
-      bearer(req, res, next);
+      await bearer(req, res, next);
       return;
     }
 

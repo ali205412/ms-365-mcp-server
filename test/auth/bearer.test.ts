@@ -8,35 +8,45 @@
  *   4. Malformed JWT → 401 invalid_token
  *   5. No Authorization header → next() (pass-through)
  *   6. Case-insensitive tid comparison
- *   7. No signature verification (decode-only) — malformed signature accepted
+ *   7. Signature verification failure → 401 invalid_token
  *   8. Redaction / no token in logs (Pitfall 5)
  *
  * Threat refs:
  *   - T-03-06-01 (S): forged tid
- *   - T-03-06-02 (EoP): decode-only invariant
- *   - D-13: decode-only bearer validation
+ *   - T-03-06-02 (EoP): forged token rejection
+ *   - D-13: bearer validation
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { SignJWT } from 'jose';
+import { decodeJwt } from 'jose';
 import type { Request, Response, NextFunction } from 'express';
-import { createBearerMiddleware } from '../../src/lib/microsoft-auth.js';
+import {
+  createBearerMiddleware,
+  type BearerTokenVerifier,
+} from '../../src/lib/microsoft-auth.js';
 import { requestContext, getRequestTokens } from '../../src/request-context.js';
+import type { TenantRow } from '../../src/lib/tenant/tenant-row.js';
 
 vi.mock('../../src/logger.js', () => ({
   default: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
 async function makeJwt(payload: Record<string, unknown>): Promise<string> {
-  // HS256 with a random key — we only need a well-formed JWT for decode-only tests.
-  const key = new Uint8Array(32);
-  return await new SignJWT(payload as Record<string, unknown>)
-    .setProtectedHeader({ alg: 'HS256' })
-    .sign(key);
+  void (await Promise.resolve());
+  const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' }), 'utf8').toString(
+    'base64url'
+  );
+  const encodedPayload = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  return `${header}.${encodedPayload}.test-signature`;
+}
+
+function decodeOnlyVerifier(): BearerTokenVerifier {
+  return vi.fn(async ({ token }) => decodeJwt(token));
 }
 
 function makeReqRes(
   authHeader: string | undefined,
-  tenantId: string | undefined
+  tenantId: string | undefined,
+  tenant?: Partial<TenantRow>
 ): { req: Request; res: Response; next: ReturnType<typeof vi.fn> } {
   const headers: Record<string, string> = { host: 'mcp.test.local' };
   if (authHeader) headers.authorization = authHeader;
@@ -47,6 +57,7 @@ function makeReqRes(
     get(name: string): string | undefined {
       return headers[name.toLowerCase()];
     },
+    tenant,
   } as unknown as Request;
   const res = {
     status: vi.fn().mockReturnThis(),
@@ -64,7 +75,7 @@ describe('createBearerMiddleware (AUTH-03)', () => {
 
   it('Test 1: matches tid → calls next() and populates requestContext with flow=bearer', async () => {
     const jwt = await makeJwt({ tid: 'abc-123', sub: 'user-1' });
-    const mw = createBearerMiddleware();
+    const mw = createBearerMiddleware({ verifyToken: decodeOnlyVerifier() });
     const { req, res, next } = makeReqRes(`Bearer ${jwt}`, 'abc-123');
 
     let contextTokenInsideNext: string | undefined;
@@ -75,7 +86,7 @@ describe('createBearerMiddleware (AUTH-03)', () => {
       contextFlowInsideNext = store?.flow;
     });
 
-    mw(req, res, next as unknown as NextFunction);
+    await mw(req, res, next as unknown as NextFunction);
 
     expect(next).toHaveBeenCalledTimes(1);
     expect(res.status).not.toHaveBeenCalled();
@@ -86,10 +97,10 @@ describe('createBearerMiddleware (AUTH-03)', () => {
 
   it('Test 2: tid mismatch → 401 tenant_mismatch, does NOT call next()', async () => {
     const jwt = await makeJwt({ tid: 'T-B' });
-    const mw = createBearerMiddleware();
+    const mw = createBearerMiddleware({ verifyToken: decodeOnlyVerifier() });
     const { req, res, next } = makeReqRes(`Bearer ${jwt}`, 'T-A');
 
-    mw(req, res, next as unknown as NextFunction);
+    await mw(req, res, next as unknown as NextFunction);
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'tenant_mismatch' }));
@@ -98,10 +109,10 @@ describe('createBearerMiddleware (AUTH-03)', () => {
 
   it('Test 3: missing tid claim → 401 invalid_token with missing_tid_claim detail', async () => {
     const jwt = await makeJwt({ sub: 'x' });
-    const mw = createBearerMiddleware();
+    const mw = createBearerMiddleware({ verifyToken: decodeOnlyVerifier() });
     const { req, res, next } = makeReqRes(`Bearer ${jwt}`, 'any-tenant');
 
-    mw(req, res, next as unknown as NextFunction);
+    await mw(req, res, next as unknown as NextFunction);
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith(
@@ -110,22 +121,22 @@ describe('createBearerMiddleware (AUTH-03)', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('Test 4: malformed JWT → 401 invalid_token', () => {
-    const mw = createBearerMiddleware();
+  it('Test 4: malformed JWT → 401 invalid_token', async () => {
+    const mw = createBearerMiddleware({ verifyToken: decodeOnlyVerifier() });
     const { req, res, next } = makeReqRes('Bearer not.a.valid.jwt', 'any-tenant');
 
-    mw(req, res, next as unknown as NextFunction);
+    await mw(req, res, next as unknown as NextFunction);
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'invalid_token' }));
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('Test 5: no Authorization header → calls next() without populating requestContext', () => {
+  it('Test 5: no Authorization header → calls next() without populating requestContext', async () => {
     const mw = createBearerMiddleware();
     const { req, res, next } = makeReqRes(undefined, 'any-tenant');
 
-    mw(req, res, next as unknown as NextFunction);
+    await mw(req, res, next as unknown as NextFunction);
 
     expect(next).toHaveBeenCalledTimes(1);
     expect(res.status).not.toHaveBeenCalled();
@@ -134,32 +145,32 @@ describe('createBearerMiddleware (AUTH-03)', () => {
 
   it('Test 6: case-insensitive tid match', async () => {
     const jwt = await makeJwt({ tid: 'T-A' });
-    const mw = createBearerMiddleware();
+    const mw = createBearerMiddleware({ verifyToken: decodeOnlyVerifier() });
     const { req, res, next } = makeReqRes(`Bearer ${jwt}`, 't-a');
 
-    mw(req, res, next as unknown as NextFunction);
+    await mw(req, res, next as unknown as NextFunction);
 
     expect(next).toHaveBeenCalled();
     expect(res.status).not.toHaveBeenCalled();
   });
 
-  it('Test 7: no signature verification — tampered signature with correct tid is accepted (decode-only)', async () => {
+  it('Test 7: signature verification failure → 401 invalid_token', async () => {
     const jwt = await makeJwt({ tid: 'tenant-7' });
-    // Swap the signature with a random string; the decoded tid remains intact.
-    const parts = jwt.split('.');
-    const tampered = `${parts[0]}.${parts[1]}.ZZZZZZZZZZZZZ`;
-    const mw = createBearerMiddleware();
-    const { req, res, next } = makeReqRes(`Bearer ${tampered}`, 'tenant-7');
+    const verifyToken = vi.fn(async () => {
+      throw new Error('signature verification failed');
+    });
+    const mw = createBearerMiddleware({ verifyToken });
+    const { req, res, next } = makeReqRes(`Bearer ${jwt}`, 'tenant-7');
 
-    mw(req, res, next as unknown as NextFunction);
+    await mw(req, res, next as unknown as NextFunction);
 
-    // Decode-only: the middleware does NOT validate signature; next() is called
-    expect(next).toHaveBeenCalled();
-    expect(res.status).not.toHaveBeenCalled();
+    expect(verifyToken).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'invalid_token' }));
+    expect(next).not.toHaveBeenCalled();
   });
 
   it('Test 8: redaction — raw token NOT logged on success or failure', async () => {
-    const mw = createBearerMiddleware();
     const logger = (await import('../../src/logger.js')).default as unknown as Record<
       string,
       ReturnType<typeof vi.fn>
@@ -167,12 +178,17 @@ describe('createBearerMiddleware (AUTH-03)', () => {
 
     // Happy-path token — verify it never surfaces in any logger call.
     const happyToken = await makeJwt({ tid: 'T-OK' });
+    const verifyToken = vi.fn(async ({ token }) => {
+      if (token === happyToken) return decodeJwt(token);
+      throw new Error('signature verification failed');
+    });
+    const mw = createBearerMiddleware({ verifyToken });
     const happyReqRes = makeReqRes(`Bearer ${happyToken}`, 'T-OK');
-    mw(happyReqRes.req, happyReqRes.res, happyReqRes.next as unknown as NextFunction);
+    await mw(happyReqRes.req, happyReqRes.res, happyReqRes.next as unknown as NextFunction);
 
     // Malformed path — same assertion.
     const badReqRes = makeReqRes('Bearer malformed.jwt.here', 'T-OK');
-    mw(badReqRes.req, badReqRes.res, badReqRes.next as unknown as NextFunction);
+    await mw(badReqRes.req, badReqRes.res, badReqRes.next as unknown as NextFunction);
 
     const joined: string[] = [];
     for (const fn of Object.values(logger)) {
@@ -199,11 +215,13 @@ describe('createBearerMiddleware (AUTH-03)', () => {
 
   it('Test 9: bearer without tenant-scoped route → 400 bearer_requires_tenant_context', async () => {
     const jwt = await makeJwt({ tid: 'abc-123' });
-    const mw = createBearerMiddleware();
+    const verifyToken = decodeOnlyVerifier();
+    const mw = createBearerMiddleware({ verifyToken });
     const { req, res, next } = makeReqRes(`Bearer ${jwt}`, undefined);
 
-    mw(req, res, next as unknown as NextFunction);
+    await mw(req, res, next as unknown as NextFunction);
 
+    expect(verifyToken).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({ error: 'bearer_requires_tenant_context' })
@@ -219,10 +237,10 @@ describe('createBearerMiddleware (AUTH-03)', () => {
 
   it('Test 10: missing tid claim → 401 sets WWW-Authenticate with resource_metadata', async () => {
     const jwt = await makeJwt({ sub: 'no-tid' });
-    const mw = createBearerMiddleware();
+    const mw = createBearerMiddleware({ verifyToken: decodeOnlyVerifier() });
     const { req, res, next } = makeReqRes(`Bearer ${jwt}`, 'tenant-x');
 
-    mw(req, res, next as unknown as NextFunction);
+    await mw(req, res, next as unknown as NextFunction);
 
     expect(res.set).toHaveBeenCalledWith(
       'WWW-Authenticate',
@@ -235,11 +253,11 @@ describe('createBearerMiddleware (AUTH-03)', () => {
     expect(headerValue).toContain('error="invalid_token"');
   });
 
-  it('Test 11: malformed JWT → 401 sets WWW-Authenticate', () => {
-    const mw = createBearerMiddleware();
+  it('Test 11: malformed JWT → 401 sets WWW-Authenticate', async () => {
+    const mw = createBearerMiddleware({ verifyToken: decodeOnlyVerifier() });
     const { req, res, next } = makeReqRes('Bearer not.a.jwt', 'tenant-y');
 
-    mw(req, res, next as unknown as NextFunction);
+    await mw(req, res, next as unknown as NextFunction);
 
     const headerValue = (res.set as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1] as string;
     expect(headerValue).toMatch(/^Bearer /);
@@ -249,14 +267,34 @@ describe('createBearerMiddleware (AUTH-03)', () => {
 
   it('Test 12: tenant_mismatch → 401 sets WWW-Authenticate with URL tenantId (not the JWT tid)', async () => {
     const jwt = await makeJwt({ tid: 'jwt-tid' });
-    const mw = createBearerMiddleware();
+    const mw = createBearerMiddleware({ verifyToken: decodeOnlyVerifier() });
     const { req, res, next } = makeReqRes(`Bearer ${jwt}`, 'url-tid');
 
-    mw(req, res, next as unknown as NextFunction);
+    await mw(req, res, next as unknown as NextFunction);
 
     const headerValue = (res.set as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1] as string;
     expect(headerValue).toContain('/t/url-tid/.well-known/oauth-protected-resource');
     expect(headerValue).not.toContain('/t/jwt-tid/');
+  });
+
+  it('Test 13: tenant row Azure tenant_id is authoritative over route id', async () => {
+    const jwt = await makeJwt({ tid: 'azure-tenant-id' });
+    const verifyToken = vi.fn(async ({ tenantId }) => {
+      expect(tenantId).toBe('azure-tenant-id');
+      return decodeJwt(jwt);
+    });
+    const mw = createBearerMiddleware({ verifyToken });
+    const { req, res, next } = makeReqRes(`Bearer ${jwt}`, 'registry-route-id', {
+      id: 'registry-route-id',
+      tenant_id: 'azure-tenant-id',
+      client_id: 'client-id',
+      cloud_type: 'global',
+    });
+
+    await mw(req, res, next as unknown as NextFunction);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(res.status).not.toHaveBeenCalled();
   });
 });
 

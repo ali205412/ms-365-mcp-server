@@ -24,7 +24,7 @@ import express, { type Request, type Response, type NextFunction } from 'express
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import crypto from 'node:crypto';
-import { SignJWT } from 'jose';
+import { decodeJwt, SignJWT } from 'jose';
 import { MemoryRedisFacade } from '../../src/lib/redis-facade.js';
 import { RedisPkceStore } from '../../src/lib/pkce-store/redis-store.js';
 import { generateTenantDek } from '../../src/lib/crypto/dek.js';
@@ -168,6 +168,7 @@ describe('Concurrent flows integration (AUTH-05 / SC#3)', () => {
         tenantPool: mockTenantPool as unknown as Parameters<
           typeof createAuthSelectorMiddleware
         >[0]['tenantPool'],
+        bearerVerifier: async ({ token }) => decodeJwt(token),
       }),
       (req: Request, res: Response) => {
         const ctx = getRequestTokens();

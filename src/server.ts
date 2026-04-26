@@ -21,8 +21,11 @@ import { buildMcpServerInstructions } from './mcp-instructions.js';
 import GraphClient from './graph-client.js';
 import AuthManager, { buildScopesFromEndpoints } from './auth.js';
 import { MicrosoftOAuthProvider } from './oauth-provider.js';
-import { exchangeCodeForToken, refreshAccessToken } from './lib/microsoft-auth.js';
-import { decodeJwt } from 'jose';
+import {
+  exchangeCodeForToken,
+  refreshAccessToken,
+  verifyMicrosoftBearerToken,
+} from './lib/microsoft-auth.js';
 import type { CommandOptions } from './cli.ts';
 import { getSecrets, type AppSecrets } from './secrets.js';
 import { getCloudEndpoints } from './cloud-config.js';
@@ -1913,8 +1916,8 @@ class MicrosoftGraphServer {
       // /t/:tenantId/mcp route + authSelector (createBearerMiddleware +
       // createAuthSelectorMiddleware). Until then, this keeps the v1 HTTP
       // route behaviorally compatible WITHOUT the header-read security hole.
-      // CR-03 fix: enforce decode-only tid check on the legacy /mcp mount
-      // (same Pitfall 5 discipline as createBearerMiddleware in
+      // CR-03 fix: enforce verified tid check on the legacy /mcp mount
+      // (same tenant discipline as createBearerMiddleware in
       // src/lib/microsoft-auth.ts). Without this, an operator who forgets to
       // configure tenants in Postgres but still starts the server in HTTP
       // mode gets a working /mcp endpoint that routes to whatever single
@@ -1924,11 +1927,11 @@ class MicrosoftGraphServer {
       // not match. Plan 03-09 retires this entire legacy mount; until then,
       // this is the inline guard.
       const legacySecrets = this.secrets;
-      const legacyMcpAccessTokenExtractor = (
+      const legacyMcpAccessTokenExtractor = async (
         req: Request & { microsoftAuth?: { accessToken: string } },
         res: Response,
         next: express.NextFunction
-      ): void => {
+      ): Promise<void> => {
         const authHeader = req.headers.authorization;
         if (!authHeader || !authHeader.startsWith('Bearer ')) {
           res.status(401).json({ error: 'Missing or invalid access token' });
@@ -1936,13 +1939,15 @@ class MicrosoftGraphServer {
         }
         const token = authHeader.substring(7);
 
-        // Decode-only tid check — Microsoft Graph validates the signature on
-        // the actual tool call. We only need the tid claim to enforce that
-        // the bearer matches the configured single tenant (when one is set).
         const expectedTid = legacySecrets?.tenantId;
         if (expectedTid && expectedTid !== 'common') {
           try {
-            const payload = decodeJwt(token);
+            const payload = await verifyMicrosoftBearerToken({
+              token,
+              tenantId: expectedTid,
+              clientId: legacySecrets?.clientId,
+              cloudType: legacySecrets?.cloudType ?? 'global',
+            });
             if (typeof payload.tid !== 'string') {
               res.status(401).json({ error: 'invalid_token', detail: 'missing_tid_claim' });
               return;
@@ -1955,7 +1960,7 @@ class MicrosoftGraphServer {
               return;
             }
           } catch (err) {
-            logger.info({ err: (err as Error).message }, 'legacy /mcp: JWT decode failed');
+            logger.info({ err: (err as Error).message }, 'legacy /mcp: JWT verification failed');
             res.status(401).json({ error: 'invalid_token' });
             return;
           }

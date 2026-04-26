@@ -18,7 +18,7 @@ import crypto from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SignJWT } from 'jose';
+import { decodeJwt, SignJWT } from 'jose';
 import { newDb } from 'pg-mem';
 import type { Pool } from 'pg';
 import { MemoryRedisFacade } from '../../src/lib/redis-facade.js';
@@ -170,6 +170,7 @@ describe('Plan 03-10 — four flows + audit rows (SC#3)', () => {
         tenantPool: mockTenantPool as unknown as Parameters<
           typeof createAuthSelectorMiddleware
         >[0]['tenantPool'],
+        bearerVerifier: async ({ token }) => decodeJwt(token),
       }),
       async (req: Request, res: Response) => {
         const tenant = (req as Request & { tenant?: TenantRow }).tenant;
