@@ -9,7 +9,7 @@
  *      refuses to run (no DB writes).
  *   4. Required argv guard: missing tenant id rejects with Usage message.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { newDb } from 'pg-mem';
 import type { Pool } from 'pg';
 import crypto from 'node:crypto';
@@ -101,6 +101,7 @@ describe('plan 03-05 Task 3 — bin/disable-tenant.mjs cascade (SC#4, TENANT-07)
     const pool = await makePool();
     const kek = crypto.randomBytes(32);
     const redis = new MemoryRedisFacade();
+    const publishSpy = vi.spyOn(redis, 'publish');
     const tenantPool = new TenantPool(redis, kek);
 
     const id = '11111111-1111-4111-8111-111111111111';
@@ -138,6 +139,7 @@ describe('plan 03-05 Task 3 — bin/disable-tenant.mjs cascade (SC#4, TENANT-07)
     expect(result.disabled).toBe(id);
     expect(result.cacheKeysDeleted).toBe(2);
     expect(result.pkceKeysDeleted).toBe(1);
+    expect(result.apiKeysRevoked).toBe(1);
 
     // DB assertions
     const tRows = await pool.query(`SELECT wrapped_dek, disabled_at FROM tenants WHERE id = $1`, [
@@ -155,6 +157,7 @@ describe('plan 03-05 Task 3 — bin/disable-tenant.mjs cascade (SC#4, TENANT-07)
 
     // Pool eviction
     expect(tenantPool.has(id)).toBe(false);
+    expect(publishSpy).toHaveBeenCalledWith('mcp:api-key-revoke', 'k1');
 
     await tenantPool.drain();
   });

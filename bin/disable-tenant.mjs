@@ -16,7 +16,8 @@
  *      COMMIT.
  *   4. redis.del('mcp:cache:{tenantId}:*') + redis.del('mcp:pkce:{tenantId}:*')
  *      (after COMMIT — retriable if a step fails; txn is already durable).
- *   5. tenantPool.evict(tenantId) (synchronous — removes pool entry;
+ *   5. publish mcp:api-key-revoke for every revoked key id.
+ *   6. tenantPool.evict(tenantId) (synchronous — removes pool entry;
  *      subsequent acquires will see wrapped_dek=NULL and throw).
  *
  * Phase 4 replaces this CLI with POST /admin/tenants/{id}/disable.
@@ -78,6 +79,7 @@ async function loadAuditWriter() {
  * GUID shape that loadTenant.ts:97 enforces on the HTTP path.
  */
 const TENANT_GUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const API_KEY_REVOKE_CHANNEL = 'mcp:api-key-revoke';
 
 /**
  * WR-03 fix: SCAN-based deletion replaces the unbounded redis.keys() pattern
@@ -117,7 +119,7 @@ async function scanDel(redis, pattern) {
  *   redis?: { getRedis: () => any },
  *   tenantPool?: { evict: (id: string) => void, has: (id: string) => boolean },
  * }} [deps]
- * @returns {Promise<{ disabled: string, cacheKeysDeleted: number, pkceKeysDeleted: number }>}
+ * @returns {Promise<{ disabled: string, cacheKeysDeleted: number, pkceKeysDeleted: number, apiKeysRevoked: number }>}
  */
 export async function main(argv = process.argv.slice(2), deps = {}) {
   const tenantId = argv[0];
@@ -163,15 +165,16 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   }
 
   // Atomic DB write — one txn, two UPDATEs. If either fails, BOTH roll back.
-  await pgMod.withTransaction(async (client) => {
+  const revokedApiKeyIds = await pgMod.withTransaction(async (client) => {
     await client.query(
       'UPDATE tenants SET disabled_at = NOW(), wrapped_dek = NULL, updated_at = NOW() WHERE id = $1',
       [tenantId]
     );
-    await client.query(
-      'UPDATE api_keys SET revoked_at = NOW() WHERE tenant_id = $1 AND revoked_at IS NULL',
+    const { rows } = await client.query(
+      'UPDATE api_keys SET revoked_at = NOW() WHERE tenant_id = $1 AND revoked_at IS NULL RETURNING id',
       [tenantId]
     );
+    return rows.map((row) => row.id);
   });
 
   // WR-03 fix: SCAN-based deletion (was redis.keys() — O(n) blocking
@@ -181,6 +184,10 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   // [cursor, batch] return contract.
   const cacheKeysDeleted = await scanDel(redis, `mcp:cache:${tenantId}:*`);
   const pkceKeysDeleted = await scanDel(redis, `mcp:pkce:${tenantId}:*`);
+
+  for (const keyId of revokedApiKeyIds) {
+    await redis.publish(API_KEY_REVOKE_CHANNEL, keyId);
+  }
 
   // Synchronous pool eviction — removes the in-memory MSAL client so the
   // next acquire sees wrapped_dek=NULL and throws.
@@ -202,7 +209,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       ip: null,
       requestId: `cli-${Date.now()}`,
       result: 'success',
-      meta: { cacheKeysDeleted, pkceKeysDeleted },
+      meta: { cacheKeysDeleted, pkceKeysDeleted, apiKeysRevoked: revokedApiKeyIds.length },
     });
   }
 
@@ -210,6 +217,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     disabled: tenantId,
     cacheKeysDeleted,
     pkceKeysDeleted,
+    apiKeysRevoked: revokedApiKeyIds.length,
   };
 }
 
