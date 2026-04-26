@@ -311,7 +311,7 @@ describe('plan 5.1-06 Task 3 — tenants.sharepoint_domain migration + plumbing'
     const sp = migrations.find((m) => m.file === '20260801000000_sharepoint_domain.sql');
     expect(sp).toBeDefined();
     expect(sp!.up).toMatch(
-      /ALTER\s+TABLE\s+tenants[\s\S]*ADD\s+COLUMN\s+sharepoint_domain\s+text\s+NULL/i
+      /ALTER\s+TABLE\s+tenants[\s\S]*ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?sharepoint_domain\s+text\s+NULL/i
     );
   });
 

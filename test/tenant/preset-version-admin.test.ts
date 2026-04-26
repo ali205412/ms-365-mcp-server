@@ -82,12 +82,9 @@ function stripPgcryptoExtensionStmts(sql: string): string {
     .split('\n')
     .filter((line) => !/\bextension\b.*\bpgcrypto\b/i.test(line))
     .join('\n')
+    .replace(/\n\s*content_tsv\s+tsvector\s+GENERATED\s+ALWAYS\s+AS[\s\S]*?\s+STORED,?/i, '')
     .replace(
-      /\n\s*content_tsv\s+tsvector\s+GENERATED ALWAYS AS \(to_tsvector\('english', content\)\) STORED,/i,
-      ''
-    )
-    .replace(
-      /\nCREATE\s+INDEX\s+idx_tenant_facts_content_tsv\s+ON\s+tenant_facts\s+USING\s+gin\s+\(content_tsv\);/i,
+      /\nCREATE\s+INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?idx_tenant_facts_content_tsv\s+ON\s+tenant_facts\s+USING\s+gin\s+\(content_tsv\);/i,
       ''
     )
     .replace(/\nDO\s+\$\$[\s\S]*?\$\$;/i, '');
