@@ -18,7 +18,7 @@ import crypto from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SignJWT } from 'jose';
+import { decodeJwt, SignJWT } from 'jose';
 import { newDb } from 'pg-mem';
 import type { Pool } from 'pg';
 import { MemoryRedisFacade } from '../../src/lib/redis-facade.js';
@@ -102,6 +102,7 @@ describe('Plan 03-10 — four flows + audit rows (SC#3)', () => {
   let pkceStore: RedisPkceStore;
 
   beforeEach(async () => {
+    vi.stubEnv('MS365_MCP_APP_ONLY_API_KEY', 'test-app-only-key');
     pool = await makePool();
     redis = new MemoryRedisFacade();
     pkceStore = new RedisPkceStore(redis);
@@ -169,6 +170,7 @@ describe('Plan 03-10 — four flows + audit rows (SC#3)', () => {
         tenantPool: mockTenantPool as unknown as Parameters<
           typeof createAuthSelectorMiddleware
         >[0]['tenantPool'],
+        bearerVerifier: async ({ token }) => decodeJwt(token),
       }),
       async (req: Request, res: Response) => {
         const tenant = (req as Request & { tenant?: TenantRow }).tenant;
@@ -212,6 +214,7 @@ describe('Plan 03-10 — four flows + audit rows (SC#3)', () => {
       await new Promise<void>((r) => server!.close(() => r()));
       server = undefined;
     }
+    vi.unstubAllEnvs();
     await redis.quit();
   });
 
@@ -245,7 +248,7 @@ describe('Plan 03-10 — four flows + audit rows (SC#3)', () => {
     // (b) app-only
     const appOnlyRes = await fetch(`${baseUrl}/t/${TENANT_APP_ONLY}/mcp`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-MCP-App-Key': 'test-app-only-key' },
       body: JSON.stringify({}),
     });
     expect(appOnlyRes.status).toBe(200);

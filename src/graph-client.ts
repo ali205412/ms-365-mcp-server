@@ -109,15 +109,27 @@ export function isBinaryContentType(contentType: string): boolean {
   return false;
 }
 
+export function sanitizeGraphUrlForLog(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl);
+    return `${parsed.origin}${parsed.pathname}${parsed.search ? '?<redacted>' : ''}`;
+  } catch {
+    const marker = rawUrl.search(/[?#]/);
+    return marker === -1 ? rawUrl : `${rawUrl.slice(0, marker)}?<redacted>`;
+  }
+}
+
 interface GraphRequestOptions {
   headers?: Record<string, string>;
   method?: string;
   body?: string;
+  queryParams?: Record<string, string | number | boolean | null | undefined>;
   rawResponse?: boolean;
   includeHeaders?: boolean;
   excludeResponse?: boolean;
   accessToken?: string;
   refreshToken?: string;
+  baseUrl?: string;
 
   [key: string]: unknown;
 }
@@ -336,9 +348,22 @@ class GraphClient {
     options: GraphRequestOptions
   ): Promise<Response> {
     const cloudEndpoints = getCloudEndpoints(this.secrets.cloudType);
-    const url = `${cloudEndpoints.graphApi}/v1.0${endpoint}`;
+    const baseUrl = options.baseUrl ?? `${cloudEndpoints.graphApi}/v1.0`;
+    const parsedBaseUrl = new URL(baseUrl);
+    if (parsedBaseUrl.protocol !== 'https:') {
+      throw new Error(`GraphClient baseUrl must use https: ${baseUrl}`);
+    }
+    const endpointPath = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+    const requestUrl = new URL(`${baseUrl.replace(/\/+$/, '')}${endpointPath}`);
+    if (options.queryParams) {
+      for (const [key, value] of Object.entries(options.queryParams)) {
+        if (value === null || value === undefined) continue;
+        requestUrl.searchParams.set(key, String(value));
+      }
+    }
+    const url = requestUrl.toString();
 
-    logger.info(`[GRAPH CLIENT] Final URL being sent to Microsoft: ${url}`);
+    logger.info(`[GRAPH CLIENT] Final URL being sent to Microsoft: ${sanitizeGraphUrlForLog(url)}`);
 
     const headers: Record<string, string> = {
       Authorization: `Bearer ${accessToken}`,
@@ -379,7 +404,7 @@ class GraphClient {
       // are sufficient for operational triage.
       logger.info(
         {
-          endpoint,
+          endpoint: sanitizeGraphUrlForLog(endpoint),
           method: options.method ?? 'GET',
           hasBody: Boolean(options.body),
           hasHeaders: Boolean(options.headers),
@@ -467,7 +492,7 @@ class GraphClient {
         tenantId,
         actor: 'system',
         action: 'graph.error',
-        target: endpoint,
+        target: sanitizeGraphUrlForLog(endpoint),
         ip: null,
         requestId: ctx?.requestId ?? 'no-req-id',
         result: 'failure',

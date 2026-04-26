@@ -21,7 +21,7 @@ Existing tenants stay pinned to their stored `preset_version`. They are not migr
 - `recall-facts`
 - `forget-fact`
 
-The discovery catalog behind `search-tools`, `get-tool-schema`, and `execute-tool` can target generated Graph and product aliases that are not visible in `tools/list`.
+The discovery catalog behind `search-tools` and `get-tool-schema` can describe generated Graph and product aliases that are not visible in `tools/list`. By default, `execute-tool` may run read-only generated aliases from that catalog. Write-capable aliases and synthetic helpers such as `graph-batch`, large upload, and subscription lifecycle tools require explicit tenant enablement.
 
 ## Opt In An Existing Tenant
 

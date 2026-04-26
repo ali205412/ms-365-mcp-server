@@ -10,6 +10,7 @@
  *   - Test 6: timing-safe verify — argon2 library is used
  *   - Test 7: revoked-key cache staleness window documented
  *   - Test 8: concurrent verifies for same plaintext dedupe via in-flight promise
+ *   - Test 9: disabled tenant keys are rejected before caching
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { newDb } from 'pg-mem';
@@ -376,6 +377,34 @@ describe('plan 04-03 Task 1 — verifyApiKeyPlaintext', () => {
       expect(a!.keyId).toBe(b!.keyId);
 
       // Exactly one argon2.verify call despite two callers (in-flight dedup).
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('Test 9: disabled tenant key returns null and is not cached', async () => {
+    const pool = await makePool();
+    sharedPool = pool;
+    await seedTenant(pool, TENANT_A);
+    await seedApiKey(pool, TENANT_A, VALID_PLAINTEXT_1);
+    await pool.query(`UPDATE tenants SET disabled_at = NOW() WHERE id = $1`, [TENANT_A]);
+
+    const spy = vi.spyOn(argon2, 'verify');
+    try {
+      const disabled = await verifyApiKeyPlaintext(
+        VALID_PLAINTEXT_1,
+        makeDeps(pool, new MemoryRedisFacade())
+      );
+      expect(disabled).toBeNull();
+      expect(spy).not.toHaveBeenCalled();
+
+      await pool.query(`UPDATE tenants SET disabled_at = NULL WHERE id = $1`, [TENANT_A]);
+      const active = await verifyApiKeyPlaintext(
+        VALID_PLAINTEXT_1,
+        makeDeps(pool, new MemoryRedisFacade())
+      );
+      expect(active).not.toBeNull();
       expect(spy).toHaveBeenCalledTimes(1);
     } finally {
       spy.mockRestore();

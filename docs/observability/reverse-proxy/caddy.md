@@ -16,6 +16,11 @@ Caddy is the RECOMMENDED reverse proxy for ms-365-mcp-server v2 because:
 
 # Main MCP surface — /t/:tenantId/{mcp,sse,messages}, /register, /authorize, /token, /.well-known/*
 mcp.example.com {
+	# Admin is intentionally not reachable from the public MCP hostname.
+	handle /admin* {
+		respond 404
+	}
+
 	# SSE + streamable HTTP need flush-on-write.
 	# -1 = flush as soon as data arrives (no buffering).
 	reverse_proxy ms-365-mcp-server:3000 {

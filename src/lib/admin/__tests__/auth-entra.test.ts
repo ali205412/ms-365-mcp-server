@@ -16,6 +16,8 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Request, Response, NextFunction } from 'express';
+import { decodeJwt } from 'jose';
+import type { BearerTokenVerificationInput } from '../../microsoft-auth.js';
 
 const { loggerMock } = vi.hoisted(() => ({
   loggerMock: {
@@ -58,9 +60,13 @@ const DEFAULT_ENTRA_CONFIG: EntraConfig = {
  */
 function craftTestToken(payload: object): string {
   const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
-  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const body = Buffer.from(JSON.stringify({ tid: AZURE_TENANT_ID, ...payload })).toString(
+    'base64url'
+  );
   return `${header}.${body}.`;
 }
+
+const testVerifyToken = vi.fn(async ({ token }: BearerTokenVerificationInput) => decodeJwt(token));
 
 function mockMemberOfResponse(groupIds: string[]): ReturnType<typeof vi.fn> {
   return vi.fn().mockResolvedValue({
@@ -107,6 +113,7 @@ describe('plan 04-04 Task 1 — verifyEntraAdmin', () => {
     const identity = await verifyEntraAdmin(token, {
       entraConfig: DEFAULT_ENTRA_CONFIG,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      verifyToken: testVerifyToken,
     });
 
     expect(identity).not.toBeNull();
@@ -131,6 +138,7 @@ describe('plan 04-04 Task 1 — verifyEntraAdmin', () => {
     const identity = await verifyEntraAdmin(token, {
       entraConfig: DEFAULT_ENTRA_CONFIG,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      verifyToken: testVerifyToken,
     });
 
     expect(identity).toBeNull();
@@ -146,6 +154,7 @@ describe('plan 04-04 Task 1 — verifyEntraAdmin', () => {
     const identity = await verifyEntraAdmin(token, {
       entraConfig: DEFAULT_ENTRA_CONFIG,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      verifyToken: testVerifyToken,
     });
 
     expect(identity).toBeNull();
@@ -158,6 +167,7 @@ describe('plan 04-04 Task 1 — verifyEntraAdmin', () => {
     const identity = await verifyEntraAdmin('not.a.jwt', {
       entraConfig: DEFAULT_ENTRA_CONFIG,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      verifyToken: testVerifyToken,
     });
 
     expect(identity).toBeNull();
@@ -175,6 +185,7 @@ describe('plan 04-04 Task 1 — verifyEntraAdmin', () => {
     const identity = await verifyEntraAdmin(token, {
       entraConfig: DEFAULT_ENTRA_CONFIG,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      verifyToken: testVerifyToken,
     });
 
     expect(identity).toBeNull();
@@ -191,6 +202,7 @@ describe('plan 04-04 Task 1 — verifyEntraAdmin', () => {
     const first = await verifyEntraAdmin(token, {
       entraConfig: DEFAULT_ENTRA_CONFIG,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      verifyToken: testVerifyToken,
     });
     expect(first).not.toBeNull();
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -198,9 +210,45 @@ describe('plan 04-04 Task 1 — verifyEntraAdmin', () => {
     const second = await verifyEntraAdmin(token, {
       entraConfig: DEFAULT_ENTRA_CONFIG,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      verifyToken: testVerifyToken,
     });
     expect(second).not.toBeNull();
     expect(fetchImpl).toHaveBeenCalledTimes(1); // still 1 — cache hit
+  });
+
+  it('Test 6b: warmed membership cache does not accept an unverified same-UPN token', async () => {
+    const validToken = craftTestToken({
+      upn: 'alice@contoso.com',
+      oid: 'alice-oid',
+      aud: ADMIN_CLIENT_ID,
+    });
+    const forgedToken = craftTestToken({
+      upn: 'alice@contoso.com',
+      oid: 'alice-oid',
+      aud: ADMIN_CLIENT_ID,
+      nonce: 'forged',
+    });
+    const fetchImpl = mockMemberOfResponse([ADMIN_GROUP_ID]);
+    const verifier = vi.fn(async ({ token }: BearerTokenVerificationInput) => {
+      if (token === forgedToken) throw new Error('bad signature');
+      return decodeJwt(token);
+    });
+
+    const first = await verifyEntraAdmin(validToken, {
+      entraConfig: DEFAULT_ENTRA_CONFIG,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      verifyToken: verifier,
+    });
+    expect(first).not.toBeNull();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    const second = await verifyEntraAdmin(forgedToken, {
+      entraConfig: DEFAULT_ENTRA_CONFIG,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      verifyToken: verifier,
+    });
+    expect(second).toBeNull();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('Test 7: 5m LRU miss after TTL expiry — fetchImpl called again', async () => {
@@ -219,6 +267,7 @@ describe('plan 04-04 Task 1 — verifyEntraAdmin', () => {
       await verifyEntraAdmin(token, {
         entraConfig: DEFAULT_ENTRA_CONFIG,
         fetchImpl: fetchImpl as unknown as typeof fetch,
+        verifyToken: testVerifyToken,
       });
       expect(fetchImpl).toHaveBeenCalledTimes(1);
 
@@ -228,6 +277,7 @@ describe('plan 04-04 Task 1 — verifyEntraAdmin', () => {
       await verifyEntraAdmin(token, {
         entraConfig: DEFAULT_ENTRA_CONFIG,
         fetchImpl: fetchImpl as unknown as typeof fetch,
+        verifyToken: testVerifyToken,
       });
       expect(fetchImpl).toHaveBeenCalledTimes(2);
     } finally {
@@ -245,6 +295,7 @@ describe('plan 04-04 Task 1 — verifyEntraAdmin', () => {
     const identity = await verifyEntraAdmin(token, {
       entraConfig: DEFAULT_ENTRA_CONFIG,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      verifyToken: testVerifyToken,
     });
 
     expect(identity).toBeNull();
@@ -263,6 +314,7 @@ describe('plan 04-04 Task 1 — verifyEntraAdmin', () => {
     const identity = await verifyEntraAdmin(token, {
       entraConfig: DEFAULT_ENTRA_CONFIG,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      verifyToken: testVerifyToken,
     });
 
     expect(identity).toBeNull();
@@ -280,6 +332,7 @@ describe('plan 04-04 Task 1 — verifyEntraAdmin', () => {
     await verifyEntraAdmin(token, {
       entraConfig: DEFAULT_ENTRA_CONFIG,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      verifyToken: testVerifyToken,
     });
 
     // Aggregate info-level log content
@@ -345,6 +398,7 @@ describe('plan 04-04 Task 1 — createAdminEntraMiddleware', () => {
     const mw = createAdminEntraMiddleware({
       entraConfig: DEFAULT_ENTRA_CONFIG,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      verifyToken: testVerifyToken,
     });
 
     const { req, res, next, captured } = makeReqRes({ authorization: `Bearer ${token}` });
@@ -366,6 +420,7 @@ describe('plan 04-04 Task 1 — createAdminEntraMiddleware', () => {
     const mw = createAdminEntraMiddleware({
       entraConfig: DEFAULT_ENTRA_CONFIG,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      verifyToken: testVerifyToken,
     });
 
     const { req, res, next, captured } = makeReqRes({ authorization: `Bearer ${token}` });
@@ -383,6 +438,7 @@ describe('plan 04-04 Task 1 — createAdminEntraMiddleware', () => {
     const mw = createAdminEntraMiddleware({
       entraConfig: DEFAULT_ENTRA_CONFIG,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      verifyToken: testVerifyToken,
     });
 
     const { req, res, next, captured } = makeReqRes({ authorization: 'Bearer not-a-jwt' });
@@ -400,6 +456,7 @@ describe('plan 04-04 Task 1 — createAdminEntraMiddleware', () => {
     const mw = createAdminEntraMiddleware({
       entraConfig: DEFAULT_ENTRA_CONFIG,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      verifyToken: testVerifyToken,
     });
 
     const { req, res, next, captured } = makeReqRes({});
@@ -420,6 +477,7 @@ describe('plan 04-04 Task 1 — createAdminEntraMiddleware', () => {
     const mw = createAdminEntraMiddleware({
       entraConfig: DEFAULT_ENTRA_CONFIG,
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      verifyToken: testVerifyToken,
     });
 
     const { req, res, next, captured } = makeReqRes({ authorization: `Bearer ${token}` });

@@ -133,13 +133,9 @@ export interface ProductCallToolResult {
  * GraphClient class so callers can pass either the real client or a
  * testing stub without structural typing surprises.
  *
- * `graphRequest` already accepts `accessToken` via its options bag
- * (src/graph-client.ts GraphRequestOptions). `baseUrl` + `retryHandler`
- * flow through the open index signature — the real `graphRequest` ignores
- * them today (Phase 5.1 does not yet wire custom baseUrl substitution
- * into the pipeline); the caller passes them so downstream Phase-2
- * middleware extensions can act on them when the retryHandler tag is
- * consulted (research Pitfall 10 for Exchange nextLink expiry).
+ * `graphRequest` accepts `accessToken` and `baseUrl` via its options bag
+ * (src/graph-client.ts GraphRequestOptions), so product calls leave the
+ * Microsoft Graph host and target the product API host resolved above.
  */
 interface GraphClientRequestable {
   graphRequest: (
@@ -194,7 +190,8 @@ export async function executeProductTool(
   params: Record<string, unknown>,
   authManager: AuthManager | AuthManagerProductTokenable,
   graphClient: GraphClient | GraphClientRequestable,
-  ctx: ProductDispatchCtx & { tenantId: string }
+  ctx: ProductDispatchCtx & { tenantId: string },
+  request?: { path?: string; method?: string }
 ): Promise<ProductCallToolResult> {
   const { tenantId, ...dispatchCtx } = ctx;
   try {
@@ -221,11 +218,12 @@ export async function executeProductTool(
     );
 
     const response = await (graphClient as GraphClientRequestable).graphRequest(
-      plan.strippedAlias,
+      request?.path ?? plan.strippedAlias,
       {
         accessToken: token,
         baseUrl: plan.baseUrl,
         retryHandler: plan.retryHandler,
+        method: request?.method,
         params,
       }
     );

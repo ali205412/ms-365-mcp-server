@@ -9,7 +9,7 @@
  *   - /admin/health bypass — reachable without any header
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import express, { type Request, type Response, type NextFunction } from 'express';
+import express, { type Request, type Response } from 'express';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import argon2 from 'argon2';
@@ -18,6 +18,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { newDb } from 'pg-mem';
 import type { Pool } from 'pg';
+import { decodeJwt } from 'jose';
 
 const { loggerMock } = vi.hoisted(() => ({
   loggerMock: {
@@ -71,6 +72,7 @@ const MIGRATIONS_DIR = path.resolve(__dirname, '..', '..', '..', '..', 'migratio
 
 const ADMIN_CLIENT_ID = '11111111-1111-1111-1111-111111111111';
 const ADMIN_GROUP_ID = '22222222-2222-2222-2222-222222222222';
+const ADMIN_TENANT_ID = '33333333-3333-3333-3333-333333333333';
 const TENANT_A = '12345678-1234-4234-8234-1234567890ab';
 
 const VALID_PLAINTEXT = `${API_KEY_PREFIX}AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`;
@@ -138,9 +140,13 @@ async function seedApiKey(
 
 function craftTestToken(payload: object): string {
   const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
-  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const body = Buffer.from(JSON.stringify({ tid: ADMIN_TENANT_ID, ...payload })).toString(
+    'base64url'
+  );
   return `${header}.${body}.`;
 }
+
+const testVerifyToken = vi.fn(async ({ token }: { token: string }) => decodeJwt(token));
 
 function mockMemberOfResponse(groupIds: string[]): ReturnType<typeof vi.fn> {
   return vi.fn().mockResolvedValue({
@@ -171,6 +177,7 @@ async function startTestServer(pool: Pool, fetchImpl: typeof fetch): Promise<Tes
     redis: new MemoryRedisFacade(),
     entraConfig: DEFAULT_ENTRA_CONFIG,
     fetchImpl,
+    verifyToken: testVerifyToken,
   });
   app.use('/admin', authMw);
 

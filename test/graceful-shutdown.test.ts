@@ -249,4 +249,23 @@ describe('graceful shutdown (OPS-09 / plan 01-05)', () => {
     expect(typeof handlers['SIGTERM']).toBe('function');
     expect(typeof handlers['SIGINT']).toBe('function');
   });
+
+  it('Test 9: multiple registered HTTP servers are closed by one signal', async () => {
+    const { handlers } = installProcessSpies();
+
+    const mainServer = makeStubServer();
+    const metricsServer = makeStubServer();
+    const logger = makeStubLogger();
+
+    const { registerShutdownHooks } = await import('../src/lib/shutdown.js');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    registerShutdownHooks(mainServer as any, logger as any);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    registerShutdownHooks(metricsServer as any, logger as any);
+
+    await handlers['SIGTERM']('SIGTERM');
+
+    expect(mainServer.close).toHaveBeenCalledTimes(1);
+    expect(metricsServer.close).toHaveBeenCalledTimes(1);
+  });
 });

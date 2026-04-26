@@ -6,14 +6,18 @@ import { z } from 'zod';
  * Strategy: mock GraphClient, create a real McpServer, register tools, then invoke them.
  */
 
-// Mock logger to silence output
-vi.mock('../logger.js', () => ({
-  default: {
+const { loggerMock } = vi.hoisted(() => ({
+  loggerMock: {
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
     debug: vi.fn(),
   },
+}));
+
+// Mock logger to silence output
+vi.mock('../logger.js', () => ({
+  default: loggerMock,
 }));
 
 // Mock the generated client — we supply our own endpoint definitions per test
@@ -134,6 +138,59 @@ describe('graph-tools', () => {
     mockEndpoints.length = 0;
     mockEndpointsJson = [];
     vi.clearAllMocks();
+  });
+
+  it('does not log body-bearing Graph request contents', async () => {
+    const secretBody = 'very-secret-email-body';
+    const endpoint = makeEndpoint({
+      method: 'post',
+      path: '/me/sendMail',
+      alias: 'send-mail',
+      parameters: [
+        {
+          name: 'body',
+          type: 'Body',
+          schema: z.object({
+            message: z.object({
+              body: z.object({
+                content: z.string(),
+              }),
+            }),
+          }),
+        },
+      ],
+    });
+    const config = makeConfig({
+      method: 'post',
+      pathPattern: '/me/sendMail',
+      toolName: 'send-mail',
+    });
+    mockEndpoints.push(endpoint);
+    mockEndpointsJson = [config];
+
+    const graphClient = createMockGraphClient();
+    const server = createMockServer();
+    const { registerGraphTools } = await loadModule();
+    registerGraphTools(server as any, graphClient as any);
+
+    const tool = server.tools.get('send-mail');
+    expect(tool).toBeDefined();
+    await tool!.handler({
+      body: {
+        message: {
+          body: {
+            content: secretBody,
+          },
+        },
+      },
+    });
+
+    const joined = loggerMock.info.mock.calls
+      .flat()
+      .map((arg) => (typeof arg === 'string' ? arg : JSON.stringify(arg)))
+      .join('\n');
+    expect(joined).not.toContain(secretBody);
+    expect(joined).toContain('"bytes"');
   });
 
   // ---- 1. $count advanced query mode ----

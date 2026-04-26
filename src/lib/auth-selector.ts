@@ -27,13 +27,15 @@
 import type { Request, Response, NextFunction } from 'express';
 import type { TenantRow } from './tenant/tenant-row.js';
 import type { TenantPool } from './tenant/tenant-pool.js';
-import { createBearerMiddleware } from './microsoft-auth.js';
+import { createBearerMiddleware, type BearerTokenVerifier } from './microsoft-auth.js';
 import { requestContext, getRequestTokens } from '../request-context.js';
 import { buildWwwAuthenticate } from './www-authenticate.js';
 import logger from '../logger.js';
+import { timingSafeEqual } from 'node:crypto';
 
 export interface AuthSelectorDeps {
   tenantPool: Pick<TenantPool, 'acquire' | 'buildCachePlugin'>;
+  bearerVerifier?: BearerTokenVerifier;
 }
 
 /**
@@ -64,11 +66,26 @@ function isAppOnlyClient(client: unknown): client is AppOnlyClient {
 }
 
 const DEFAULT_APP_ONLY_SCOPE = 'https://graph.microsoft.com/.default';
+const APP_ONLY_GATEWAY_KEY_HEADER = 'x-mcp-app-key';
+
+function hasValidAppOnlyGatewayKey(req: Request): boolean {
+  const expected = process.env.MS365_MCP_APP_ONLY_API_KEY?.trim();
+  if (!expected) return false;
+
+  const provided = req.header(APP_ONLY_GATEWAY_KEY_HEADER)?.trim();
+  if (!provided) return false;
+
+  const expectedBytes = Buffer.from(expected);
+  const providedBytes = Buffer.from(provided);
+  return (
+    expectedBytes.length === providedBytes.length && timingSafeEqual(expectedBytes, providedBytes)
+  );
+}
 
 export function createAuthSelectorMiddleware(
   deps: AuthSelectorDeps
 ): (req: Request, res: Response, next: NextFunction) => Promise<void> {
-  const bearer = createBearerMiddleware();
+  const bearer = createBearerMiddleware({ verifyToken: deps.bearerVerifier });
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const tenant = (req as Request & { tenant?: TenantRow }).tenant;
@@ -81,13 +98,19 @@ export function createAuthSelectorMiddleware(
     //    owns its own requestContext.run and delegates to next() on match.
     const hasAuthHeader = req.headers.authorization?.startsWith('Bearer ');
     if (hasAuthHeader) {
-      bearer(req, res, next);
+      await bearer(req, res, next);
       return;
     }
 
-    // 2. App-only mode: acquire a client-credentials token via TenantPool +
-    //    MSAL ConfidentialClientApplication.
+    // 2. App-only mode: require an explicit gateway credential before
+    //    acquiring a client-credentials token via TenantPool + MSAL
+    //    ConfidentialClientApplication. Tenant route IDs are not secrets.
     if (tenant.mode === 'app-only') {
+      if (!hasValidAppOnlyGatewayKey(req)) {
+        res.status(401).json({ error: 'app_only_gateway_key_required' });
+        return;
+      }
+
       try {
         const client = await deps.tenantPool.acquire(tenant);
         if (!isAppOnlyClient(client)) {

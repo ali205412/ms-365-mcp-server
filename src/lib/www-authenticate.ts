@@ -19,9 +19,9 @@
  * Public-base URL resolution mirrors src/server.ts:1460-1466:
  *   1. MS365_MCP_PUBLIC_URL env (canonical)
  *   2. Deprecated MS365_MCP_BASE_URL env
- *   3. Fallback: req.protocol + req.get('host') (works behind a proxy
- *      because src/server.ts sets `app.set('trust proxy', true)` so
- *      X-Forwarded-Proto is honoured).
+ *   3. Fallback: req.protocol + req.get('host') (honours X-Forwarded-Proto
+ *      only when MS365_MCP_TRUST_PROXY explicitly enables Express trust
+ *      proxy handling).
  */
 import type { Request } from 'express';
 

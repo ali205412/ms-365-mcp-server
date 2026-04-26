@@ -26,7 +26,7 @@ vi.mock('../src/logger.js', () => ({
   default: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-import { RetryHandler } from '../src/lib/middleware/retry.js';
+import { RetryHandler, resourceUnitObservationWeight } from '../src/lib/middleware/retry.js';
 import type { GraphRequest } from '../src/lib/middleware/types.js';
 import { requestContext } from '../src/request-context.js';
 import {
@@ -217,6 +217,13 @@ describe('RetryHandler', () => {
     expect(r3.status).toBe(200);
     expect(next3).toHaveBeenCalledTimes(2);
   });
+
+  it('observes only post-response resource units beyond the pre-call floor', () => {
+    expect(resourceUnitObservationWeight(null)).toBe(0);
+    expect(resourceUnitObservationWeight('1')).toBe(0);
+    expect(resourceUnitObservationWeight('5')).toBe(4);
+    expect(resourceUnitObservationWeight('999')).toBe(99);
+  });
 });
 
 /**
@@ -277,6 +284,9 @@ describe('RetryHandler ↔ ODataErrorHandler integration', () => {
       }
       finalRetryCount = requestContext.getStore()?.retryCount;
     });
+    await Promise.resolve();
+    await vi.runAllTimersAsync();
+    await Promise.resolve();
     await vi.runAllTimersAsync();
     await runPromise;
     return { result, error, terminalCalls: terminal.mock.calls.length, finalRetryCount };

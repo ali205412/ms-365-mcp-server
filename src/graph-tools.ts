@@ -247,6 +247,113 @@ function codeFromError(error: unknown): string {
   return error instanceof Error && error.name ? error.name : 'tool_error';
 }
 
+function summarizeBodyValue(body: unknown): Record<string, unknown> {
+  if (body === undefined || body === null) {
+    return { present: false };
+  }
+  if (typeof body === 'string') {
+    return { present: true, type: 'string', bytes: Buffer.byteLength(body, 'utf8') };
+  }
+  if (Buffer.isBuffer(body)) {
+    return { present: true, type: 'buffer', bytes: body.byteLength };
+  }
+  if (typeof body === 'object') {
+    return { present: true, type: 'object', keys: Object.keys(body as Record<string, unknown>) };
+  }
+  return { present: true, type: typeof body };
+}
+
+function summarizeSerializedBody(
+  body: string | undefined,
+  headers: Record<string, string>
+): Record<string, unknown> | undefined {
+  if (body === undefined) return undefined;
+  return {
+    present: true,
+    bytes: Buffer.byteLength(body, 'utf8'),
+    contentType: headers['Content-Type'] ?? headers['content-type'],
+  };
+}
+
+function parameterValidationError(
+  toolAlias: string,
+  parameter: string,
+  error: z.ZodError
+): CallToolResult {
+  return {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          error: 'parameter_validation_failed',
+          tool: toolAlias,
+          parameter,
+          issues: error.issues.map((issue) => ({
+            path: issue.path.join('.'),
+            code: issue.code,
+            message: issue.message,
+          })),
+        }),
+      },
+    ],
+    isError: true,
+    _meta: { errorCode: 'parameter_validation_failed' },
+  };
+}
+
+function parseBodyParameter(
+  schema: z.ZodTypeAny,
+  paramName: string,
+  paramValue: unknown
+): { ok: true; value: unknown; wrapped: boolean } | { ok: false; error: z.ZodError } {
+  const direct = schema.safeParse(paramValue);
+  if (direct.success) return { ok: true, value: direct.data, wrapped: false };
+
+  const wrapped = schema.safeParse({ [paramName]: paramValue });
+  if (wrapped.success) return { ok: true, value: wrapped.data, wrapped: true };
+
+  return { ok: false, error: direct.error };
+}
+
+function validateBodyParameters(
+  tool: (typeof api.endpoints)[0],
+  params: Record<string, unknown>
+): CallToolResult | null {
+  const bodyParam = (tool.parameters ?? []).find((param) => param.type === 'Body');
+  if (!bodyParam?.schema) return null;
+
+  for (const [paramName, paramValue] of Object.entries(params)) {
+    if (paramName !== 'body' && paramName !== bodyParam.name) continue;
+    const parsed = parseBodyParameter(bodyParam.schema, paramName, paramValue);
+    if (!parsed.ok) return parameterValidationError(tool.alias, paramName, parsed.error);
+  }
+  return null;
+}
+
+function checkSyntheticGraphToolDispatch(toolAlias: string): CallToolResult | null {
+  const tenantInfo = getRequestTenant();
+  const rejection = checkDispatch(
+    toolAlias,
+    tenantInfo.enabledToolsSet,
+    tenantInfo.id,
+    tenantInfo.presetVersion
+  );
+  if (!rejection) return null;
+  logger.info(
+    { tool: toolAlias, tenantId: tenantInfo.id, preset: tenantInfo.presetVersion },
+    'dispatch-guard: synthetic tool not enabled for tenant'
+  );
+  return rejection as CallToolResult;
+}
+
+function isReadSafeDiscoveryTool(
+  tool: (typeof api.endpoints)[0],
+  config: EndpointConfig | undefined
+): boolean {
+  const method = tool.method.toUpperCase();
+  return method === 'GET' || (method === 'POST' && config?.readOnly === true);
+}
+
 async function executeGraphToolInner(
   tool: (typeof api.endpoints)[0],
   config: EndpointConfig | undefined,
@@ -275,6 +382,9 @@ async function executeGraphToolInner(
     );
     return rejection as CallToolResult;
   }
+
+  const bodyValidationError = validateBodyParameters(tool, params);
+  if (bodyValidationError) return bodyValidationError;
 
   // ── PRODUCT PREFIX ROUTING (plan 5.1-06 Task 2) ───────────────────────
   // When the tool alias carries a known product prefix (__powerbi__ /
@@ -310,11 +420,21 @@ async function executeGraphToolInner(
       };
     }
     const ctx = requestContext.getStore();
-    const productResult = await executeProductTool(tool.alias, params, authManager, graphClient, {
-      tenantId: ctx?.tenantId ?? 'unknown',
-      tenantAzureId: ctx?.tenantAzureId,
-      sharepointDomain: ctx?.sharepointDomain,
-    });
+    const productResult = await executeProductTool(
+      tool.alias,
+      params,
+      authManager,
+      graphClient,
+      {
+        tenantId: ctx?.tenantId ?? 'unknown',
+        tenantAzureId: ctx?.tenantAzureId,
+        sharepointDomain: ctx?.sharepointDomain,
+      },
+      {
+        path: tool.path,
+        method: tool.method.toUpperCase(),
+      }
+    );
     return productResult as CallToolResult;
   }
 
@@ -443,21 +563,16 @@ async function executeGraphToolInner(
 
           case 'Body':
             if (paramDef.schema) {
-              const parseResult = paramDef.schema.safeParse(paramValue);
-              if (!parseResult.success) {
-                const wrapped = { [paramName]: paramValue };
-                const wrappedResult = paramDef.schema.safeParse(wrapped);
-                if (wrappedResult.success) {
-                  logger.info(
-                    `Auto-corrected parameter '${paramName}': AI passed nested field directly, wrapped it as {${paramName}: ...}`
-                  );
-                  body = wrapped;
-                } else {
-                  body = paramValue;
-                }
-              } else {
-                body = paramValue;
+              const parsed = parseBodyParameter(paramDef.schema, paramName, paramValue);
+              if (!parsed.ok) {
+                return parameterValidationError(tool.alias, paramName, parsed.error);
               }
+              if (parsed.wrapped) {
+                logger.info(
+                  `Auto-corrected parameter '${paramName}': AI passed nested field directly, wrapped it as {${paramName}: ...}`
+                );
+              }
+              body = parsed.value;
             } else {
               body = paramValue;
             }
@@ -468,8 +583,17 @@ async function executeGraphToolInner(
             break;
         }
       } else if (paramName === 'body') {
-        body = paramValue;
-        logger.info(`Set body param: ${JSON.stringify(body)}`);
+        const bodyParam = parameterDefinitions.find((param) => param.type === 'Body');
+        if (bodyParam?.schema) {
+          const parsed = parseBodyParameter(bodyParam.schema, paramName, paramValue);
+          if (!parsed.ok) {
+            return parameterValidationError(tool.alias, paramName, parsed.error);
+          }
+          body = parsed.value;
+        } else {
+          body = paramValue;
+        }
+        logger.info({ body: summarizeBodyValue(body) }, 'Set body param');
       } else if (
         path.includes(`:${paramName}`) ||
         path.includes(`{${paramName}}`) ||
@@ -591,10 +715,13 @@ async function executeGraphToolInner(
       options.accessToken = accountAccessToken;
     }
 
-    // Redact accessToken from log output to prevent credential leakage
-    const { accessToken: _redacted, ...safeOptions } = options;
+    // Redact accessToken and body content from log output to prevent
+    // credential, message body, file, and calendar PII leakage.
+    const { accessToken: _redacted, body: _body, ...safeOptions } = options;
+    const bodySummary = summarizeSerializedBody(_body, options.headers);
+    const loggableOptions = bodySummary ? { ...safeOptions, body: bodySummary } : safeOptions;
     logger.info(
-      `Making graph request to ${path} with options: ${JSON.stringify(safeOptions)}${_redacted ? ' [accessToken=REDACTED]' : ''}`
+      `Making graph request to ${path} with options: ${JSON.stringify(loggableOptions)}${_redacted ? ' [accessToken=REDACTED]' : ''}`
     );
 
     let response = await graphClient.graphRequest(path, options);
@@ -1019,6 +1146,9 @@ export function registerGraphTools(
           openWorldHint: true,
         },
         async ({ requests }) => {
+          const dispatchRejection = checkSyntheticGraphToolDispatch('graph-batch');
+          if (dispatchRejection) return dispatchRejection;
+
           try {
             const { batch } = await import('./lib/middleware/batch.js');
             const results = await batch(requests, graphClient);
@@ -1121,6 +1251,9 @@ export function registerGraphTools(
           openWorldHint: true,
         },
         async ({ driveItemPath, contentBase64, chunkSize, conflictBehavior, fileName }) => {
+          const dispatchRejection = checkSyntheticGraphToolDispatch('graph-upload-large-file');
+          if (dispatchRejection) return dispatchRejection;
+
           try {
             const { UploadSessionHelper } = await import('./lib/upload-session.js');
             const buffer = Buffer.from(contentBase64, 'base64');
@@ -1353,6 +1486,30 @@ export async function executeToolAlias({
           text: JSON.stringify({
             error: `Tool not found: ${toolName}`,
             tip: 'Use search-tools to find available tools.',
+          }),
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  if (
+    catalog.isDiscoverySurface &&
+    !tenant.enabledToolsExplicit &&
+    !isReadSafeDiscoveryTool(toolData.tool, toolData.config)
+  ) {
+    logger.info(
+      { tool: toolName, tenantId: tenant.id, method: toolData.tool.method.toUpperCase() },
+      'executeToolAlias: write tool requires explicit tenant enablement'
+    );
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            error: `Tool requires explicit tenant enablement: ${toolName}`,
+            tenantId: tenant.id,
+            tip: 'Ask an admin to add this write-capable alias to enabled_tools before using execute-tool.',
           }),
         },
       ],

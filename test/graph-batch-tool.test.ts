@@ -49,6 +49,12 @@ function createMockServer(): { tools: Map<string, RegisteredTool>; server: unkno
 
 beforeEach(() => {
   vi.resetModules();
+  if (!('File' in globalThis)) {
+    Object.defineProperty(globalThis, 'File', {
+      value: class File {},
+      configurable: true,
+    });
+  }
 });
 
 describe('graph-batch tool registration', () => {
@@ -94,6 +100,7 @@ describe('graph-batch tool registration', () => {
 describe('graph-batch tool handler', () => {
   it('returns per-sub-request responses envelope on success', async () => {
     const { registerGraphTools } = await import('../src/graph-tools.js');
+    const { requestContext } = await import('../src/request-context.js');
     const { tools, server } = createMockServer();
 
     const fakeBatchResponses = [
@@ -114,12 +121,20 @@ describe('graph-batch tool handler', () => {
     );
 
     const tool = tools.get('graph-batch')!;
-    const result = (await tool.handler({
-      requests: [
-        { id: '1', method: 'GET', url: '/me' },
-        { id: '2', method: 'GET', url: '/me/messages' },
-      ],
-    })) as { content: Array<{ text: string }>; isError?: boolean };
+    const result = (await requestContext.run(
+      {
+        tenantId: 'tenant-batch',
+        presetVersion: 'test',
+        enabledToolsSet: new Set(['graph-batch']),
+      },
+      () =>
+        tool.handler({
+          requests: [
+            { id: '1', method: 'GET', url: '/me' },
+            { id: '2', method: 'GET', url: '/me/messages' },
+          ],
+        })
+    )) as { content: Array<{ text: string }>; isError?: boolean };
 
     expect(result.isError).toBeFalsy();
     const parsed = JSON.parse(result.content[0].text) as {
@@ -128,6 +143,41 @@ describe('graph-batch tool handler', () => {
     expect(parsed.responses).toHaveLength(2);
     expect(parsed.responses[0]).toMatchObject({ id: '1', status: 200, body: { userId: 'abc' } });
     expect(parsed.responses[1]).toMatchObject({ id: '2', status: 200, body: { value: [] } });
+  });
+
+  it('rejects when graph-batch is not enabled for the tenant', async () => {
+    const { registerGraphTools } = await import('../src/graph-tools.js');
+    const { requestContext } = await import('../src/request-context.js');
+    const { tools, server } = createMockServer();
+    const mockGraphClient = {
+      graphRequest: vi.fn(),
+    };
+
+    registerGraphTools(
+      server as Parameters<typeof registerGraphTools>[0],
+      mockGraphClient as unknown as Parameters<typeof registerGraphTools>[1],
+      false,
+      '^graph-batch$'
+    );
+
+    const tool = tools.get('graph-batch')!;
+    const result = (await requestContext.run(
+      {
+        tenantId: 'tenant-batch',
+        presetVersion: 'discovery-v1',
+        enabledToolsSet: new Set(['execute-tool']),
+      },
+      () =>
+        tool.handler({
+          requests: [{ id: '1', method: 'GET', url: '/me' }],
+        })
+    )) as { content: Array<{ text: string }>; isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    const parsed = JSON.parse(result.content[0].text) as { error: string; tool: string };
+    expect(parsed.error).toBe('tool_not_enabled_for_tenant');
+    expect(parsed.tool).toBe('graph-batch');
+    expect(mockGraphClient.graphRequest).not.toHaveBeenCalled();
   });
 
   it('serializes typed GraphError into JSON-safe fields on failing sub-requests', async () => {

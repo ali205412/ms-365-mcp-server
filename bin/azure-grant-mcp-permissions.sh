@@ -89,34 +89,45 @@ build_perms() {
 
   local args=()
   for name in "${names[@]}"; do
-    local id
+    local id found=false
     # Delegated scope first
     id=$(echo "$sp_json" | jq -r --arg n "$name" \
       '.oauth2PermissionScopes[]? | select(.value==$n) | .id' | head -1)
     if [[ -n "$id" && "$id" != "null" ]]; then
       args+=("$id=Scope")
       echo "  + $name  (delegated)"
-      continue
+      found=true
     fi
-    # Application role fallback
+    # Application role side-by-side. Some permissions exist as both delegated
+    # scopes and app roles; --with-app-only must add both, not stop after the
+    # delegated match.
     if [[ "$WITH_APP_ONLY" == "true" ]]; then
       id=$(echo "$sp_json" | jq -r --arg n "$name" \
         '.appRoles[]? | select(.value==$n) | .id' | head -1)
       if [[ -n "$id" && "$id" != "null" ]]; then
         args+=("$id=Role")
         echo "  + $name  (application)"
-        continue
+        found=true
       fi
     fi
-    echo "  ✗ $name  (not found on $label)"
+    if [[ "$found" != "true" ]]; then
+      echo "  ✗ $name  (not found on $label)"
+    fi
   done
 
   if [[ ${#args[@]} -gt 0 ]]; then
     # az ad app permission add can warn about consent — that's expected; we
     # consent at the end of the script, not per-permission.
-    az ad app permission add --id "$APP_ID" --api "$resource_app_id" \
-      --api-permissions "${args[@]}" 2>&1 \
-      | grep -v -E "(Invoking |Could not|admin-consent)" || true
+    local output status
+    set +e
+    output=$(az ad app permission add --id "$APP_ID" --api "$resource_app_id" \
+      --api-permissions "${args[@]}" 2>&1)
+    status=$?
+    set -e
+    printf '%s\n' "$output" | grep -v -E "(Invoking |Could not|admin-consent)" || true
+    if [[ $status -ne 0 ]]; then
+      return "$status"
+    fi
   fi
 }
 

@@ -211,7 +211,7 @@ Normal agent flow:
 
 1. Use `search-tools` with a plain-language goal such as "find unread messages" or "list recent SharePoint files".
 2. Use `get-tool-schema` on the candidate alias.
-3. Use `execute-tool` with the validated parameters.
+3. Use `execute-tool` with the validated parameters. Default discovery tenants can execute read-only catalog aliases; write-capable aliases require explicit tenant enablement.
 4. Save useful aliases with bookmarks, recipes, or facts when the workflow should be repeatable.
 
 Existing tenant rows should be moved to the discovery surface explicitly:
@@ -321,6 +321,7 @@ Core gateway variables:
 | `MS365_MCP_PUBLIC_URL`           | Public origin used in OAuth metadata and browser redirects.                     |
 | `MS365_MCP_CORS_ORIGINS`         | Comma-separated production CORS allowlist.                                      |
 | `MS365_MCP_OAUTH_REDIRECT_HOSTS` | Extra OAuth callback hosts allowed in production, for example `claude.ai`.      |
+| `MS365_MCP_APP_ONLY_API_KEY`     | Required gateway secret for tenant app-only MCP calls via `X-MCP-App-Key`.      |
 | `MS365_MCP_ADMIN_APP_CLIENT_ID`  | Admin Entra app client id. Required to mount `/admin/*`.                        |
 | `MS365_MCP_ADMIN_GROUP_ID`       | Entra group object id allowed to call `/admin/*`. Required to mount `/admin/*`. |
 | `MS365_MCP_ADMIN_ORIGINS`        | Browser origins allowed for admin UI calls.                                     |

@@ -2,31 +2,29 @@
  * Entra admin auth middleware + helper (plan 04-04, ADMIN-04).
  *
  * Two exports:
- *   - verifyEntraAdmin(token, deps) — decode-only JWT validation → Graph
+ *   - verifyEntraAdmin(token, deps) — verified JWT validation → Graph
  *     /me/memberOf check → cached EntraAdminIdentity|null.
  *   - createAdminEntraMiddleware(deps) — Express middleware wrapping
  *     verifyEntraAdmin with header extraction and 401/403 status mapping.
  *
  * Design constraints (D-14 + WR-08 invariant from src/oauth-provider.ts):
- *   1. Decode-only — jose.decodeJwt parses the JWT payload WITHOUT verifying
- *      the signature. Microsoft Graph validates the signature on the actual
- *      /me/memberOf call (which uses the token as a Bearer), so the /me/memberOf
- *      probe IS the authoritative signature check. Any forged JWT that reaches
- *      us with a valid `aud` claim will fail the Graph call.
+ *   1. Verify before cache lookup — jose.decodeJwt is used only to find the
+ *      tenant id needed for JWKS discovery. The presented token is then
+ *      signature/issuer/audience/expiry verified before a warmed membership
+ *      cache can grant access.
  *   2. Fail-closed on Graph outage — a 5xx response returns null (→ 403 by the
  *      middleware) rather than fail-open. This is the correct posture for an
  *      auth gate: we never grant access without a live group-membership probe.
- *   3. 5m LRU of memberOf — bounds Graph round-trips at 1 per UPN per 5
- *      minutes. Cache keys are UPNs (human-readable strings, not tokens), so
- *      the cache never holds bearer credentials in memory.
+ *   3. 5m LRU of memberOf — bounds Graph round-trips at 1 per identity per 5
+ *      minutes. Cache keys are tenant + oid/upn (not tokens), so the cache
+ *      never holds bearer credentials in memory.
  *   4. No PII at info level — WR-08 forbids logging the full token or UPN. We
  *      log at warn with HTTP status only on Graph failure; info messages are
  *      structural and contain no user identifier.
  *
- * Cache key choice: UPN (userPrincipalName). Stable per-user, human-readable
- * for operator debugging, and the natural identity in every admin audit row.
- * Using UPN also means a token refresh for the same user hits the cache —
- * memberOf does not change on token refresh.
+ * Cache key choice: tid + oid, falling back to tid + UPN for tokens without
+ * oid. That keeps group-membership cache entries tenant-scoped while still
+ * allowing token refreshes for the same identity to hit the cache.
  *
  * Security invariant (T-04-09a): full token never appears in any logger call.
  * Test 11 in auth-entra.test.ts asserts this by grepping the captured log
@@ -41,6 +39,7 @@ import { decodeJwt, type JWTPayload } from 'jose';
 import { LRUCache } from 'lru-cache';
 import { problemUnauthorized, problemForbidden } from '../problem-json.js';
 import logger from '../../../logger.js';
+import { verifyMicrosoftBearerToken, type BearerTokenVerifier } from '../../microsoft-auth.js';
 
 // ── Public types ────────────────────────────────────────────────────────────
 
@@ -77,6 +76,7 @@ export interface EntraAdminIdentity {
 export interface EntraMiddlewareDeps {
   entraConfig: EntraConfig;
   fetchImpl?: typeof fetch;
+  verifyToken?: BearerTokenVerifier;
 }
 
 // ── Module constants ────────────────────────────────────────────────────────
@@ -162,6 +162,15 @@ function truncateUpnForLog(upn: string): string {
   return `${upn.slice(0, 3)}***`;
 }
 
+function cacheKeyFromPayload(payload: JWTPayload, upn: string): string {
+  const tid = typeof payload.tid === 'string' && payload.tid.length > 0 ? payload.tid : 'unknown';
+  const subject =
+    typeof payload.oid === 'string' && payload.oid.length > 0
+      ? `oid:${payload.oid}`
+      : `upn:${upn.toLowerCase()}`;
+  return `${tid}:${subject}`;
+}
+
 // ── verifyEntraAdmin ────────────────────────────────────────────────────────
 
 /**
@@ -169,12 +178,11 @@ function truncateUpnForLog(upn: string): string {
  * token is invalid / the user is not a member of the admin group.
  *
  * Flow:
- *   1. Decode-only JWT parse (jose.decodeJwt throws on malformed → null).
- *   2. UPN extraction (upn || preferred_username; absent → null).
- *   3. aud fast-fail (payload.aud !== config.appClientId → null, no Graph call).
- *   4. LRU cache lookup by UPN. Hit → check groupId presence, return identity.
- *   5. Miss → Graph /me/memberOf fetch (Bearer = the token itself; this is
- *      the authoritative signature check per WR-08).
+ *   1. Decode JWT only to obtain tid for JWKS discovery.
+ *   2. Verify signature/issuer/audience/expiry before any cache lookup.
+ *   3. UPN extraction (upn || preferred_username; absent → null).
+ *   4. LRU cache lookup by tid+oid/upn. Hit → check groupId presence, return identity.
+ *   5. Miss → Graph /me/memberOf fetch (Bearer = the token itself; live membership check).
  *   6. On fetch failure (network, 401, 5xx) → null (fail-closed), logger.warn.
  *   7. On success → cache the group ID array, return identity if member.
  *
@@ -185,31 +193,49 @@ export async function verifyEntraAdmin(
   token: string,
   deps: EntraMiddlewareDeps
 ): Promise<EntraAdminIdentity | null> {
-  // 1. Decode-only JWT parse
-  let payload: JWTPayload;
+  let decoded: JWTPayload;
   try {
-    payload = decodeJwt(token);
+    decoded = decodeJwt(token);
   } catch (err) {
     logger.info({ err: (err as Error).message }, 'admin-entra: jwt decode failed');
     return null;
   }
 
-  // 2. UPN extraction
+  if (typeof decoded.tid !== 'string' || decoded.tid.length === 0) {
+    logger.info({}, 'admin-entra: token missing tid');
+    return null;
+  }
+
+  let payload: JWTPayload;
+  try {
+    const verifier = deps.verifyToken ?? verifyMicrosoftBearerToken;
+    payload = await verifier({
+      token,
+      tenantId: decoded.tid,
+      clientId: deps.entraConfig.appClientId,
+      cloudType: 'global',
+    });
+  } catch (err) {
+    logger.info({ err: (err as Error).message }, 'admin-entra: jwt verification failed');
+    return null;
+  }
+
   const upn = extractUpn(payload);
   if (!upn) {
     logger.info({}, 'admin-entra: token missing upn/preferred_username');
     return null;
   }
 
-  // 3. aud fast-fail. Forged tokens with attacker-crafted `aud` bail here
-  // without a Graph round-trip, shedding load and denying side-channel info.
+  // Defense-in-depth for tests and any future injected verifier.
   if (payload.aud !== deps.entraConfig.appClientId) {
     logger.info({ adminActor: truncateUpnForLog(upn) }, 'admin-entra: aud mismatch');
     return null;
   }
 
-  // 4. LRU cache lookup
-  const cached = memberOfCache.get(upn);
+  // 4. LRU cache lookup. This is intentionally after JWT verification so a
+  // forged or expired token cannot reuse a warmed membership cache entry.
+  const cacheKey = cacheKeyFromPayload(payload, upn);
+  const cached = memberOfCache.get(cacheKey);
   if (cached) {
     if (!cached.memberOf.includes(deps.entraConfig.groupId)) {
       return null;
@@ -263,7 +289,7 @@ export async function verifyEntraAdmin(
     .map((g) => g.id)
     .filter((s): s is string => typeof s === 'string');
 
-  memberOfCache.set(upn, { memberOf });
+  memberOfCache.set(cacheKey, { memberOf });
 
   // 7. Group-membership check
   if (!memberOf.includes(deps.entraConfig.groupId)) {

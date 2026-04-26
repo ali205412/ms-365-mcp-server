@@ -56,6 +56,8 @@ import { GraphError } from '../graph-errors.js';
 import logger from '../../logger.js';
 import type { TenantPool } from '../tenant/tenant-pool.js';
 import type { default as GraphClient } from '../../graph-client.js';
+import { getRequestTenant } from '../../request-context.js';
+import { checkDispatch } from '../tool-selection/dispatch-guard.js';
 
 // ─── Expiration clamps per resource prefix ─────────────────────────────────
 
@@ -504,6 +506,20 @@ function errorContent(err: unknown): {
   };
 }
 
+function guardSubscriptionTool(alias: string): {
+  content: Array<{ type: 'text'; text: string }>;
+  isError: true;
+} | null {
+  const tenant = getRequestTenant();
+  const rejection = checkDispatch(alias, tenant.enabledToolsSet, tenant.id, tenant.presetVersion);
+  if (!rejection) return null;
+  logger.info(
+    { tool: alias, tenantId: tenant.id, preset: tenant.presetVersion },
+    'dispatch-guard: subscription tool not enabled for tenant'
+  );
+  return rejection;
+}
+
 /**
  * Register the four subscription lifecycle MCP tools on the supplied server.
  * Caller is responsible for ensuring deps.publicUrl is non-empty — without
@@ -529,6 +545,9 @@ export function registerSubscriptionTools(
       openWorldHint: true,
     },
     async (params) => {
+      const dispatchRejection = guardSubscriptionTool('subscriptions-create');
+      if (dispatchRejection) return dispatchRejection;
+
       try {
         const tenantId = deps.tenantIdResolver();
         const row = await subscriptionsCreate(tenantId, params, deps);
@@ -552,6 +571,9 @@ export function registerSubscriptionTools(
       openWorldHint: true,
     },
     async (params) => {
+      const dispatchRejection = guardSubscriptionTool('subscriptions-renew');
+      if (dispatchRejection) return dispatchRejection;
+
       try {
         const tenantId = deps.tenantIdResolver();
         const result = await subscriptionsRenew(tenantId, params, deps);
@@ -575,6 +597,9 @@ export function registerSubscriptionTools(
       openWorldHint: true,
     },
     async (params) => {
+      const dispatchRejection = guardSubscriptionTool('subscriptions-delete');
+      if (dispatchRejection) return dispatchRejection;
+
       try {
         const tenantId = deps.tenantIdResolver();
         const result = await subscriptionsDelete(tenantId, params, deps);
@@ -596,6 +621,9 @@ export function registerSubscriptionTools(
       openWorldHint: true,
     },
     async () => {
+      const dispatchRejection = guardSubscriptionTool('subscriptions-list');
+      if (dispatchRejection) return dispatchRejection;
+
       try {
         const tenantId = deps.tenantIdResolver();
         const rows = await subscriptionsList(tenantId, {} as Record<string, never>, {

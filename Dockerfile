@@ -60,6 +60,10 @@ COPY --from=builder --chown=nodejs:nodejs /app/dist ./dist
 COPY --from=builder --chown=nodejs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nodejs:nodejs /app/package*.json ./
 COPY --from=builder --chown=nodejs:nodejs /app/bin/check-health.cjs ./bin/check-health.cjs
+COPY --from=builder --chown=nodejs:nodejs /app/bin/migrate.mjs ./bin/migrate.mjs
+COPY --from=builder --chown=nodejs:nodejs /app/migrations ./migrations
+COPY --from=builder --chown=nodejs:nodejs /app/docker-entrypoint.sh ./docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh /app/bin/migrate.mjs
 
 ENV NODE_ENV=production
 
@@ -78,4 +82,5 @@ LABEL org.opencontainers.image.title="ms-365-mcp-server" \
 # Forward SIGTERM so graceful shutdown (plan 01-05) receives the signal.
 STOPSIGNAL SIGTERM
 
-ENTRYPOINT ["/sbin/tini", "--", "node", "dist/index.js"]
+ENTRYPOINT ["/sbin/tini", "--", "/app/docker-entrypoint.sh"]
+CMD ["node", "dist/index.js"]

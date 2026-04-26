@@ -42,6 +42,7 @@ const REDACT_PATHS: string[] = [
   'req.headers["x-microsoft-refresh-token"]',
   'req.headers["x-tenant-*"]',
   'req.headers["x-admin-api-key"]',
+  'req.headers["x-mcp-app-key"]',
   'req.body',
   'res.body',
   '*.refresh_token',
@@ -178,6 +179,83 @@ const pinoInstance: pino.Logger = dest ? pino(pinoOptions, dest) : pino(pinoOpti
 // The adapter normalises both orderings to pino's native form so all 121+
 // existing call sites compile and work without modification.
 type LogArg = string | object | Error | unknown;
+const LOG_REDACTION_CENSOR = '[REDACTED]';
+const LOG_SANITIZE_MAX_DEPTH = 8;
+const SENSITIVE_LOG_KEYS = new Set([
+  'authorization',
+  'cookie',
+  'prefer',
+  'xmicrosoftrefreshtoken',
+  'xtenant',
+  'xadminapikey',
+  'xmcpappkey',
+  'refreshtoken',
+  'clientsecret',
+  'ms365mcpoauthtoken',
+  'accesstoken',
+  'wrappeddek',
+  'clientsecretresolved',
+  'ms365mcpdatabaseurl',
+  'dek',
+  'kek',
+  'ms365mcpkek',
+  'ms365mcpkekprevious',
+  'codeverifier',
+  'servercodeverifier',
+  'clientcodechallenge',
+  'code',
+  'authorizationcode',
+  'apikey',
+  'adminapikey',
+  'xadminapikey',
+  'plaintextkey',
+  'keyhash',
+  'clientstate',
+]);
+
+function normalizeLogKey(key: string): string {
+  return key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+}
+
+function isSensitiveLogKey(key: string): boolean {
+  return SENSITIVE_LOG_KEYS.has(normalizeLogKey(key));
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object') return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function sanitizeLogValue(value: unknown, seen: WeakSet<object>, depth: number): unknown {
+  if (value === null || typeof value !== 'object') return value;
+  if (value instanceof Error) return value;
+  if (depth > LOG_SANITIZE_MAX_DEPTH) return '[Truncated]';
+  if (seen.has(value)) return '[Circular]';
+
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeLogValue(item, seen, depth + 1));
+  }
+
+  if (!isPlainRecord(value)) {
+    return value;
+  }
+
+  const out: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    out[key] = isSensitiveLogKey(key)
+      ? LOG_REDACTION_CENSOR
+      : sanitizeLogValue(child, seen, depth + 1);
+  }
+  return out;
+}
+
+export function sanitizeLogMeta(meta: object): object {
+  const sanitized = sanitizeLogValue(meta, new WeakSet<object>(), 0);
+  return sanitized && typeof sanitized === 'object' ? (sanitized as object) : {};
+}
 
 function adaptArgs(arg1: LogArg, arg2?: LogArg): [object, string] {
   if (typeof arg1 === 'string') {
@@ -195,19 +273,19 @@ function wrap(instance: pino.Logger): AdaptedLogger {
   return {
     info(arg1: LogArg, arg2?: LogArg): void {
       const [meta, msg] = adaptArgs(arg1, arg2);
-      instance.info(meta, msg);
+      instance.info(sanitizeLogMeta(meta), msg);
     },
     warn(arg1: LogArg, arg2?: LogArg): void {
       const [meta, msg] = adaptArgs(arg1, arg2);
-      instance.warn(meta, msg);
+      instance.warn(sanitizeLogMeta(meta), msg);
     },
     error(arg1: LogArg, arg2?: LogArg): void {
       const [meta, msg] = adaptArgs(arg1, arg2);
-      instance.error(meta, msg);
+      instance.error(sanitizeLogMeta(meta), msg);
     },
     debug(arg1: LogArg, arg2?: LogArg): void {
       const [meta, msg] = adaptArgs(arg1, arg2);
-      instance.debug(meta, msg);
+      instance.debug(sanitizeLogMeta(meta), msg);
     },
     // pino-http calls logger.child({}, opts) for per-request loggers. Return a
     // wrapped child so the adapter's argument-order contract stays intact.

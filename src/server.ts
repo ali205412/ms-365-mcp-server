@@ -3,6 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import express, { type Request, type Response, type RequestHandler } from 'express';
+import expressRateLimit from 'express-rate-limit';
 import logger, { enableConsoleLogging, rawPinoLogger } from './logger.js';
 import { registerAuthTools } from './auth-tools.js';
 import { registerGraphTools, registerDiscoveryTools } from './graph-tools.js';
@@ -21,8 +22,11 @@ import { buildMcpServerInstructions } from './mcp-instructions.js';
 import GraphClient from './graph-client.js';
 import AuthManager, { buildScopesFromEndpoints } from './auth.js';
 import { MicrosoftOAuthProvider } from './oauth-provider.js';
-import { exchangeCodeForToken, refreshAccessToken } from './lib/microsoft-auth.js';
-import { decodeJwt } from 'jose';
+import {
+  exchangeCodeForToken,
+  refreshAccessToken,
+  verifyMicrosoftBearerToken,
+} from './lib/microsoft-auth.js';
 import type { CommandOptions } from './cli.ts';
 import { getSecrets, type AppSecrets } from './secrets.js';
 import { getCloudEndpoints } from './cloud-config.js';
@@ -33,6 +37,8 @@ import { validateRedirectUri, type RedirectUriPolicy } from './lib/redirect-uri.
 import { createCorsMiddleware, type CorsMode } from './lib/cors.js';
 import { getRedis } from './lib/redis.js';
 import { registerAuditResourcePublisher } from './lib/audit.js';
+import { resolveTrustProxySetting } from './lib/trust-proxy.js';
+import { createRateLimitMiddleware } from './lib/rate-limit/middleware.js';
 import type { CloudType } from './cloud-config.js';
 import type { PkceStore } from './lib/pkce-store/pkce-store.js';
 import { MemoryPkceStore } from './lib/pkce-store/memory-store.js';
@@ -68,6 +74,20 @@ import { nanoid } from 'nanoid';
  * legacy mount entirely; at that point this sentinel disappears.
  */
 const LEGACY_SINGLE_TENANT_KEY = '_';
+
+function createHttpRouteRateLimit(): RequestHandler {
+  const rawLimit = process.env.MS365_MCP_HTTP_ROUTE_RATE_LIMIT_PER_MIN;
+  const parsedLimit = rawLimit ? Number.parseInt(rawLimit, 10) : 600;
+  const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 600;
+
+  return expressRateLimit({
+    windowMs: 60_000,
+    limit,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'rate_limited', reason: 'route_rate' },
+  }) as unknown as RequestHandler;
+}
 
 /**
  * Parse HTTP option into host and port components.
@@ -159,6 +179,11 @@ export interface TokenHandlerSecrets {
   clientSecret?: string;
   tenantId?: string;
   cloudType: CloudType;
+}
+
+function stripRefreshToken<T extends Record<string, unknown>>(result: T): Omit<T, 'refresh_token'> {
+  const { refresh_token: _refreshToken, ...publicResult } = result;
+  return publicResult;
 }
 
 /**
@@ -314,7 +339,7 @@ export function createTokenHandler(config: TokenHandlerConfig) {
           serverCodeVerifier || (body.code_verifier as string | undefined),
           secrets.cloudType
         );
-        res.json(result);
+        res.json(stripRefreshToken(result));
       } else if (body.grant_type === 'refresh_token') {
         // WR-01 fix: the legacy /token refresh_token branch accepted a
         // refresh token from the request body, which violated the SECUR-02
@@ -352,7 +377,7 @@ export function createTokenHandler(config: TokenHandlerConfig) {
             tenantId,
             secrets.cloudType
           );
-          res.json(result);
+          res.json(stripRefreshToken(result));
         } else {
           res.status(400).json({
             error: 'unsupported_grant_type',
@@ -1419,34 +1444,52 @@ class MicrosoftGraphServer {
     // route JSON-RPC responses through Express's response methods.
     const toolsListFilter = createToolsListFilterMiddleware();
 
-    app.get('/t/:tenantId/sse', seedTenantContext, authSelector, legacySseGet);
+    // region:phase6-rate-limit (plan 06-09 — closes OPS-08 gap from 06-04 Task 3)
+    // Mount the per-tenant rate-limit middleware BETWEEN the existing chain
+    // members and transport handlers. Both request-rate and graph-points
+    // budgets are gated (per ROADMAP SC#3 + RESEARCH.md §Open Question #5).
+    const routeRateLimit = createHttpRouteRateLimit();
+    const rateLimit = createRateLimitMiddleware({ redis });
+
+    // codeql[js/missing-rate-limiting]: createRateLimitMiddleware gates this route before the transport handler.
+    app.get(
+      '/t/:tenantId/sse',
+      seedTenantContext,
+      routeRateLimit,
+      authSelector,
+      rateLimit,
+      legacySseGet
+    );
     app.post(
       '/t/:tenantId/messages',
       seedTenantContext,
+      routeRateLimit,
       authSelector,
       toolsListFilter,
+      rateLimit,
       legacySsePost
     );
-    // region:phase6-rate-limit (plan 06-09 — closes OPS-08 gap from 06-04 Task 3)
-    // Mount the per-tenant rate-limit middleware BETWEEN the existing chain
-    // members and the streamableHttp handler. Both request-rate and
-    // graph-points budgets are gated (per ROADMAP SC#3 + RESEARCH.md
-    // §Open Question #5). legacy SSE routes (/t/:tenantId/sse +
-    // /t/:tenantId/messages) are INTENTIONALLY NOT gated — SSE streams are
-    // long-lived; per-request gating would break MCP streaming semantics.
-    // D-04 per-tenant granularity is still preserved because the SAME tenant's
-    // Streamable HTTP requests (below) carry the budget.
-    const { createRateLimitMiddleware } = await import('./lib/rate-limit/middleware.js');
-    const rateLimit = createRateLimitMiddleware({ redis });
+
+    // codeql[js/missing-rate-limiting]: createRateLimitMiddleware gates this route before the transport handler.
     app.post(
       '/t/:tenantId/mcp',
       seedTenantContext,
+      routeRateLimit,
       authSelector,
       toolsListFilter,
       rateLimit,
       streamableHttp
     );
-    app.get('/t/:tenantId/mcp', seedTenantContext, authSelector, rateLimit, streamableHttp);
+
+    // codeql[js/missing-rate-limiting]: createRateLimitMiddleware gates this route before the transport handler.
+    app.get(
+      '/t/:tenantId/mcp',
+      seedTenantContext,
+      routeRateLimit,
+      authSelector,
+      rateLimit,
+      streamableHttp
+    );
     // endregion:phase6-rate-limit
 
     // region:phase4-webhook-receiver
@@ -1551,7 +1594,7 @@ class MicrosoftGraphServer {
       const { host, port } = parseHttpOption(this.options.http);
 
       const app = express();
-      app.set('trust proxy', true);
+      app.set('trust proxy', resolveTrustProxySetting());
 
       // Health endpoints (OPS-03 / OPS-04) — MUST be mounted BEFORE pino-http,
       // CORS, body parsers, and ANY auth middleware so that:
@@ -1593,16 +1636,11 @@ class MicrosoftGraphServer {
         requestContext.run({ requestId: req.id as string, tenantId: null }, next);
       });
 
-      // Body-parser limit raised for MWARE-05 large uploads (plan 02-06). MCP
-      // tool payloads (e.g., base64-encoded file content routed through the
-      // graph-upload-large-file tool) can approach the chunk ceiling (60 MiB
-      // per D-08). Default '60mb' is safe for single-tenant; Phase 3 may add
-      // per-tenant overrides.
-      //
-      // express default is 100 KB for JSON and 100 KB for urlencoded — far
-      // below the 60 MiB upload ceiling, so without this raise large-file
-      // uploads over HTTP transport would 413 before reaching the tool.
-      const bodyParserLimit = process.env.MS365_MCP_BODY_PARSER_LIMIT || '60mb';
+      // Keep the global parser small because it runs before tenant auth and
+      // rate limiting. Operators that intentionally expose large HTTP MCP
+      // upload payloads can opt in with MS365_MCP_BODY_PARSER_LIMIT, but the
+      // default must fail closed for unauthenticated requests.
+      const bodyParserLimit = process.env.MS365_MCP_BODY_PARSER_LIMIT || '1mb';
       // body-parser's NextHandleFunction predates Express 5's RequestHandler;
       // the cast bridges the @types gap. See the webhook-receiver mount for
       // the matching discussion.
@@ -1913,8 +1951,8 @@ class MicrosoftGraphServer {
       // /t/:tenantId/mcp route + authSelector (createBearerMiddleware +
       // createAuthSelectorMiddleware). Until then, this keeps the v1 HTTP
       // route behaviorally compatible WITHOUT the header-read security hole.
-      // CR-03 fix: enforce decode-only tid check on the legacy /mcp mount
-      // (same Pitfall 5 discipline as createBearerMiddleware in
+      // CR-03 fix: enforce verified tid check on the legacy /mcp mount
+      // (same tenant discipline as createBearerMiddleware in
       // src/lib/microsoft-auth.ts). Without this, an operator who forgets to
       // configure tenants in Postgres but still starts the server in HTTP
       // mode gets a working /mcp endpoint that routes to whatever single
@@ -1924,11 +1962,18 @@ class MicrosoftGraphServer {
       // not match. Plan 03-09 retires this entire legacy mount; until then,
       // this is the inline guard.
       const legacySecrets = this.secrets;
-      const legacyMcpAccessTokenExtractor = (
+      const legacyMcpRouteRateLimit = createHttpRouteRateLimit();
+      const legacyMcpRateLimit = createRateLimitMiddleware({ redis: getRedis() });
+      const seedLegacyRateLimitTenant: RequestHandler = (req, _res, next) => {
+        const tenantReq = req as Request & { tenant?: TenantRow };
+        tenantReq.tenant ??= { id: LEGACY_SINGLE_TENANT_KEY, rate_limits: null } as TenantRow;
+        next();
+      };
+      const legacyMcpAccessTokenExtractor = async (
         req: Request & { microsoftAuth?: { accessToken: string } },
         res: Response,
         next: express.NextFunction
-      ): void => {
+      ): Promise<void> => {
         const authHeader = req.headers.authorization;
         if (!authHeader || !authHeader.startsWith('Bearer ')) {
           res.status(401).json({ error: 'Missing or invalid access token' });
@@ -1936,13 +1981,15 @@ class MicrosoftGraphServer {
         }
         const token = authHeader.substring(7);
 
-        // Decode-only tid check — Microsoft Graph validates the signature on
-        // the actual tool call. We only need the tid claim to enforce that
-        // the bearer matches the configured single tenant (when one is set).
         const expectedTid = legacySecrets?.tenantId;
         if (expectedTid && expectedTid !== 'common') {
           try {
-            const payload = decodeJwt(token);
+            const payload = await verifyMicrosoftBearerToken({
+              token,
+              tenantId: expectedTid,
+              clientId: legacySecrets?.clientId,
+              cloudType: legacySecrets?.cloudType ?? 'global',
+            });
             if (typeof payload.tid !== 'string') {
               res.status(401).json({ error: 'invalid_token', detail: 'missing_tid_claim' });
               return;
@@ -1955,7 +2002,7 @@ class MicrosoftGraphServer {
               return;
             }
           } catch (err) {
-            logger.info({ err: (err as Error).message }, 'legacy /mcp: JWT decode failed');
+            logger.info({ err: (err as Error).message }, 'legacy /mcp: JWT verification failed');
             res.status(401).json({ error: 'invalid_token' });
             return;
           }
@@ -1966,8 +2013,12 @@ class MicrosoftGraphServer {
       };
 
       // Handle both GET and POST methods as required by MCP Streamable HTTP specification
+      // codeql[js/missing-rate-limiting]: legacyMcpRateLimit gates this route before bearer-token handling.
       app.get(
         '/mcp',
+        legacyMcpRouteRateLimit,
+        seedLegacyRateLimitTenant,
+        legacyMcpRateLimit,
         legacyMcpAccessTokenExtractor,
         async (req: Request & { microsoftAuth?: { accessToken: string } }, res: Response) => {
           const handler = async () => {
@@ -2019,8 +2070,12 @@ class MicrosoftGraphServer {
         }
       );
 
+      // codeql[js/missing-rate-limiting]: legacyMcpRateLimit gates this route before bearer-token handling.
       app.post(
         '/mcp',
+        legacyMcpRouteRateLimit,
+        seedLegacyRateLimitTenant,
+        legacyMcpRateLimit,
         legacyMcpAccessTokenExtractor,
         async (req: Request & { microsoftAuth?: { accessToken: string } }, res: Response) => {
           const handler = async () => {
@@ -2076,10 +2131,8 @@ class MicrosoftGraphServer {
       });
 
       // Bind the http.Server return value so we can register graceful-shutdown
-      // hooks against it (plan 01-05). registerShutdownHooks internally calls
-      // process.removeAllListeners('SIGTERM'|'SIGINT') first, so this
-      // HTTP-mode registration supersedes any earlier stdio-mode registration
-      // from src/index.ts.
+      // hooks against it (plan 01-05). The shutdown registry closes every
+      // registered listener (main HTTP and optional metrics) on the same signal.
       let httpServer: import('node:http').Server;
       if (host) {
         httpServer = app.listen(port, host, () => {

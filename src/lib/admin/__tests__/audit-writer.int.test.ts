@@ -16,7 +16,7 @@
  * Test matrix:
  *   1  admin.tenant.create        — meta {tenantId, mode, cloudType, clientId}
  *   2  admin.tenant.update        — meta {tenantId, fieldsChanged:[...]}
- *   3  admin.tenant.disable       — meta {tenantId, cacheKeysDeleted, pkceKeysDeleted, apiKeysRevoked}
+ *   3  admin.tenant.disable       — meta {tenantId, cacheKeysDeleted, pkceKeysDeleted, revokedCredentialCount}
  *   4  admin.tenant.delete        — audit row written inside txn, CASCADE-
  *                                   deletes with tenant; pino info log
  *                                   carries the durable record (see 04-02
@@ -355,11 +355,11 @@ describe('plan 04-06 Task 1 — admin-action audit writer (ADMIN-06)', () => {
       expect(meta.tenantId).toBe(tenantId);
       expect(typeof meta.cacheKeysDeleted).toBe('number');
       expect(typeof meta.pkceKeysDeleted).toBe('number');
-      expect(typeof meta.apiKeysRevoked).toBe('number');
+      expect(typeof meta.revokedCredentialCount).toBe('number');
       // Fresh tenant with no cache / pkce / api_keys — all counters 0.
       expect(meta.cacheKeysDeleted).toBe(0);
       expect(meta.pkceKeysDeleted).toBe(0);
-      expect(meta.apiKeysRevoked).toBe(0);
+      expect(meta.revokedCredentialCount).toBe(0);
     } finally {
       await close();
     }
@@ -398,7 +398,7 @@ describe('plan 04-06 Task 1 — admin-action audit writer (ADMIN-06)', () => {
       const [meta] = deleteLogCall!;
       expect(meta.tenantId).toBe(tenantId);
       expect(meta.actor).toBe('alice@example.com');
-      expect(typeof meta.apiKeysRevoked).toBe('number');
+      expect(typeof meta.revokedCredentialCount).toBe('number');
       expect(typeof meta.cacheKeysDeleted).toBe('number');
       expect(typeof meta.pkceKeysDeleted).toBe('number');
     } finally {

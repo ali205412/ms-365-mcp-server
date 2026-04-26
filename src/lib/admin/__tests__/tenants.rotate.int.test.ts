@@ -26,6 +26,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
+import argon2 from 'argon2';
 
 const { loggerMock } = vi.hoisted(() => ({
   loggerMock: {
@@ -91,6 +92,12 @@ vi.mock('../../postgres.js', async () => {
 
 import * as tenantsModule from '../tenants.js';
 import { createTenantsRoutes } from '../tenants.js';
+import {
+  API_KEY_PREFIX,
+  API_KEY_REVOKE_CHANNEL,
+  __resetApiKeyCacheForTesting,
+  verifyApiKeyPlaintext,
+} from '../api-keys.js';
 import { MemoryRedisFacade } from '../../redis-facade.js';
 import { createCursorSecret } from '../cursor.js';
 
@@ -241,6 +248,7 @@ const VALID_BODY = {
 describe('plan 04-02 Task 2 — /admin/tenants rotate-secret + disable + delete', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetApiKeyCacheForTesting();
     txFailMode = null;
   });
 
@@ -413,6 +421,7 @@ describe('plan 04-02 Task 2 — /admin/tenants rotate-secret + disable + delete'
     sharedPool = pool;
     const tp = makeTenantPoolStub();
     const redis = new MemoryRedisFacade();
+    const publishSpy = vi.spyOn(redis, 'publish');
 
     const publishedTenantIds: string[] = [];
     redis.on('message', (channel, msg) => {
@@ -435,11 +444,20 @@ describe('plan 04-02 Task 2 — /admin/tenants rotate-secret + disable + delete'
       await redis.set(`mcp:cache:${id}:userB:sh`, '{}', 'EX', 3600);
       await redis.set(`mcp:pkce:${id}:state-1`, '{}', 'EX', 600);
       // Seed an api_key row for the tenant
+      const plaintext = `${API_KEY_PREFIX}DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD`;
+      const keyHash = await argon2.hash(plaintext, {
+        type: argon2.argon2id,
+        memoryCost: 64 * 1024,
+        timeCost: 3,
+        parallelism: 1,
+      });
       await pool.query(
         `INSERT INTO api_keys (id, tenant_id, name, key_hash, display_suffix)
-           VALUES ('ak-1', $1, 'bot', 'h1', 'sfx1')`,
-        [id]
+           VALUES ('ak-1', $1, 'bot', $2, $3)`,
+        [id, keyHash, plaintext.slice(-8)]
       );
+      const warmIdentity = await verifyApiKeyPlaintext(plaintext, { pgPool: pool, redis });
+      expect(warmIdentity?.keyId).toBe('ak-1');
 
       const res = await doPatch(`${url}/admin/tenants/${id}/disable`);
       expect(res.status).toBe(200);
@@ -473,6 +491,8 @@ describe('plan 04-02 Task 2 — /admin/tenants rotate-secret + disable + delete'
       // Invalidation published
       await new Promise((r) => setTimeout(r, 20));
       expect(publishedTenantIds).toContain(id);
+      expect(publishSpy).toHaveBeenCalledWith(API_KEY_REVOKE_CHANNEL, 'ak-1');
+      await expect(verifyApiKeyPlaintext(plaintext, { pgPool: pool, redis })).resolves.toBeNull();
 
       // Audit row
       const { rows: auditRows } = await pool.query(
@@ -483,7 +503,7 @@ describe('plan 04-02 Task 2 — /admin/tenants rotate-secret + disable + delete'
         typeof auditRows[0].meta === 'string' ? JSON.parse(auditRows[0].meta) : auditRows[0].meta;
       expect(meta.cacheKeysDeleted).toBe(2);
       expect(meta.pkceKeysDeleted).toBe(1);
-      expect(meta.apiKeysRevoked).toBe(1);
+      expect(meta.revokedCredentialCount).toBe(1);
       // wrapped_dek MUST NOT appear in audit meta
       expect(JSON.stringify(meta).toLowerCase()).not.toContain('wrapped_dek');
       expect(JSON.stringify(meta).toLowerCase()).not.toContain('wrappeddek');
@@ -604,6 +624,7 @@ describe('plan 04-02 Task 2 — /admin/tenants rotate-secret + disable + delete'
     sharedPool = pool;
     const tp = makeTenantPoolStub();
     const redis = new MemoryRedisFacade();
+    const publishSpy = vi.spyOn(redis, 'publish');
 
     const { url, close } = await startServer(
       pool,
@@ -670,6 +691,8 @@ describe('plan 04-02 Task 2 — /admin/tenants rotate-secret + disable + delete'
 
       // tenantPool.evict called
       expect(tp.evict).toHaveBeenCalledWith(id);
+      expect(publishSpy).toHaveBeenCalledWith(API_KEY_REVOKE_CHANNEL, 'ak-1');
+      expect(publishSpy).toHaveBeenCalledWith(API_KEY_REVOKE_CHANNEL, 'ak-2');
 
       // Pino info log records the delete for durable observability
       const deleteLogCall = loggerMock.info.mock.calls.find((call) => {

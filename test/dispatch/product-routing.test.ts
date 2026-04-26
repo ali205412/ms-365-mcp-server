@@ -112,6 +112,32 @@ describe('plan 05.1-06 Task 2 — product dispatch routing', () => {
     expect(result.content[0].text).toContain('workspace-1');
   });
 
+  it('Test R5b: executeProductTool uses generated endpoint path and method when provided', async () => {
+    const fakeGraphRequest = vi.fn().mockResolvedValue({
+      content: [{ type: 'text', text: JSON.stringify({ value: [] }) }],
+    });
+    const authManager = {
+      getTokenForProduct: vi.fn().mockResolvedValue('pbi-access-token'),
+    } as unknown as AuthManager;
+    const graphClient = {
+      graphRequest: fakeGraphRequest,
+    } as unknown as GraphClient;
+
+    await executeProductTool(
+      '__powerbi__Groups_GetGroups',
+      {},
+      authManager,
+      graphClient,
+      { tenantId: 'tenantA' },
+      { path: '/groups', method: 'GET' }
+    );
+
+    const [path, options] = fakeGraphRequest.mock.calls[0];
+    expect(path).toBe('/groups');
+    expect(options.method).toBe('GET');
+    expect(options.baseUrl).toBe('https://api.powerbi.com/v1.0/myorg');
+  });
+
   it('Test R6: executeProductTool for sp-admin missing sharepoint_domain returns structured MCP error', async () => {
     const fakeGetTokenForProduct = vi.fn();
     const fakeGraphRequest = vi.fn();

@@ -1,33 +1,36 @@
 # Primary reverse-proxy reference for ms-365-mcp-server v2 (OPS-10).
 #
-# Terminates TLS, preserves X-Forwarded-* (so src/server.ts `app.set('trust
-# proxy', true)` sees the real client IP + scheme), and disables buffering
-# for SSE streams so long-lived MCP notifications pass through in real time.
+# Terminates TLS, preserves X-Forwarded-* (set MS365_MCP_TRUST_PROXY=1 so
+# Express honors the real client IP + scheme), and disables buffering for SSE
+# streams so long-lived MCP notifications pass through in real time.
 #
 # Replace mcp.example.com with your public hostname. The container is
 # reachable at 127.0.0.1:3000 per examples/docker-compose/docker-compose.yml.
 #
-# Caddy TLS (threat ref T-01-08d from plan 01-08 threat model):
-#   `tls on_demand` will auto-issue certs for any hostname that resolves to
-#   this server. If your server has a broad public IP with DNS pointed at
-#   it, an attacker can trick Caddy into minting certs for unrelated hosts.
-#   In production, tighten to an explicit `tls <email>` block or use the
-#   `ask` directive with a gated endpoint:
-#       tls <email> {
-#         on_demand
-#         ask http://localhost:3000/internal/cert-allowlist
-#       }
-#   The snippet below keeps `on_demand` for dev-friendliness; production
-#   deployments MUST replace it.
-
 mcp.example.com {
-  # Production: replace with a fixed `tls <email>` block or gate on_demand
-  # via an `ask` directive. See CHANGELOG.md and plan 01-08 T-01-08d.
-  tls {
-    on_demand
+  tls ops@example.com
+
+  # Admin endpoints belong on admin.example.com with stricter ACL/SSO.
+  handle /admin* {
+    respond 404
   }
 
-  # MCP endpoints (Streamable HTTP + legacy SSE shim).
+  # Tenant-scoped v2 MCP/OAuth/webhook routes.
+  handle /t/* {
+    reverse_proxy 127.0.0.1:3000 {
+      header_up Host {host}
+      header_up X-Forwarded-For {remote}
+      header_up X-Forwarded-Proto {scheme}
+
+      flush_interval -1
+      transport http {
+        read_timeout 1h
+        write_timeout 1h
+      }
+    }
+  }
+
+  # Legacy MCP endpoints (Streamable HTTP + legacy SSE shim).
   #
   # SSE (Server-Sent Events) is a long-lived streaming response; Caddy's
   # default buffering would hold events until a chunk boundary, breaking
@@ -68,16 +71,10 @@ mcp.example.com {
     log_skip
   }
 
-  # Prometheus metrics endpoint (port 9464 per OTel convention, separate
-  # from the main listener — see docker-compose.yml).
-  #
-  # Uncomment the basic_auth block to require credentials for scrape
-  # targets outside localhost. Leave open for same-host Prometheus.
+  # Metrics are private by default. Publish them on a separate hostname with
+  # auth/IP allowlist after setting MS365_MCP_METRICS_BEARER.
   handle /metrics {
-    # basic_auth {
-    #   prometheus $2a$14$SOME_BCRYPT_HASH
-    # }
-    reverse_proxy 127.0.0.1:9464
+    respond 404
   }
 
   # Log format: JSON for aggregation compatibility (Loki / Grafana / ES).
