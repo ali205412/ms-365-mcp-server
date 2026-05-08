@@ -102,8 +102,9 @@ describe('Phase 8 tool annotations and safe-write confirmation', () => {
       openWorldHint: true,
       riskLevel: 'high',
     });
-    expect(toolMeta(server, 'send-mail').inputSchema).toHaveProperty('confirmation');
-    expect(toolMeta(server, 'send-mail').inputSchema).toHaveProperty('confirmationId');
+    const sendMailSchema = toolMeta(server, 'send-mail').inputSchema as { shape: Record<string, unknown> };
+    expect(sendMailSchema.shape).toHaveProperty('confirmation');
+    expect(sendMailSchema.shape).toHaveProperty('confirmationId');
   });
 
   it('returns confirmation_required with exact next call shape for high-risk direct tools', async () => {

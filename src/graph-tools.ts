@@ -28,6 +28,12 @@ import { getBookmarkCountsByAlias } from './lib/memory/bookmarks.js';
 import { emitMcpLogEvent } from './lib/mcp-logging/register.js';
 import { createMcpErrorEnvelope, createMcpResultEnvelope } from './lib/mcp-results/envelope.js';
 import { MCP_STRUCTURED_CONTENT_OUTPUT_SCHEMA } from './lib/mcp-results/schemas.js';
+import {
+  classifyToolRisk,
+  confirmationIdFor,
+  isConfirmationValid,
+  type ToolRiskClassification,
+} from './lib/safe-writes/classifier.js';
 // Re-export pure helpers so existing callers (tests, downstream modules)
 // keep working. New callers should import directly from
 // `./lib/graph-tools-pure.js` to avoid transitively pulling the 45 MB
@@ -366,12 +372,83 @@ function checkSyntheticGraphToolDispatch(toolAlias: string): CallToolResult | nu
   return rejection as CallToolResult;
 }
 
+function riskForTool(
+  tool: (typeof api.endpoints)[0],
+  config: EndpointConfig | undefined
+): ToolRiskClassification {
+  return classifyToolRisk({
+    alias: tool.alias,
+    method: tool.method,
+    path: tool.path,
+    readOnly: config?.readOnly,
+  });
+}
+
+function annotationsForRisk(toolAlias: string, risk: ToolRiskClassification): Record<string, unknown> {
+  return {
+    title: toolAlias,
+    readOnlyHint: risk.readOnly,
+    destructiveHint: risk.destructive || risk.riskLevel === 'high',
+    idempotentHint: risk.idempotent,
+    openWorldHint: risk.openWorld,
+    riskLevel: risk.riskLevel,
+  };
+}
+
 function isReadSafeDiscoveryTool(
   tool: (typeof api.endpoints)[0],
   config: EndpointConfig | undefined
 ): boolean {
-  const method = tool.method.toUpperCase();
-  return method === 'GET' || (method === 'POST' && config?.readOnly === true);
+  return riskForTool(tool, config).readOnly;
+}
+
+function confirmationRequiredResult(
+  toolAlias: string,
+  risk: ToolRiskClassification,
+  params: Record<string, unknown>
+): CallToolResult {
+  const confirmationId = confirmationIdFor(toolAlias, risk.riskLevel);
+  const nextParameters = {
+    ...params,
+    confirmation: true,
+    confirmationId,
+  };
+  return {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          error: 'confirmation_required',
+          toolName: toolAlias,
+          riskLevel: risk.riskLevel,
+          confirmationId,
+          message: `Confirmation required before ${toolAlias}. Call ${toolAlias} again with confirmation=true and confirmationId=${confirmationId}.`,
+          nextCall: {
+            toolName: toolAlias,
+            parameters: nextParameters,
+          },
+        }),
+      },
+    ],
+    structuredContent: {
+      summary: `Confirmation required before ${toolAlias}.`,
+      data: {
+        error: 'confirmation_required',
+        toolName: toolAlias,
+        riskLevel: risk.riskLevel,
+        confirmationId,
+        nextCall: {
+          toolName: toolAlias,
+          parameters: nextParameters,
+        },
+      },
+      resources: [],
+      nextActions: [`Retry with confirmation=true and confirmationId=${confirmationId}.`],
+      warnings: ['high_risk_write_confirmation_required'],
+    },
+    _meta: { errorCode: 'confirmation_required', toolAlias, riskLevel: risk.riskLevel },
+    isError: true,
+  };
 }
 
 async function executeGraphToolInner(
@@ -401,6 +478,15 @@ async function executeGraphToolInner(
       'dispatch-guard: tool not enabled for tenant'
     );
     return rejection as CallToolResult;
+  }
+
+  const risk = riskForTool(tool, config);
+  if (
+    risk.riskLevel === 'high' &&
+    !isConfirmationValid(tool.alias, risk.riskLevel, params.confirmation, params.confirmationId)
+  ) {
+    logger.info({ tool: tool.alias, tenantId: tenantInfo.id }, 'safe-write: confirmation required');
+    return confirmationRequiredResult(tool.alias, risk, params);
   }
 
   const bodyValidationError = validateBodyParameters(tool, params);
@@ -516,6 +602,8 @@ async function executeGraphToolInner(
           'excludeResponse',
           'timezone',
           'expandExtendedProperties',
+          'confirmation',
+          'confirmationId',
         ].includes(paramName)
       ) {
         continue;
@@ -1012,6 +1100,20 @@ export function registerGraphTools(
         .optional();
     }
 
+    const risk = riskForTool(tool, endpointConfig);
+    if (risk.riskLevel === 'high') {
+      paramSchema['confirmation'] = z
+        .boolean()
+        .describe('Set true to confirm this high-risk Microsoft 365 write.')
+        .optional();
+      paramSchema['confirmationId'] = z
+        .string()
+        .describe(
+          `Confirmation id required for this high-risk write. Use ${confirmationIdFor(tool.alias, risk.riskLevel)} after reviewing the confirmation_required response.`
+        )
+        .optional();
+    }
+
     // Add includeHeaders parameter for all tools to capture ETags and other headers
     paramSchema['includeHeaders'] = z
       .boolean()
@@ -1056,12 +1158,7 @@ export function registerGraphTools(
         safeMcpName(tool.alias),
         toolDescription,
         paramSchema,
-        {
-          title: tool.alias,
-          readOnlyHint: tool.method.toUpperCase() === 'GET',
-          destructiveHint: ['POST', 'PATCH', 'DELETE'].includes(tool.method.toUpperCase()),
-          openWorldHint: true, // All tools call Microsoft Graph API
-        },
+        annotationsForRisk(tool.alias, risk),
         async (params) => executeGraphTool(tool, endpointConfig, graphClient, params, authManager)
       );
       registeredCount++;
