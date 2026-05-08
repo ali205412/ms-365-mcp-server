@@ -19,5 +19,8 @@ export function getProfileForRequest(
   registry: McpSessionRegistry,
   req: Pick<Request, 'get'>
 ): ClientCapabilityProfile | undefined {
-  return getSessionCapabilityProfile(registry, req.get('mcp-session-id') ?? req.get('Mcp-Session-Id'));
+  return getSessionCapabilityProfile(
+    registry,
+    req.get('mcp-session-id') ?? req.get('Mcp-Session-Id')
+  );
 }

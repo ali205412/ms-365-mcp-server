@@ -121,11 +121,14 @@ export const DEFAULT_SERVER_CAPABILITIES: ServerCapabilityMap = Object.freeze({
   structuredToolResults: true,
 });
 
-const TRANSPORT_SUPPORT: Readonly<Record<McpTransportKind, ReadonlySet<CapabilityName>>> = Object.freeze({
-  'streamable-http': new Set(CAPABILITY_NAMES.filter((name) => name !== 'roots')),
-  stdio: new Set(CAPABILITY_NAMES.filter((name) => name !== 'apps' && name !== 'resourceSubscriptions')),
-  'legacy-sse': new Set<CapabilityName>(['tools', 'structuredToolResults']),
-});
+const TRANSPORT_SUPPORT: Readonly<Record<McpTransportKind, ReadonlySet<CapabilityName>>> =
+  Object.freeze({
+    'streamable-http': new Set(CAPABILITY_NAMES.filter((name) => name !== 'roots')),
+    stdio: new Set(
+      CAPABILITY_NAMES.filter((name) => name !== 'apps' && name !== 'resourceSubscriptions')
+    ),
+    'legacy-sse': new Set<CapabilityName>(['tools', 'structuredToolResults']),
+  });
 
 export function buildEffectiveCapabilityProfile(
   input: BuildCapabilityProfileInput
@@ -136,9 +139,14 @@ export function buildEffectiveCapabilityProfile(
     Object.freeze(buildGate(name, input, advertised, serverCapabilities))
   );
   const capabilities = Object.freeze(
-    Object.fromEntries(gates.map((gate) => [gate.name, gate])) as Record<CapabilityName, CapabilityGate>
+    Object.fromEntries(gates.map((gate) => [gate.name, gate])) as Record<
+      CapabilityName,
+      CapabilityGate
+    >
   );
-  const enabledFeatures = Object.freeze(gates.filter((gate) => gate.effective).map((gate) => gate.name));
+  const enabledFeatures = Object.freeze(
+    gates.filter((gate) => gate.effective).map((gate) => gate.name)
+  );
   const disabledFeatures = Object.freeze(gates.filter((gate) => !gate.effective));
   const fallbacks = Object.freeze(buildFallbacks(input, disabledFeatures));
 
@@ -191,7 +199,10 @@ function isCapabilityAdvertised(name: CapabilityName, advertised: AdvertisedCapa
   if (name === 'tools' || name === 'structuredToolResults') return true;
   if (name === 'resourceSubscriptions') {
     const resources = advertised.resources;
-    return hasObjectCapability(advertised, 'resourceSubscriptions') || resourceSubscribeEnabled(resources);
+    return (
+      hasObjectCapability(advertised, 'resourceSubscriptions') ||
+      resourceSubscribeEnabled(resources)
+    );
   }
   if (!CLIENT_ADVERTISED_CAPABILITIES.has(name)) return true;
   return hasObjectCapability(advertised, name);
@@ -203,7 +214,11 @@ function hasObjectCapability(advertised: AdvertisedCapabilities, name: string): 
 }
 
 function resourceSubscribeEnabled(value: unknown): boolean {
-  return typeof value === 'object' && value !== null && (value as { subscribe?: unknown }).subscribe === true;
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { subscribe?: unknown }).subscribe === true
+  );
 }
 
 function disabledReasonFor(input: {
@@ -214,9 +229,11 @@ function disabledReasonFor(input: {
   isAdvertised: boolean;
 }): string {
   if (!input.serverSupported) return `${input.name} disabled because server does not support it`;
-  if (!input.tenantAllowed) return `${input.name} disabled because Phase 8 disabled by tenant policy`;
+  if (!input.tenantAllowed)
+    return `${input.name} disabled because Phase 8 disabled by tenant policy`;
   if (!input.isAdvertised) return `${input.name} disabled because client does not advertise it`;
-  if (!input.transportSupported) return `${input.name} disabled because transport does not support it`;
+  if (!input.transportSupported)
+    return `${input.name} disabled because transport does not support it`;
   return `${input.name} disabled`;
 }
 
@@ -229,10 +246,16 @@ function buildFallbacks(
     fallbackSet.add('tool-only discovery loop preserved for Phase 8-disabled tenants');
   }
   if (disabledFeatures.some((gate) => gate.disabledReason?.includes('client does not advertise'))) {
-    fallbackSet.add('Your client does not advertise one or more advanced MCP capabilities; text and JSON tool fallbacks remain available.');
+    fallbackSet.add(
+      'Your client does not advertise one or more advanced MCP capabilities; text and JSON tool fallbacks remain available.'
+    );
   }
-  if (disabledFeatures.some((gate) => gate.disabledReason?.includes('transport does not support'))) {
-    fallbackSet.add(`${input.transport} transport exposes only the capabilities it can safely deliver.`);
+  if (
+    disabledFeatures.some((gate) => gate.disabledReason?.includes('transport does not support'))
+  ) {
+    fallbackSet.add(
+      `${input.transport} transport exposes only the capabilities it can safely deliver.`
+    );
   }
   return [...fallbackSet];
 }

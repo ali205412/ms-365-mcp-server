@@ -194,7 +194,8 @@ function profileFromInitialize(
   const params = body?.method === 'initialize' ? body.params : undefined;
   const phase8Enabled = deps.phase8Enabled?.(tenant, surface) ?? surface === 'discovery';
   return buildEffectiveCapabilityProfile({
-    protocolVersion: typeof params?.protocolVersion === 'string' ? params.protocolVersion : undefined,
+    protocolVersion:
+      typeof params?.protocolVersion === 'string' ? params.protocolVersion : undefined,
     clientInfo: isClientInfo(params?.clientInfo) ? params.clientInfo : undefined,
     advertisedCapabilities: isRecord(params?.capabilities) ? params.capabilities : {},
     transport: 'streamable-http',

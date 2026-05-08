@@ -36,7 +36,11 @@ const DISCOVERY_MODE_INSTRUCTIONS_ADDON =
  * Full MCP `initialize.instructions` string: general guidance for every mode, plus a discovery-only suffix when applicable.
  */
 export function buildMcpServerInstructions(
-  opts: McpInstructionsContext & { discovery: boolean; tenantDisplayName?: string | null; version?: string }
+  opts: McpInstructionsContext & {
+    discovery: boolean;
+    tenantDisplayName?: string | null;
+    version?: string;
+  }
 ): string {
   const identity = resolveConnectorIdentity({
     version: opts.version ?? 'runtime',

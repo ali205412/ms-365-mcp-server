@@ -12,9 +12,14 @@ import {
 import { McpSessionRegistry } from '../src/lib/mcp-notifications/session-registry.js';
 
 async function callTool(server: McpServer, name: string, args: Record<string, unknown> = {}) {
-  const inner = (server as unknown as {
-    _registeredTools: Record<string, { handler: (args: Record<string, unknown>, extra?: unknown) => Promise<unknown> }>;
-  })._registeredTools;
+  const inner = (
+    server as unknown as {
+      _registeredTools: Record<
+        string,
+        { handler: (args: Record<string, unknown>, extra?: unknown) => Promise<unknown> }
+      >;
+    }
+  )._registeredTools;
   return inner[name]!.handler(args, {});
 }
 

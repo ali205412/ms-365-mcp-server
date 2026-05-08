@@ -178,7 +178,8 @@ export function createRegisterHandler(policy: RedirectUriPolicy) {
       response_types: body.response_types || ['code'],
       token_endpoint_auth_method: body.token_endpoint_auth_method || 'none',
       client_name:
-        body.client_name || resolveConnectorIdentity({ version: 'dynamic-registration' }).displayName,
+        body.client_name ||
+        resolveConnectorIdentity({ version: 'dynamic-registration' }).displayName,
     });
   };
 }

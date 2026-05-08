@@ -110,7 +110,9 @@ function identityFields(identity: ConnectorIdentity): Record<string, unknown> {
     package: identity.packageName,
     server_info: { name: identity.name, version: identity.version },
     ...(identity.iconUrl ? { logo_uri: identity.iconUrl, iconUrl: identity.iconUrl } : {}),
-    ...(identity.privacyUrl ? { policy_uri: identity.privacyUrl, privacyUrl: identity.privacyUrl } : {}),
+    ...(identity.privacyUrl
+      ? { policy_uri: identity.privacyUrl, privacyUrl: identity.privacyUrl }
+      : {}),
     ...(identity.termsUrl ? { tos_uri: identity.termsUrl, termsUrl: identity.termsUrl } : {}),
   };
 }
@@ -163,7 +165,9 @@ export function buildOAuthProtectedResourceMetadata(
   };
 }
 
-export function buildConnectorWellKnownMetadata(input: ConnectorMetadataInput): Record<string, unknown> {
+export function buildConnectorWellKnownMetadata(
+  input: ConnectorMetadataInput
+): Record<string, unknown> {
   const identity = resolveConnectorIdentity(input);
   const urls = buildUrls(input);
   return {
@@ -199,7 +203,9 @@ export function buildWwwAuthenticateMetadata(input: WwwAuthenticateMetadataInput
   };
 }
 
-export function connectorIdentityDiagnostics(input: ConnectorDiagnosticsInput): Record<string, unknown> {
+export function connectorIdentityDiagnostics(
+  input: ConnectorDiagnosticsInput
+): Record<string, unknown> {
   const identity = resolveConnectorIdentity(input);
   const urls = buildUrls(input);
   const scopes: readonly string[] = [];
@@ -278,12 +284,16 @@ export async function connectorDoctor(input: ConnectorDoctorInput): Promise<Conn
     version: input.version,
   };
   const diagnostics = connectorIdentityDiagnostics(metadataInput);
-  const expectedDisplayName = String(diagnostics.expectedDisplayName || CONNECTOR_DEFAULT_DISPLAY_NAME);
+  const expectedDisplayName = String(
+    diagnostics.expectedDisplayName || CONNECTOR_DEFAULT_DISPLAY_NAME
+  );
   const urls = diagnostics.urls as Record<string, string>;
   const checkedUrls = [urls.oauthProtectedResource, urls.connectorWellKnown];
   const fetchImpl = input.fetchImpl ?? fetch;
   const entries = await Promise.all(
-    checkedUrls.map(async (url) => [url, await checkSurface(url, fetchImpl, expectedDisplayName)] as const)
+    checkedUrls.map(
+      async (url) => [url, await checkSurface(url, fetchImpl, expectedDisplayName)] as const
+    )
   );
   const surfaces = Object.fromEntries(
     entries.map(([url, result]) => {

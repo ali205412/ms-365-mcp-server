@@ -105,6 +105,7 @@ export default defineConfig({
     exclude: [
       '**/node_modules/**',
       '**/dist/**',
+      '**/.claude/**',
       ...(RUN_INTEGRATION ? [] : INTEGRATION_PATTERNS),
       ...EXPLICIT_FLAKY_QUARANTINE,
     ],

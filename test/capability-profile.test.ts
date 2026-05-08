@@ -5,7 +5,9 @@ import {
   type CapabilityName,
 } from '../src/lib/mcp-capabilities/profile.js';
 
-function effectiveNames(profile: ReturnType<typeof buildEffectiveCapabilityProfile>): CapabilityName[] {
+function effectiveNames(
+  profile: ReturnType<typeof buildEffectiveCapabilityProfile>
+): CapabilityName[] {
   return Object.entries(profile.capabilities)
     .filter(([, gate]) => gate.effective)
     .map(([name]) => name as CapabilityName);
@@ -23,7 +25,14 @@ describe('ClientCapabilityProfile', () => {
       serverCapabilities: DEFAULT_SERVER_CAPABILITIES,
     });
 
-    for (const name of ['apps', 'sampling', 'elicitation', 'roots', 'progress', 'cancellation'] as const) {
+    for (const name of [
+      'apps',
+      'sampling',
+      'elicitation',
+      'roots',
+      'progress',
+      'cancellation',
+    ] as const) {
       expect(profile.capabilities[name].effective).toBe(false);
       expect(profile.capabilities[name].disabledReason).toMatch(/client does not advertise/i);
     }
@@ -59,7 +68,9 @@ describe('ClientCapabilityProfile', () => {
     });
 
     expect(effectiveNames(profile)).toEqual(['tools', 'structuredToolResults']);
-    expect(profile.fallbacks).toContain('tool-only discovery loop preserved for Phase 8-disabled tenants');
+    expect(profile.fallbacks).toContain(
+      'tool-only discovery loop preserved for Phase 8-disabled tenants'
+    );
     expect(profile.capabilities.resources.disabledReason).toMatch(/phase 8 disabled/i);
     expect(profile.capabilities.sampling.disabledReason).toMatch(/phase 8 disabled/i);
   });

@@ -79,7 +79,8 @@ export function registerConnectorDiagnosticsTool(
     {},
     { title: 'connector-diagnostics', readOnlyHint: true, openWorldHint: false },
     async () => {
-      const profile = deps.profile ??
+      const profile =
+        deps.profile ??
         buildEffectiveCapabilityProfile({
           protocolVersion: undefined,
           clientInfo: undefined,
@@ -121,8 +122,12 @@ function diagnosticsText(payload: ConnectorDiagnosticsPayload): string {
   if (payload.fallbacks.length > 0) {
     lines.push(...payload.fallbacks);
   }
-  if (payload.disabledFeatures.some((feature) => feature.reason.includes('client does not advertise'))) {
-    lines.push('Your client does not advertise some advanced MCP capabilities; text and JSON fallbacks remain available.');
+  if (
+    payload.disabledFeatures.some((feature) => feature.reason.includes('client does not advertise'))
+  ) {
+    lines.push(
+      'Your client does not advertise some advanced MCP capabilities; text and JSON fallbacks remain available.'
+    );
   }
   return lines.join('\n');
 }
