@@ -46,7 +46,9 @@ describe('MCP result envelope helpers', () => {
     expect(result.structuredContent).toBeDefined();
     expect(result.structuredContent?.summary).toBe('Found 1 matching tool.');
     expect(McpResultEnvelopeZod.parse(result)).toEqual(result);
-    expect(McpStructuredContentZod.parse(result.structuredContent)).toEqual(result.structuredContent);
+    expect(McpStructuredContentZod.parse(result.structuredContent)).toEqual(
+      result.structuredContent
+    );
   });
 
   it('falls back to text and warning metadata when structuredContent is invalid', () => {
