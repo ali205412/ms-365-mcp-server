@@ -21,11 +21,12 @@ import {
   getTenantSkillRecord,
   getVisibleSkillRecord,
   listTenantSkillRecords,
-  listVisibleSkillRecords,
   saveTenantSkill,
   skillInputToPrompt,
   type SkillRecord,
 } from './store.js';
+import { getBuiltInSkillPack } from './builtin-packs.js';
+import { SkillPackConflictStrategyZod, exportSkillPack, importSkillPack } from './packs.js';
 import { validateSkillReferences } from './validation.js';
 import type { PromptTemplateDefinition } from '../mcp-prompts/frontmatter.js';
 import type { RedisClient } from '../redis.js';
@@ -63,8 +64,28 @@ const SaveSkillZod = z
   })
   .strict();
 const ValidateSkillZod = z.object({ skill: SkillInputZod });
-const ImportSkillPackZod = z.object({ pack: z.unknown() });
-const ExportSkillPackZod = z.object({ names: z.array(SkillNameZod).optional() });
+const ImportSkillPackInputZod = z
+  .object({
+    pack: z.unknown().optional(),
+    builtInPackId: z.string().trim().min(1).max(64).optional(),
+    conflictStrategy: SkillPackConflictStrategyZod.default('skip'),
+    ownerSubject: z.string().trim().min(1).max(512).optional(),
+  })
+  .strict();
+const ImportSkillPackZod = ImportSkillPackInputZod.refine(
+  (value) => value.pack !== undefined || value.builtInPackId !== undefined,
+  {
+    message: 'pack or builtInPackId is required',
+  }
+);
+const ExportSkillPackZod = z
+  .object({
+    names: z.array(SkillNameZod).optional(),
+    packName: z.string().trim().min(1).max(64).optional(),
+    ownerSubject: z.string().trim().min(1).max(512).optional(),
+    includeMemory: z.boolean().default(true),
+  })
+  .strict();
 
 function requireTenant(): { id: string; enabledToolsSet?: ReadonlySet<string> } | undefined {
   const tenant = getRequestTenant();
@@ -75,19 +96,31 @@ function requireTenant(): { id: string; enabledToolsSet?: ReadonlySet<string> } 
 function skillResourceUris(tenantId: string, name?: string): string[] {
   return [
     `m365://tenant/${tenantId}/skills/index.json`,
+    `mcp://tenant/${tenantId}/skills/index.json`,
     ...(name
       ? [
           `m365://tenant/${tenantId}/skills/${name}.md`,
+          `mcp://tenant/${tenantId}/skills/${name}.md`,
           `m365://tenant/${tenantId}/skills/${name}.schema.json`,
+          `mcp://tenant/${tenantId}/skills/${name}.schema.json`,
         ]
       : []),
   ];
 }
 
-async function publishSkillChange(redis: RedisClient, tenantId: string, name?: string): Promise<void> {
+async function publishSkillChange(
+  redis: RedisClient,
+  tenantId: string,
+  name?: string
+): Promise<void> {
   try {
     await publishPromptsListChanged(redis, tenantId, SKILL_CHANGE_REASON);
-    await publishResourceUpdated(redis, tenantId, skillResourceUris(tenantId, name), SKILL_CHANGE_REASON);
+    await publishResourceUpdated(
+      redis,
+      tenantId,
+      skillResourceUris(tenantId, name),
+      SKILL_CHANGE_REASON
+    );
   } catch (err) {
     logger.warn(
       { tenantId, err: (err as Error).message },
@@ -143,7 +176,9 @@ function result(toolName: string, data: Record<string, unknown>, isError = false
         toolName,
         summary: `${toolName} completed.`,
         data,
-        nextActions: ['Use list-skills, get-skill, render-skill, or skill resources for follow-up.'],
+        nextActions: [
+          'Use list-skills, get-skill, render-skill, or skill resources for follow-up.',
+        ],
       });
   return {
     ...envelope,
@@ -176,7 +211,9 @@ export function registerSkillTools(server: McpServer, deps: RegisterSkillToolsDe
         if (!tenant) return result('list-skills', { error: 'tenant_required' }, true);
         const allRows = await listTenantSkillRecords(tenant.id);
         const rows = allRows.filter((skill) => skill.enabled);
-        const suppressed = new Set(allRows.filter((skill) => !skill.enabled).map((skill) => skill.name));
+        const suppressed = new Set(
+          allRows.filter((skill) => !skill.enabled).map((skill) => skill.name)
+        );
         const merged = new Map<string, SkillRecord>();
         for (const skill of builtInSkills(deps)) {
           if (!suppressed.has(skill.name)) merged.set(skill.name, skill);
@@ -236,7 +273,10 @@ export function registerSkillTools(server: McpServer, deps: RegisterSkillToolsDe
         ownerSubject,
       });
       await publishSkillChange(deps.redis, tenant.id, skill.name);
-      return result('save-skill', { skill: toPublicSkill(skill), validation: validation.validation });
+      return result('save-skill', {
+        skill: toPublicSkill(skill),
+        validation: validation.validation,
+      });
     }
   );
 
@@ -269,8 +309,11 @@ export function registerSkillTools(server: McpServer, deps: RegisterSkillToolsDe
       const tenant = requireTenant();
       if (!tenant) return result('fork-builtin-skill', { error: 'tenant_required' }, true);
       const parsed = SkillLookupZod.safeParse(args);
-      if (!parsed.success) return result('fork-builtin-skill', { error: 'invalid_skill_name' }, true);
-      const builtIn = deps.loadBuiltInPrompts?.().find((prompt) => prompt.name === parsed.data.name);
+      if (!parsed.success)
+        return result('fork-builtin-skill', { error: 'invalid_skill_name' }, true);
+      const builtIn = deps
+        .loadBuiltInPrompts?.()
+        .find((prompt) => prompt.name === parsed.data.name);
       if (!builtIn) return result('fork-builtin-skill', { error: 'builtin_skill_not_found' }, true);
       const skill = await saveTenantSkill(tenant.id, forkBuiltinSkillInput(builtIn));
       await publishSkillChange(deps.redis, tenant.id, skill.name);
@@ -291,7 +334,12 @@ export function registerSkillTools(server: McpServer, deps: RegisterSkillToolsDe
       const skill = await visibleSkillByName(tenant.id, parsed.data.name, deps);
       if (!skill) return result('render-skill', { error: 'skill_not_found' }, true);
       const rendered = renderSkillTemplate(skill.body, parsed.data.args, skill.arguments);
-      if (!rendered.ok) return result('render-skill', { error: rendered.error.code, details: rendered.error }, true);
+      if (!rendered.ok)
+        return result(
+          'render-skill',
+          { error: rendered.error.code, details: rendered.error },
+          true
+        );
       return result('render-skill', {
         name: skill.name,
         text: rendered.text,
@@ -309,7 +357,12 @@ export function registerSkillTools(server: McpServer, deps: RegisterSkillToolsDe
       const tenant = requireTenant();
       if (!tenant) return result('validate-skill', { error: 'tenant_required' }, true);
       const parsed = ValidateSkillZod.safeParse(args);
-      if (!parsed.success) return result('validate-skill', { error: 'invalid_skill', details: parsed.error.issues }, true);
+      if (!parsed.success)
+        return result(
+          'validate-skill',
+          { error: 'invalid_skill', details: parsed.error.issues },
+          true
+        );
       const validation = await validateSkillReferences(parsed.data.skill, {
         tenantId: tenant.id,
         enabledToolsSet: tenant.enabledToolsSet,
@@ -323,38 +376,49 @@ export function registerSkillTools(server: McpServer, deps: RegisterSkillToolsDe
   server.tool(
     'import-skill-pack',
     'Validate and import a skill pack payload. Roots/upload transports can pass the parsed pack body here.',
-    { pack: ImportSkillPackZod.shape.pack },
+    ImportSkillPackInputZod.shape,
     { title: 'import-skill-pack', readOnlyHint: false, openWorldHint: false },
     async (args) => {
       const tenant = requireTenant();
       if (!tenant) return result('import-skill-pack', { error: 'tenant_required' }, true);
       const parsed = ImportSkillPackZod.safeParse(args);
-      if (!parsed.success) return result('import-skill-pack', { error: 'invalid_skill_pack' }, true);
-      return result('import-skill-pack', {
-        imported: 0,
-        warnings: ['Pack import fallback accepted the payload but no skill pack manifest was applied.'],
+      if (!parsed.success)
+        return result(
+          'import-skill-pack',
+          { error: 'invalid_skill_pack', details: parsed.error.issues },
+          true
+        );
+      const pack = parsed.data.builtInPackId
+        ? getBuiltInSkillPack(parsed.data.builtInPackId)
+        : parsed.data.pack;
+      if (!pack) return result('import-skill-pack', { error: 'skill_pack_not_found' }, true);
+      const imported = await importSkillPack(tenant.id, pack, {
+        conflictStrategy: parsed.data.conflictStrategy,
+        ownerSubject: parsed.data.ownerSubject,
+        builtInSkillNames: new Set(builtInSkills(deps).map((skill) => skill.name)),
       });
+      if (imported.imported.skills > 0) await publishSkillChange(deps.redis, tenant.id);
+      return result('import-skill-pack', { ...imported });
     }
   );
 
   server.tool(
     'export-skill-pack',
     'Export visible skills as a JSON skill pack fallback payload.',
-    { names: ExportSkillPackZod.shape.names },
+    ExportSkillPackZod.shape,
     { title: 'export-skill-pack', readOnlyHint: true, openWorldHint: false },
     async (args) => {
       const tenant = requireTenant();
       if (!tenant) return result('export-skill-pack', { error: 'tenant_required' }, true);
       const parsed = ExportSkillPackZod.safeParse(args);
-      if (!parsed.success) return result('export-skill-pack', { error: 'invalid_skill_export' }, true);
-      const names = new Set(parsed.data.names ?? []);
-      const skills = (await listVisibleSkillRecords(tenant.id)).filter(
-        (skill) => names.size === 0 || names.has(skill.name)
-      );
-      return result('export-skill-pack', {
-        packName: 'export',
-        skills: skills.map((skill) => ({ ...toPublicSkill(skill), body: skill.body })),
-      });
+      if (!parsed.success)
+        return result(
+          'export-skill-pack',
+          { error: 'invalid_skill_export', details: parsed.error.issues },
+          true
+        );
+      const pack = await exportSkillPack(tenant.id, parsed.data);
+      return result('export-skill-pack', { pack });
     }
   );
 

@@ -1,4 +1,5 @@
 import { ErrorCode, McpError, type ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
+import { exportSkillPack } from './packs.js';
 import { SkillNameZod } from './schema.js';
 import { getVisibleSkillRecord, listVisibleSkillRecords, type SkillRecord } from './store.js';
 import { JSON_MIME_TYPE } from '../mcp-resources/read.js';
@@ -84,7 +85,10 @@ export async function readSkillResource(
   switch (descriptor.view) {
     case 'skills/index': {
       const skills = await listVisibleSkillRecords(tenantId);
-      return jsonResult(canonical, { uri: canonical, skills: skills.map((skill) => publicSkill(skill)) });
+      return jsonResult(canonical, {
+        uri: canonical,
+        skills: skills.map((skill) => publicSkill(skill)),
+      });
     }
     case 'skills/markdown': {
       const skill = await requireSkill(tenantId, descriptor.name ?? '');
@@ -95,11 +99,10 @@ export async function readSkillResource(
       return jsonResult(canonical, publicSkill(skill));
     }
     case 'skill-pack': {
-      const skills = await listVisibleSkillRecords(tenantId);
+      const pack = await exportSkillPack(tenantId, { packName: descriptor.packName ?? 'default' });
       return jsonResult(canonical, {
-        packName: descriptor.packName,
         uri: canonical,
-        skills: skills.map((skill) => publicSkill(skill, true)),
+        ...pack,
       });
     }
   }

@@ -70,7 +70,10 @@ function requireTenant():
 
 async function publishFactChange(redis: RedisClient, tenantId: string): Promise<void> {
   try {
-    await publishResourceUpdated(redis, tenantId, [`mcp://tenant/${tenantId}/facts.json`]);
+    await publishResourceUpdated(redis, tenantId, [
+      `m365://tenant/${tenantId}/facts.json`,
+      `mcp://tenant/${tenantId}/facts.json`,
+    ]);
   } catch (err) {
     logger.warn(
       { tenantId, reason: FACT_RESOURCE_REASON, err: (err as Error).message },

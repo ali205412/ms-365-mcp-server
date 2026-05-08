@@ -86,7 +86,7 @@ async function publishBookmarkChange(redis: RedisClient, tenantId: string): Prom
     await publishResourceUpdated(
       redis,
       tenantId,
-      [`mcp://tenant/${tenantId}/bookmarks.json`],
+      [`m365://tenant/${tenantId}/bookmarks.json`, `mcp://tenant/${tenantId}/bookmarks.json`],
       BOOKMARK_CHANGE_REASON
     );
   } catch (err) {

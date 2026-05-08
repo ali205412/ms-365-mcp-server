@@ -4,6 +4,7 @@ export interface ResourceNotificationCoalescerOptions {
 }
 
 const DEFAULT_WINDOW_MS = 2_000;
+const KEY_SEPARATOR = '\\u0000';
 
 export class ResourceNotificationCoalescer {
   private readonly windowMs: number;
@@ -15,8 +16,8 @@ export class ResourceNotificationCoalescer {
     this.now = options.now ?? Date.now;
   }
 
-  shouldDeliver(tenantId: string, sessionId: string, uri: string): boolean {
-    const key = `${tenantId}\u0000${sessionId}\u0000${uri}`;
+  shouldDeliver(tenantId: string, sessionId: string, uri: string, changeType = 'updated'): boolean {
+    const key = [tenantId, sessionId, uri, changeType].join(KEY_SEPARATOR);
     const current = this.now();
     const previous = this.lastDelivered.get(key);
     if (previous !== undefined && current - previous < this.windowMs) {
@@ -27,7 +28,7 @@ export class ResourceNotificationCoalescer {
   }
 
   clearSession(tenantId: string, sessionId: string): void {
-    const prefix = `${tenantId}\u0000${sessionId}\u0000`;
+    const prefix = [tenantId, sessionId, ''].join(KEY_SEPARATOR);
     for (const key of this.lastDelivered.keys()) {
       if (key.startsWith(prefix)) {
         this.lastDelivered.delete(key);

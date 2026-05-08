@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: null
-last_updated: "2026-05-08T20:30:00.000Z"
-last_activity: 2026-05-08 -- Phase 08 Plan 08-08 completed
+stopped_at: ""
+last_updated: "2026-05-09T00:48:00Z"
+last_activity: 2026-05-09 -- Phase 08 Plan 08-11 completed (notifications expansion)
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 86
-  completed_plans: 79
-  percent: 91
+  completed_plans: 83
+  percent: 96
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-04-18)
 ## Current Position
 
 Phase: 08 (maximal-mcp-claude-connector-surface) — EXECUTING
-Plan: 7 of 14 completed; next 08-07
+Plan: 11 of 14 completed; next 08-12
 Status: Executing Phase 08
-Last activity: 2026-05-08 -- Phase 08 Plan 08-08 completed
+Last activity: 2026-05-09 -- Phase 08 Plan 08-11 completed (notifications expansion)
 
 Progress: [█████████░] 89% (8/9 phases)
 
@@ -36,7 +36,7 @@ Progress: [█████████░] 89% (8/9 phases)
 
 **Velocity:**
 
-- Total plans completed: 19
+- Total plans completed: 21
 - Average duration: -
 - Total execution time: -
 
@@ -49,7 +49,7 @@ Progress: [█████████░] 89% (8/9 phases)
 
 **Recent Trend:**
 
-- Last 5 plans: 08-03, 08-04, 08-05, 08-06, 08-08
+- Last 5 plans: 08-08, 08-07, 08-09, 08-10, 08-11
 - Trend: complete
 
 *Updated after each plan completion*
@@ -71,6 +71,10 @@ Recent decisions affecting current work:
 - [Phase 07]: Tenant resources are registered as concrete caller-tenant URIs; templates are limited to workload and endpoint schema families. — Prevents cross-tenant template enumeration while keeping resources/list discoverable for the caller tenant.
 - [Phase 08]: Editable skills are now exposed through discovery-mode skill tools and canonical `m365://tenant/{tenantId}/skills/...` resources with `mcp://` compatibility aliases; published saves validate tool/memory/resource references before persistence.
 - [Phase 08]: MCP Apps foundation registers discovery-gated `ui://m365/*.html` dashboard resources with strict CSP/sandbox metadata and exact text/structured/resource fallback for non-Apps clients.
+- [Phase 08]: Skill packs import/export editable skills plus referenced recipes/bookmarks/facts through non-roots fallback; reserved signature/checksum metadata is parsed but not trusted.
+- [Phase 08]: Dashboard app tools now own the seven dashboard tool names while `registerMcpApps` can register only `ui://` resources; every dashboard returns text, structured JSON, `m365://` resources, and optional `ui://` metadata.
+- [Phase 08]: Rich resources now use canonical `m365://` with `mcp://` compatibility aliases, bounded Graph-backed reads, tenant/scope/tool gates, and durable resource links from discovery `execute-tool` results.
+- [Phase 08]: Notification surface delivers `prompts/list_changed` and `resources/updated` (with `_meta.{source,reason,changeType}`) only to matching tenant + discovery sessions, optionally subscription-filtered, then coalesced 2s by tenant/session/uri/changeType. Mail-message Graph webhooks map to `m365://tenant/{id}/mail/messages/{id}.json` with `source='graph-webhook'` and zero PII in logs.
 
 ### Roadmap Evolution
 
@@ -94,8 +98,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-05-08T15:25:41.524Z
-Stopped at: context exhaustion at 75% (2026-05-08)
+Last session: 2026-05-09T00:48:00Z
+Stopped at: Plan 08-11 closed; resuming with 08-12 next
 Resume file: None
 
 ## Quick Tasks Completed

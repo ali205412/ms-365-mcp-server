@@ -26,6 +26,7 @@ import { isDiscoverySurface } from '../tenant-surface/surface.js';
 import {
   buildEffectiveCapabilityProfile,
   type ClientCapabilityProfile,
+  type ClientInfo,
 } from '../mcp-capabilities/profile.js';
 import {
   mcpSessionRegistry,
@@ -108,6 +109,7 @@ export function createStreamableHttpHandler(deps: StreamableHttpDeps): RequestHa
       sendToolListChanged: () => server.sendToolListChanged(),
       sendResourceListChanged: () => server.sendResourceListChanged(),
       sendResourceUpdated: (params) => server.server.sendResourceUpdated(params),
+      sendPromptListChanged: () => server.sendPromptListChanged(),
       sendLoggingMessage: (message, sessionId) => server.sendLoggingMessage(message, sessionId),
       close: () => server.close(),
     };
@@ -192,11 +194,12 @@ function profileFromInitialize(
 ): ClientCapabilityProfile {
   const body = req.body as { method?: unknown; params?: Record<string, unknown> } | undefined;
   const params = body?.method === 'initialize' ? body.params : undefined;
+  const clientInfo = isClientInfo(params?.clientInfo);
   const phase8Enabled = deps.phase8Enabled?.(tenant, surface) ?? surface === 'discovery';
   return buildEffectiveCapabilityProfile({
     protocolVersion:
       typeof params?.protocolVersion === 'string' ? params.protocolVersion : undefined,
-    clientInfo: isClientInfo(params?.clientInfo) ? params.clientInfo : undefined,
+    clientInfo,
     advertisedCapabilities: isRecord(params?.capabilities) ? params.capabilities : {},
     transport: 'streamable-http',
     surface,
@@ -204,7 +207,7 @@ function profileFromInitialize(
   });
 }
 
-function isClientInfo(value: unknown): { name?: string; version?: string } | undefined {
+function isClientInfo(value: unknown): ClientInfo | undefined {
   if (!isRecord(value)) return undefined;
   return {
     ...(typeof value.name === 'string' ? { name: value.name } : {}),

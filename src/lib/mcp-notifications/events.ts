@@ -26,11 +26,32 @@ interface AgenticEventBase {
   ts: string;
 }
 
+export type ResourceUpdateEventSource =
+  | 'skill'
+  | 'memory'
+  | 'audit'
+  | 'graph-webhook'
+  | 'delta'
+  | 'admin';
+
 export type AgenticEvent =
   | (AgenticEventBase & { type: 'tools/list_changed' })
   | (AgenticEventBase & { type: 'resources/list_changed' })
-  | (AgenticEventBase & { type: 'resources/updated'; uris: string[] })
+  | (AgenticEventBase & {
+      type: 'resources/updated';
+      uris: string[];
+      source?: ResourceUpdateEventSource;
+      changeType?: string;
+    })
   | (AgenticEventBase & { type: 'prompts/list_changed' })
+  | (AgenticEventBase & {
+      type: 'progress';
+      progressToken?: string | number;
+      progress: number;
+      total?: number;
+      message?: string;
+    })
+  | (AgenticEventBase & { type: 'cancelled'; requestId?: string | number; message?: string })
   | (AgenticEventBase & { type: 'logging/message'; message: McpLogMessage });
 
 type PublishableAgenticEvent = AgenticEvent extends infer Event
@@ -67,13 +88,17 @@ export async function publishResourceUpdated(
   redis: RedisFacade,
   tenantId: string,
   uris: string[],
-  reason?: string
+  reason?: string,
+  source?: ResourceUpdateEventSource,
+  changeType?: string
 ): Promise<void> {
   await publishAgenticEvent(redis, {
     type: 'resources/updated',
     tenantId,
     uris: [...uris],
     reason,
+    source,
+    changeType,
   });
 }
 
