@@ -33,6 +33,9 @@
 
 import logger from '../../logger.js';
 import type GraphClient from '../../graph-client.js';
+import { emitProgress, type ProgressNotificationSender } from '../mcp-progress/progress.js';
+import { isOperationCancelled, type OperationKey } from '../mcp-progress/cancellation.js';
+import type { ClientCapabilityProfile } from '../mcp-capabilities/profile.js';
 
 const DEFAULT_MAX_PAGES = 20;
 const HARD_CEILING_PAGES = 1000;
@@ -64,6 +67,10 @@ export interface PageIteratorOptions {
    * network round-trip when `params.fetchAllPages === true`.
    */
   seedFirstPage?: Record<string, unknown>;
+  progressToken?: string | number;
+  sendNotification?: ProgressNotificationSender;
+  capabilityProfile?: ClientCapabilityProfile;
+  operationKey?: OperationKey;
 }
 
 export interface PageResult {
@@ -77,6 +84,8 @@ export interface FetchAllPagesResult {
   value: unknown[];
   _truncated?: true;
   _nextLink?: string;
+  _cancelled?: true;
+  _partialResourceUri?: string;
 
   [key: string]: unknown;
 }
@@ -213,12 +222,17 @@ export async function fetchAllPages(
   const allItems: unknown[] = [];
   let lastNextLink: string | undefined;
   let truncated = false;
+  let cancelled = false;
   let firstPageExtras: Record<string, unknown> = {};
 
   for await (const { json, pageIndex } of pageIterator(initialPath, options, client, {
     maxPages,
     seedFirstPage: opts.seedFirstPage,
   })) {
+    if (opts.operationKey && isOperationCancelled(opts.operationKey)) {
+      cancelled = true;
+      break;
+    }
     if (pageIndex === 0) {
       // Capture non-value fields from the first page (e.g., @odata.count,
       // @odata.context) so the envelope returned to callers preserves them.
@@ -243,6 +257,14 @@ export async function fetchAllPages(
     }
     const nextLink = json['@odata.nextLink'];
     lastNextLink = typeof nextLink === 'string' ? nextLink : undefined;
+
+    if (opts.progressToken !== undefined) {
+      await emitProgress(opts.sendNotification, opts.capabilityProfile, {
+        progressToken: opts.progressToken,
+        progress: pageIndex + 1,
+        message: `Fetched ${pageIndex + 1} page${pageIndex === 0 ? '' : 's'}`,
+      });
+    }
   }
 
   const result: FetchAllPagesResult = {
@@ -254,6 +276,13 @@ export async function fetchAllPages(
     result._truncated = true;
     if (lastNextLink !== undefined) {
       result._nextLink = lastNextLink;
+    }
+  }
+
+  if (cancelled) {
+    result._cancelled = true;
+    if (opts.operationKey?.tenantId && opts.operationKey.requestId && opts.operationKey.progressToken) {
+      result._partialResourceUri = `m365://tenant/${opts.operationKey.tenantId}/partial/${opts.operationKey.requestId}/${opts.operationKey.progressToken}.json`;
     }
   }
 
