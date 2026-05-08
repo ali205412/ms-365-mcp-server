@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: human_needed
-stopped_at: Phase 07 complete; Claude.ai connector UX verification pending
-last_updated: "2026-04-25T20:23:17Z"
-last_activity: 2026-04-25 -- Phase 07 review fixes applied and gates passed
+status: executing
+stopped_at: null
+last_updated: "2026-05-08T18:30:00.000Z"
+last_activity: 2026-05-08 -- Phase 08 Plan 08-06 completed
 progress:
-  total_phases: 8
+  total_phases: 9
   completed_phases: 8
-  total_plans: 72
-  completed_plans: 72
-  percent: 100
+  total_plans: 86
+  completed_plans: 78
+  percent: 90
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** One deployable, multi-tenant MCP gateway that exposes the entire Microsoft Graph surface an organization needs — with tenant isolation, resilient Graph transport, and all four identity flows — so AI assistants can safely act on behalf of any user or app across any registered tenant.
-**Current focus:** Phase 07 — agentic-tool-surface-discovery-default-mcp-resources-prompts
+**Current focus:** Phase 08 — maximal-mcp-claude-connector-surface
 
 ## Current Position
 
-Phase: 07 (agentic-tool-surface-discovery-default-mcp-resources-prompts) — COMPLETE / HUMAN_NEEDED
-Plan: 12 of 12
-Status: Phase 07 code complete; external Claude.ai connector UX verification remains
-Last activity: 2026-04-25 -- Phase 07 review fixes applied and gates passed
+Phase: 08 (maximal-mcp-claude-connector-surface) — EXECUTING
+Plan: 6 of 14 completed; next 08-07
+Status: Executing Phase 08
+Last activity: 2026-05-08 -- Phase 08 Plan 08-06 completed
 
-Progress: [██████████] 100% (8/8 phases)
+Progress: [█████████░] 89% (8/9 phases)
 
 ## Performance Metrics
 
@@ -49,7 +49,7 @@ Progress: [██████████] 100% (8/8 phases)
 
 **Recent Trend:**
 
-- Last 5 plans: 07-08, 07-09, 07-10, 07-11, 07-12
+- Last 5 plans: 08-02, 08-03, 08-04, 08-05, 08-06
 - Trend: complete
 
 *Updated after each plan completion*
@@ -69,10 +69,12 @@ Recent decisions affecting current work:
 - [Phase 07]: Tenant resource reads compare URI tenant id against getRequestTenant().id before any data read. — Mitigates tenant resource URI information disclosure for Plan 07-11.
 - [Phase 07]: Endpoint schema resources validate aliases against discoveryCatalogSet, not the visible discovery-v1 meta-tool set. — Allows discovery tenants to inspect generated Graph/product schemas without exposing them in tools/list.
 - [Phase 07]: Tenant resources are registered as concrete caller-tenant URIs; templates are limited to workload and endpoint schema families. — Prevents cross-tenant template enumeration while keeping resources/list discoverable for the caller tenant.
+- [Phase 08]: Editable skills are now exposed through discovery-mode skill tools and canonical `m365://tenant/{tenantId}/skills/...` resources with `mcp://` compatibility aliases; published saves validate tool/memory/resource references before persistence.
 
 ### Roadmap Evolution
 
 - Phase 7 added: agentic-tool-surface — discovery-mode default + MCP Resources (templated, per-tenant) + Prompts (10 canned workflows) + Notifications (tools/list, resources/list, resources/updated) + Logging capability + Completions + per-tenant memory (bookmarks, recipes, facts via Postgres + BM25 + optional pgvector) + admin API CRUD for memory + opt-in migration tool. Out of scope: Tasks/Elicitation/Sampling/Roots (no claude.ai client support yet).
+- Phase 8 added: maximal-mcp-claude-connector-surface — editable skills as DB-backed MCP prompts, MCP Apps, structured outputs/output schemas, richer resources/completions/notifications, capability-gated sampling/elicitation/roots/tasks, transport parity, and connector naming hardening for Claude/Cowork clients that ignore `serverInfo.name` or show generic `ToolHub` labels.
 
 ### Pending Todos
 
@@ -91,8 +93,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-25T18:42:24.557Z
-Stopped at: Completed 07-11-PLAN.md
+Last session: 2026-05-08T15:25:41.524Z
+Stopped at: context exhaustion at 75% (2026-05-08)
 Resume file: None
 
 ## Quick Tasks Completed
