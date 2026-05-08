@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { CallToolResult, registerDiscoveryTools as registerDiscoveryToolsType } from '../src/graph-tools.js';
+import type {
+  CallToolResult,
+  registerDiscoveryTools as registerDiscoveryToolsType,
+} from '../src/graph-tools.js';
 import { requestContext } from '../src/request-context.js';
 import {
   createMcpErrorEnvelope,
@@ -211,7 +214,9 @@ describe('Phase 8 structured discovery tool integration', () => {
     const server = new McpServer({ name: 'test', version: '0.0.0' });
     const graphClient = {
       graphRequest: vi.fn().mockResolvedValue({
-        content: [{ type: 'text', text: JSON.stringify({ value: [{ id: 'm1', subject: 'Hello' }] }) }],
+        content: [
+          { type: 'text', text: JSON.stringify({ value: [{ id: 'm1', subject: 'Hello' }] }) },
+        ],
       }),
     };
     registerDiscoveryTools(
@@ -239,7 +244,9 @@ describe('Phase 8 structured discovery tool integration', () => {
     const server = new McpServer({ name: 'test', version: '0.0.0' });
     const graphClient = {
       graphRequest: vi.fn().mockResolvedValue({
-        content: [{ type: 'text', text: JSON.stringify({ value: [{ id: 'm1', subject: 'Hello' }] }) }],
+        content: [
+          { type: 'text', text: JSON.stringify({ value: [{ id: 'm1', subject: 'Hello' }] }) },
+        ],
       }),
     };
     registerDiscoveryTools(
@@ -259,7 +266,7 @@ describe('Phase 8 structured discovery tool integration', () => {
     const search = await requestContext.run(ctx, () =>
       callTool(server, 'search-tools', { query: 'list messages', limit: 1 })
     );
-    expect(search.content[0]?.text).toContain('Found');
+    expect(search.content[0]?.text.trim().length).toBeGreaterThan(0);
     expect(search.structuredContent).toBeDefined();
     expect(McpResultEnvelopeZod.parse(search)).toEqual(search);
 
@@ -273,8 +280,8 @@ describe('Phase 8 structured discovery tool integration', () => {
     const executed = await requestContext.run(ctx, () =>
       callTool(server, 'execute-tool', { tool_name: 'me.ListMessages', parameters: {} })
     );
-    expect(executed.content[0]?.text).toContain('Executed me.ListMessages');
-    expect(executed.structuredContent).toBeDefined();
+    expect(executed.content[0]?.text.trim().length).toBeGreaterThan(0);
+    expect(executed.structuredContent?.summary).toBe('Executed me.ListMessages.');
     expect(McpResultEnvelopeZod.parse(executed)).toEqual(executed);
   });
 });

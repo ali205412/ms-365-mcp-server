@@ -72,6 +72,8 @@ export const McpStructuredContentZod = z
   })
   .strict();
 
+export const MCP_STRUCTURED_CONTENT_OUTPUT_SCHEMA = McpStructuredContentZod;
+
 export const McpTextContentZod = z
   .object({
     type: z.literal('text'),
@@ -117,6 +119,6 @@ export function toOutputJsonSchema(_name: string): Record<string, unknown> {
     target: 'jsonSchema7',
     $refStrategy: 'none',
   }) as Record<string, unknown>;
-  const { $schema: _schema, ...schema } = jsonSchema;
-  return schema;
+  delete jsonSchema.$schema;
+  return jsonSchema;
 }
