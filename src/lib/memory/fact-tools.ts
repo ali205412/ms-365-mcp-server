@@ -5,6 +5,8 @@ import { getRequestTenant } from '../../request-context.js';
 import type { RedisClient } from '../redis.js';
 import { publishResourceUpdated } from '../mcp-notifications/events.js';
 import { emitMcpLogEvent } from '../mcp-logging/register.js';
+import { createMcpErrorEnvelope, createMcpResultEnvelope } from '../mcp-results/envelope.js';
+import { MCP_STRUCTURED_CONTENT_OUTPUT_SCHEMA } from '../mcp-results/schemas.js';
 import { FactContentZod, FactScopeZod, forgetFact, recallFacts, recordFact } from './facts.js';
 
 const FACT_RESOURCE_REASON = 'fact-change';
@@ -28,16 +30,31 @@ export interface FactToolDeps {
   redis: RedisClient;
 }
 
-function jsonResult(
-  value: unknown,
-  isError = false
-): {
-  content: Array<{ type: 'text'; text: string }>;
-  isError?: boolean;
-} {
+function jsonResult(value: unknown, isError = false, toolName = 'record-fact') {
+  if (isError) {
+    const errorValue =
+      typeof value === 'object' && value !== null ? (value as { error?: unknown }) : {};
+    const code = typeof errorValue.error === 'string' ? errorValue.error : 'fact_tool_error';
+    return {
+      ...createMcpErrorEnvelope({
+        toolName,
+        summary: `Fact operation failed: ${code}.`,
+        code,
+        message: code,
+        data: value,
+        nextActions: ['Check the supplied fact arguments and retry.'],
+      }),
+      content: [{ type: 'text' as const, text: JSON.stringify(value) }],
+    };
+  }
   return {
-    content: [{ type: 'text', text: JSON.stringify(value) }],
-    ...(isError ? { isError: true } : {}),
+    ...createMcpResultEnvelope({
+      toolName,
+      summary: `Fact operation completed for ${toolName}.`,
+      data: value,
+      nextActions: ['Use recall-facts when this context is needed.'],
+    }),
+    content: [{ type: 'text' as const, text: JSON.stringify(value) }],
   };
 }
 
@@ -77,7 +94,7 @@ export function registerFactTools(server: McpServer, deps: FactToolDeps): void {
     },
     async (args) => {
       const tenant = requireTenant();
-      if (!tenant) return jsonResult({ error: 'tenant_required' }, true);
+      if (!tenant) return jsonResult({ error: 'tenant_required' }, true, 'record-fact');
 
       const parsed = RecordFactInputZod.safeParse(args);
       if (!parsed.success) {
@@ -103,7 +120,7 @@ export function registerFactTools(server: McpServer, deps: FactToolDeps): void {
         },
       });
       await publishFactChange(deps.redis, tenant.id);
-      return jsonResult(fact);
+      return jsonResult(fact, false, 'record-fact');
     }
   );
 
@@ -122,7 +139,7 @@ export function registerFactTools(server: McpServer, deps: FactToolDeps): void {
     },
     async (args) => {
       const tenant = requireTenant();
-      if (!tenant) return jsonResult({ error: 'tenant_required' }, true);
+      if (!tenant) return jsonResult({ error: 'tenant_required' }, true, 'record-fact');
 
       const parsed = RecallFactsInputZod.safeParse(args);
       if (!parsed.success) {
@@ -136,7 +153,7 @@ export function registerFactTools(server: McpServer, deps: FactToolDeps): void {
       }
 
       const facts = await recallFacts(tenant.id, parsed.data);
-      return jsonResult({ facts });
+      return jsonResult({ facts }, false, 'recall-facts');
     }
   );
 
@@ -154,7 +171,7 @@ export function registerFactTools(server: McpServer, deps: FactToolDeps): void {
     },
     async (args) => {
       const tenant = requireTenant();
-      if (!tenant) return jsonResult({ error: 'tenant_required' }, true);
+      if (!tenant) return jsonResult({ error: 'tenant_required' }, true, 'record-fact');
 
       const parsed = ForgetFactInputZod.safeParse(args);
       if (!parsed.success) {
@@ -169,7 +186,17 @@ export function registerFactTools(server: McpServer, deps: FactToolDeps): void {
 
       const result = await forgetFact(tenant.id, parsed.data.id);
       if (result.deleted) await publishFactChange(deps.redis, tenant.id);
-      return jsonResult(result);
+      return jsonResult(result, false, 'forget-fact');
     }
   );
+
+  for (const name of ['record-fact', 'recall-facts'] as const) {
+    (
+      server as unknown as {
+        _registeredTools: Record<string, { update: (input: { outputSchema: never }) => void }>;
+      }
+    )._registeredTools[name]?.update({
+      outputSchema: MCP_STRUCTURED_CONTENT_OUTPUT_SCHEMA.shape as never,
+    });
+  }
 }

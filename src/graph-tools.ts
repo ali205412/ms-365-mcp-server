@@ -26,6 +26,8 @@ import { resolveDiscoveryCatalog } from './lib/discovery-catalog/catalog.js';
 import { safeBookmarkBoost } from './lib/memory/bookmark-boost.js';
 import { getBookmarkCountsByAlias } from './lib/memory/bookmarks.js';
 import { emitMcpLogEvent } from './lib/mcp-logging/register.js';
+import { createMcpErrorEnvelope, createMcpResultEnvelope } from './lib/mcp-results/envelope.js';
+import { MCP_STRUCTURED_CONTENT_OUTPUT_SCHEMA } from './lib/mcp-results/schemas.js';
 // Re-export pure helpers so existing callers (tests, downstream modules)
 // keep working. New callers should import directly from
 // `./lib/graph-tools-pure.js` to avoid transitively pulling the 45 MB
@@ -229,6 +231,24 @@ async function executeGraphTool(
 
 function resultPayloadBytes(result: CallToolResult): number {
   return Buffer.byteLength(JSON.stringify(result.content ?? []), 'utf8');
+}
+
+function graphResultData(result: CallToolResult): unknown {
+  if (result.structuredContent !== undefined) return result.structuredContent;
+  const firstText = result.content.find((item): item is TextContent => item.type === 'text')?.text;
+  if (!firstText) return { content: result.content };
+  try {
+    return JSON.parse(firstText) as unknown;
+  } catch {
+    return { text: firstText };
+  }
+}
+
+function withJsonText(result: CallToolResult, value: unknown): CallToolResult {
+  return {
+    ...result,
+    content: [{ type: 'text', text: JSON.stringify(value, null, 2) }],
+  };
 }
 
 function errorCodeFromResult(result: CallToolResult): string {
@@ -1674,23 +1694,29 @@ export function registerDiscoveryTools(
     };
   };
 
-  server.tool(
+  server.registerTool(
     'search-tools',
-    `Search through Microsoft Graph API tools enabled for this tenant. Ranks results by BM25 over tool name, llmTip, description, and path (tokenized on hyphens, camelCase, and whitespace). After picking a tool, call get-tool-schema to see its parameters, then execute-tool to invoke it.`,
-    {
-      query: z
-        .string()
-        .describe(
-          'Natural-language query. Tokenized and BM25-ranked. E.g. "send email", "create calendar event", "list unread messages".'
-        )
-        .optional(),
-      category: z.string().describe(`Optional pre-filter by category: ${categoryNames}`).optional(),
-      limit: z.number().describe('Maximum results (default: 10, max: 50)').optional(),
-    },
     {
       title: 'search-tools',
-      readOnlyHint: true,
-      openWorldHint: true,
+      description: `Search through Microsoft Graph API tools enabled for this tenant. Ranks results by BM25 over tool name, llmTip, description, and path (tokenized on hyphens, camelCase, and whitespace). After picking a tool, call get-tool-schema to see its parameters, then execute-tool to invoke it.`,
+      inputSchema: {
+        query: z
+          .string()
+          .describe(
+            'Natural-language query. Tokenized and BM25-ranked. E.g. "send email", "create calendar event", "list unread messages".'
+          )
+          .optional(),
+        category: z
+          .string()
+          .describe(`Optional pre-filter by category: ${categoryNames}`)
+          .optional(),
+        limit: z.number().describe('Maximum results (default: 10, max: 50)').optional(),
+      },
+      outputSchema: MCP_STRUCTURED_CONTENT_OUTPUT_SCHEMA,
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: true,
+      },
     },
     async ({ query, category, limit = 10 }) => {
       const maxLimit = Math.min(Math.max(limit, 1), 50);
@@ -1707,23 +1733,19 @@ export function registerDiscoveryTools(
           {},
           'search-tools: no tenant context (ALS or stdio fallback); returning empty result set'
         );
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(
-                {
-                  found: 0,
-                  total: 0,
-                  tools: [],
-                  tip: 'Tenant context unavailable — discovery is fail-closed. Contact operator.',
-                },
-                null,
-                2
-              ),
-            },
-          ],
-        };
+        return createMcpResultEnvelope({
+          toolName: 'search-tools',
+          summary: 'Found 0 tools because tenant context is unavailable.',
+          data: {
+            found: 0,
+            total: 0,
+            tools: [],
+            tip: 'Tenant context unavailable — discovery is fail-closed. Contact operator.',
+          },
+          nextActions: ['Contact the operator to seed tenant context before using discovery.'],
+          warnings: ['tenant_context_unavailable'],
+          meta: { tenantRef: 'unavailable' },
+        });
       }
 
       const catalog = resolveDiscoveryCatalog({
@@ -1773,39 +1795,42 @@ export function registerDiscoveryTools(
 
       const tools = orderedNames.slice(0, maxLimit).map(toResultEntry).filter(Boolean);
 
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(
-              {
-                found: tools.length,
-                // Report the tenant's enabled-set size, not the full
-                // registry size — advertising the global total leaks
-                // cross-tenant shape (T-05-12).
-                total: catalogSet.size,
-                tools,
-                tip: 'Call get-tool-schema(tool_name) to see parameters before invoking execute-tool.',
-              },
-              null,
-              2
-            ),
-          },
-        ],
+      const payload = {
+        found: tools.length,
+        // Report the tenant's enabled-set size, not the full
+        // registry size — advertising the global total leaks
+        // cross-tenant shape (T-05-12).
+        total: catalogSet.size,
+        tools,
+        tip: 'Call get-tool-schema(tool_name) to see parameters before invoking execute-tool.',
       };
+      return withJsonText(
+        createMcpResultEnvelope({
+          toolName: 'search-tools',
+          summary: `Found ${tools.length} matching tool${tools.length === 1 ? '' : 's'}.`,
+          data: payload,
+          nextActions: ['Call get-tool-schema for a selected tool before invoking execute-tool.'],
+          meta: { tenantRef: tenant.id },
+        }),
+        payload
+      );
     }
   );
 
-  server.tool(
+  server.registerTool(
     'get-tool-schema',
-    'Returns the full parameter schema (name, placement, required, JSON Schema) for a tool discovered via search-tools. Call this before execute-tool so you know what parameters to pass and what enum values are valid.',
-    {
-      tool_name: z.string().describe('Exact tool name from search-tools (e.g. "send-mail")'),
-    },
     {
       title: 'get-tool-schema',
-      readOnlyHint: true,
-      openWorldHint: false,
+      description:
+        'Returns the full parameter schema (name, placement, required, JSON Schema) for a tool discovered via search-tools. Call this before execute-tool so you know what parameters to pass and what enum values are valid.',
+      inputSchema: {
+        tool_name: z.string().describe('Exact tool name from search-tools (e.g. "send-mail")'),
+      },
+      outputSchema: MCP_STRUCTURED_CONTENT_OUTPUT_SCHEMA,
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+      },
     },
     async ({ tool_name }) => {
       // Plan 05-06 T-05-12: enforce tenant scope before exposing schema.
@@ -1814,18 +1839,14 @@ export function registerDiscoveryTools(
       const tenant = resolveTenantForDiscovery();
       if (!tenant) {
         logger.warn({}, 'get-tool-schema: no tenant context; refusing schema dump');
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                error: 'tenant context unavailable',
-                tip: 'Tenant context not seeded — contact operator.',
-              }),
-            },
-          ],
-          isError: true,
-        };
+        return createMcpErrorEnvelope({
+          toolName: 'get-tool-schema',
+          summary: 'Cannot return a schema without tenant context.',
+          code: 'tenant_context_unavailable',
+          message: 'Tenant context not seeded.',
+          nextActions: ['Contact the operator to seed tenant context before using discovery.'],
+          meta: { tenantRef: 'unavailable' },
+        });
       }
 
       const catalog = resolveDiscoveryCatalog({
@@ -1840,63 +1861,67 @@ export function registerDiscoveryTools(
           { tool: tool_name, tenantId: tenant.id },
           'get-tool-schema: tool not enabled for tenant'
         );
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                error: `Tool not enabled for tenant: ${tool_name}`,
-                tenantId: tenant.id,
-                tip: 'Use search-tools to discover tools available to this tenant.',
-              }),
-            },
-          ],
-          isError: true,
-        };
+        return createMcpErrorEnvelope({
+          toolName: 'get-tool-schema',
+          summary: `Tool not enabled for tenant: ${tool_name}.`,
+          code: 'tool_not_enabled_for_tenant',
+          message: `Tool not enabled for tenant: ${tool_name}`,
+          data: { toolName: tool_name },
+          nextActions: ['Use search-tools to discover tools available to this tenant.'],
+          meta: { tenantRef: tenant.id },
+        });
       }
 
       const entry = toolsRegistry.get(tool_name);
       if (!entry) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                error: `Tool not found: ${tool_name}`,
-                tip: 'Use search-tools to find available tools.',
-              }),
-            },
-          ],
-          isError: true,
-        };
+        return createMcpErrorEnvelope({
+          toolName: 'get-tool-schema',
+          summary: `Tool not found: ${tool_name}.`,
+          code: 'tool_not_found',
+          message: `Tool not found: ${tool_name}`,
+          data: { toolName: tool_name },
+          nextActions: ['Use search-tools to find available tools.'],
+          meta: { tenantRef: tenant.id },
+        });
       }
       const schema = describeToolSchema(entry.tool, entry.config?.llmTip);
-      return {
-        content: [{ type: 'text', text: JSON.stringify(schema, null, 2) }],
-      };
+      return withJsonText(
+        createMcpResultEnvelope({
+          toolName: 'get-tool-schema',
+          summary: `Schema for ${schema.name}.`,
+          data: schema,
+          nextActions: ['Call execute-tool with parameters shaped per this schema.'],
+          meta: { tenantRef: tenant.id, toolAlias: schema.name },
+        }),
+        schema
+      );
     }
   );
 
-  server.tool(
+  server.registerTool(
     'execute-tool',
-    'Execute a Microsoft Graph API tool by name. Workflow: search-tools → get-tool-schema → execute-tool. Call get-tool-schema first for any tool you have not seen before — passing the wrong shape to parameters will fail validation or return a Graph 400. For list endpoints, prefer modest $top plus $select.',
-    {
-      tool_name: z.string().describe('Name of the tool to execute (e.g., "list-mail-messages")'),
-      parameters: z
-        .record(z.any())
-        .describe(
-          'Parameters shaped per get-tool-schema. Path/query/header params go at the top level; request bodies go under "body".'
-        )
-        .optional(),
-    },
     {
       title: 'execute-tool',
-      readOnlyHint: false,
-      destructiveHint: true,
-      openWorldHint: true,
+      description:
+        'Execute a Microsoft Graph API tool by name. Workflow: search-tools → get-tool-schema → execute-tool. Call get-tool-schema first for any tool you have not seen before — passing the wrong shape to parameters will fail validation or return a Graph 400. For list endpoints, prefer modest $top plus $select.',
+      inputSchema: {
+        tool_name: z.string().describe('Name of the tool to execute (e.g., "list-mail-messages")'),
+        parameters: z
+          .record(z.any())
+          .describe(
+            'Parameters shaped per get-tool-schema. Path/query/header params go at the top level; request bodies go under "body".'
+          )
+          .optional(),
+      },
+      outputSchema: MCP_STRUCTURED_CONTENT_OUTPUT_SCHEMA,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        openWorldHint: true,
+      },
     },
     async ({ tool_name, parameters = {} }) => {
-      return executeToolAlias({
+      const result = await executeToolAlias({
         toolName: tool_name,
         parameters,
         graphClient,
@@ -1904,6 +1929,17 @@ export function registerDiscoveryTools(
         readOnly,
         orgMode,
       });
+      if (result.isError) return result;
+      return {
+        ...createMcpResultEnvelope({
+          toolName: 'execute-tool',
+          summary: `Executed ${tool_name}.`,
+          data: graphResultData(result),
+          nextActions: ['Review the returned data and call another tool if more detail is needed.'],
+          meta: { ...result._meta, toolAlias: tool_name },
+        }),
+        content: result.content,
+      };
     }
   );
 
