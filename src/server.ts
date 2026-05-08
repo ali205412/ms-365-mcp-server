@@ -59,6 +59,13 @@ import {
   wrapToolsListHandler,
 } from './lib/tool-selection/tools-list-filter.js';
 import { resolveTenantSurface } from './lib/tenant-surface/surface.js';
+import {
+  buildConnectorWellKnownMetadata,
+  buildOAuthAuthorizationServerMetadata,
+  buildOAuthProtectedResourceMetadata,
+  buildServerInfo,
+  resolveConnectorIdentity,
+} from './lib/connector-identity/metadata.js';
 import crypto from 'node:crypto';
 import { pinoHttp } from 'pino-http';
 import { nanoid } from 'nanoid';
@@ -168,7 +175,8 @@ export function createRegisterHandler(policy: RedirectUriPolicy) {
       grant_types: body.grant_types || ['authorization_code', 'refresh_token'],
       response_types: body.response_types || ['code'],
       token_endpoint_auth_method: body.token_endpoint_auth_method || 'none',
-      client_name: body.client_name || 'MCP Client',
+      client_name:
+        body.client_name || resolveConnectorIdentity({ version: 'dynamic-registration' }).displayName,
     });
   };
 }
@@ -1015,16 +1023,15 @@ class MicrosoftGraphServer {
       : Boolean(this.options.discovery);
 
     const server = new McpServer(
-      {
-        name: 'Microsoft365MCP',
-        version: this.version,
-      },
+      buildServerInfo({ version: this.version, tenantDisplayName: tenant?.slug }),
       {
         instructions: buildMcpServerInstructions({
           discovery: useDiscoverySurface,
           orgMode: Boolean(this.options.orgMode),
           readOnly: Boolean(this.options.readOnly),
           multiAccount: this.multiAccount,
+          tenantDisplayName: tenant?.slug,
+          version: this.version,
         }),
       }
     );
@@ -1321,53 +1328,38 @@ class MicrosoftGraphServer {
     // Different MCP clients try different forms; Claude.ai connectors follow
     // RFC 8414 strictly. Both routes serve the same body via the same
     // builders below.
-    const buildAuthServerMetadata = (tenant: TenantRow, req: Request): Record<string, unknown> => {
+    const externalBaseFor = (req: Request): string => {
       const protocol = req.secure ? 'https' : 'http';
       const requestOrigin = `${protocol}://${req.get('host')}`;
-      const externalBase = publicBase ?? requestOrigin;
-      const tenantBase = `${externalBase}/t/${tenant.id}`;
-      const tokenBase = `${externalBase}/t/${tenant.id}`;
-      const scopes = tenant.allowed_scopes.length
+      return publicBase ?? requestOrigin;
+    };
+
+    const scopesForTenant = (tenant: TenantRow): readonly string[] =>
+      tenant.allowed_scopes.length
         ? tenant.allowed_scopes
         : buildScopesFromEndpoints(this.options.orgMode, this.options.enabledTools);
-      const metadata: Record<string, unknown> = {
-        issuer: tenantBase,
-        authorization_endpoint: `${tenantBase}/authorize`,
-        token_endpoint: `${tokenBase}/token`,
-        response_types_supported: ['code'],
-        response_modes_supported: ['query'],
-        grant_types_supported: ['authorization_code', 'refresh_token'],
-        token_endpoint_auth_methods_supported: ['none'],
-        code_challenge_methods_supported: ['S256'],
-        scopes_supported: scopes,
-      };
-      // Advertise DCR (RFC 7591). The /register endpoint is mounted globally
-      // (not per-tenant) so we point at the canonical external /register.
-      if (this.options.enableDynamicRegistration) {
-        metadata.registration_endpoint = `${externalBase}/register`;
-      }
-      return metadata;
-    };
+
+    const buildAuthServerMetadata = (tenant: TenantRow, req: Request): Record<string, unknown> =>
+      buildOAuthAuthorizationServerMetadata({
+        publicBaseUrl: externalBaseFor(req),
+        tenantId: tenant.id,
+        tenantDisplayName: tenant.slug,
+        scopes: scopesForTenant(tenant),
+        version: this.version,
+        dynamicRegistration: this.options.enableDynamicRegistration,
+      });
 
     const buildProtectedResourceMetadata = (
       tenant: TenantRow,
       req: Request
-    ): Record<string, unknown> => {
-      const protocol = req.secure ? 'https' : 'http';
-      const requestOrigin = `${protocol}://${req.get('host')}`;
-      const externalBase = publicBase ?? requestOrigin;
-      const tenantBase = `${externalBase}/t/${tenant.id}`;
-      const scopes = tenant.allowed_scopes.length
-        ? tenant.allowed_scopes
-        : buildScopesFromEndpoints(this.options.orgMode, this.options.enabledTools);
-      return {
-        resource: `${externalBase}/t/${tenant.id}/mcp`,
-        authorization_servers: [tenantBase],
-        scopes_supported: scopes,
-        bearer_methods_supported: ['header'],
-        resource_documentation: tenantBase,
-      };
-    };
+    ): Record<string, unknown> =>
+      buildOAuthProtectedResourceMetadata({
+        publicBaseUrl: externalBaseFor(req),
+        tenantId: tenant.id,
+        tenantDisplayName: tenant.slug,
+        scopes: scopesForTenant(tenant),
+        version: this.version,
+      });
 
     // OIDC-discovery shape (well-known after path).
     app.get('/t/:tenantId/.well-known/oauth-authorization-server', async (req, res) => {
@@ -1408,6 +1400,22 @@ class MicrosoftGraphServer {
         return;
       }
       res.json(buildProtectedResourceMetadata(tenant, req));
+    });
+
+    app.get('/t/:tenantId/.well-known/mcp-connector', async (req, res) => {
+      const tenant = (req as Request & { tenant?: TenantRow }).tenant;
+      if (!tenant) {
+        res.status(404).json({ error: 'tenant_not_found' });
+        return;
+      }
+      res.json(
+        buildConnectorWellKnownMetadata({
+          publicBaseUrl: externalBaseFor(req),
+          tenantId: tenant.id,
+          tenantDisplayName: tenant.slug,
+          version: this.version,
+        })
+      );
     });
 
     // /t/:tenantId/authorize + /t/:tenantId/token — tenant-scoped OAuth from 03-06.
@@ -1764,23 +1772,14 @@ class MicrosoftGraphServer {
 
         const scopes = buildScopesFromEndpoints(this.options.orgMode, this.options.enabledTools);
 
-        const metadata: Record<string, unknown> = {
-          issuer: externalBase,
-          authorization_endpoint: `${externalBase}/authorize`,
-          token_endpoint: `${externalBase}/token`,
-          response_types_supported: ['code'],
-          response_modes_supported: ['query'],
-          grant_types_supported: ['authorization_code', 'refresh_token'],
-          token_endpoint_auth_methods_supported: ['none'],
-          code_challenge_methods_supported: ['S256'],
-          scopes_supported: scopes,
-        };
-
-        if (this.options.enableDynamicRegistration) {
-          metadata.registration_endpoint = `${externalBase}/register`;
-        }
-
-        res.json(metadata);
+        res.json(
+          buildOAuthAuthorizationServerMetadata({
+            publicBaseUrl: externalBase,
+            scopes,
+            version: this.version,
+            dynamicRegistration: this.options.enableDynamicRegistration,
+          })
+        );
       });
 
       // OAuth Protected Resource Discovery
@@ -1791,13 +1790,13 @@ class MicrosoftGraphServer {
 
         const scopes = buildScopesFromEndpoints(this.options.orgMode, this.options.enabledTools);
 
-        res.json({
-          resource: `${externalBase}/mcp`,
-          authorization_servers: [externalBase],
-          scopes_supported: scopes,
-          bearer_methods_supported: ['header'],
-          resource_documentation: externalBase,
-        });
+        res.json(
+          buildOAuthProtectedResourceMetadata({
+            publicBaseUrl: externalBase,
+            scopes,
+            version: this.version,
+          })
+        );
       });
 
       if (this.options.enableDynamicRegistration) {
