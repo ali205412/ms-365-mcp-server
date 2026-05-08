@@ -17,7 +17,10 @@ export function operationKey(input: OperationKey): string | undefined {
   return `${input.tenantId}:${input.requestId}:${input.progressToken}`;
 }
 
-export function registerOperation(input: OperationKey, ttlMs: number = DEFAULT_TTL_MS): AbortController {
+export function registerOperation(
+  input: OperationKey,
+  ttlMs: number = DEFAULT_TTL_MS
+): AbortController {
   cleanupExpiredOperations(ttlMs);
   const controller = new AbortController();
   const key = operationKey(input);

@@ -1,7 +1,10 @@
 import type { ClientCapabilityProfile } from '../mcp-capabilities/profile.js';
 
 export interface ProgressNotificationSender {
-  (notification: { method: 'notifications/progress'; params: ProgressNotificationParams }): void | Promise<void>;
+  (notification: {
+    method: 'notifications/progress';
+    params: ProgressNotificationParams;
+  }): void | Promise<void>;
 }
 
 export interface ProgressNotificationParams {

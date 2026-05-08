@@ -115,7 +115,11 @@ describe('Phase 8 progress and cancellation for paginated Graph tools', () => {
       .fn()
       .mockResolvedValueOnce(page(['a'], 'https://graph.microsoft.com/v1.0/me/messages?$skip=1'))
       .mockImplementationOnce(async () => {
-        cancelOperation({ tenantId: 'tenant-a', requestId: 'request-1', progressToken: 'progress-1' });
+        cancelOperation({
+          tenantId: 'tenant-a',
+          requestId: 'request-1',
+          progressToken: 'progress-1',
+        });
         return page(['b'], 'https://graph.microsoft.com/v1.0/me/messages?$skip=2');
       });
 
@@ -140,7 +144,11 @@ describe('Phase 8 progress and cancellation for paginated Graph tools', () => {
       .fn()
       .mockResolvedValueOnce(page(['a'], 'https://graph.microsoft.com/v1.0/me/messages?$skip=1'))
       .mockImplementationOnce(async () => {
-        cancelOperation({ tenantId: 'tenant-a', requestId: 'request-1', progressToken: 'progress-1' });
+        cancelOperation({
+          tenantId: 'tenant-a',
+          requestId: 'request-1',
+          progressToken: 'progress-1',
+        });
         return page(['b']);
       });
 

@@ -102,7 +102,9 @@ describe('Phase 8 tool annotations and safe-write confirmation', () => {
       openWorldHint: true,
       riskLevel: 'high',
     });
-    const sendMailSchema = toolMeta(server, 'send-mail').inputSchema as { shape: Record<string, unknown> };
+    const sendMailSchema = toolMeta(server, 'send-mail').inputSchema as {
+      shape: Record<string, unknown>;
+    };
     expect(sendMailSchema.shape).toHaveProperty('confirmation');
     expect(sendMailSchema.shape).toHaveProperty('confirmationId');
   });

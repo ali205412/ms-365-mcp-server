@@ -3,7 +3,11 @@ import { classifyToolRisk, confirmationIdFor } from '../src/lib/safe-writes/clas
 
 describe('Phase 8 safe write classifier', () => {
   it('classifies GET operations as low-risk read-only idempotent tools', () => {
-    const risk = classifyToolRisk({ alias: 'list-mail-messages', method: 'get', path: '/me/messages' });
+    const risk = classifyToolRisk({
+      alias: 'list-mail-messages',
+      method: 'get',
+      path: '/me/messages',
+    });
 
     expect(risk).toMatchObject({
       readOnly: true,

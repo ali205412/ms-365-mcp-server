@@ -281,7 +281,11 @@ export async function fetchAllPages(
 
   if (cancelled) {
     result._cancelled = true;
-    if (opts.operationKey?.tenantId && opts.operationKey.requestId && opts.operationKey.progressToken) {
+    if (
+      opts.operationKey?.tenantId &&
+      opts.operationKey.requestId &&
+      opts.operationKey.progressToken
+    ) {
       result._partialResourceUri = `m365://tenant/${opts.operationKey.tenantId}/partial/${opts.operationKey.requestId}/${opts.operationKey.progressToken}.json`;
     }
   }

@@ -385,7 +385,10 @@ function riskForTool(
   });
 }
 
-function annotationsForRisk(toolAlias: string, risk: ToolRiskClassification): Record<string, unknown> {
+function annotationsForRisk(
+  toolAlias: string,
+  risk: ToolRiskClassification
+): Record<string, unknown> {
   return {
     title: toolAlias,
     readOnlyHint: risk.readOnly,
@@ -872,7 +875,8 @@ async function executeGraphToolInner(
       const combined = await fetchAllPages(path, options, graphClient, {
         seedFirstPage: firstPage,
         progressToken: token,
-        sendNotification: typeof params._sendNotification === 'function' ? params._sendNotification : undefined,
+        sendNotification:
+          typeof params._sendNotification === 'function' ? params._sendNotification : undefined,
         capabilityProfile: ctx?.capabilityProfile,
         operationKey,
       });
