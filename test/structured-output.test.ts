@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import type { CallToolResult, registerDiscoveryTools as registerDiscoveryToolsType } from '../src/graph-tools.js';
+import { requestContext } from '../src/request-context.js';
 import {
   createMcpErrorEnvelope,
   createMcpResultEnvelope,
@@ -10,6 +13,33 @@ import {
   McpStructuredContentZod,
   toOutputJsonSchema,
 } from '../src/lib/mcp-results/schemas.js';
+
+vi.mock('../src/logger.js', () => ({
+  default: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  rawPinoLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  enableConsoleLogging: vi.fn(),
+}));
+
+vi.mock('../src/generated/client.js', () => ({
+  api: {
+    endpoints: [
+      {
+        alias: 'me.ListMessages',
+        method: 'get',
+        path: '/me/messages',
+        description: 'List messages',
+        parameters: [],
+      },
+      {
+        alias: 'me.sendMail',
+        method: 'post',
+        path: '/me/sendMail',
+        description: 'Send mail',
+        parameters: [],
+      },
+    ],
+  },
+}));
 
 const forbiddenPayload = {
   ok: true,
@@ -29,6 +59,52 @@ const forbiddenPayload = {
     accept: 'application/json',
   },
 };
+
+async function callTool(
+  server: McpServer,
+  name: string,
+  args: Record<string, unknown>
+): Promise<CallToolResult> {
+  const registered = (
+    server as unknown as {
+      _registeredTools: Record<
+        string,
+        {
+          outputSchema?: unknown;
+          handler: (args: unknown, extra: unknown) => Promise<CallToolResult>;
+        }
+      >;
+    }
+  )._registeredTools;
+  const tool = registered[name];
+  if (!tool || typeof tool.handler !== 'function') {
+    throw new Error(`tool "${name}" not registered on test McpServer`);
+  }
+  return tool.handler(args, {
+    requestId: 'structured-output-test',
+    sendNotification: vi.fn(),
+    sendRequest: vi.fn(),
+  });
+}
+
+async function listTools(server: McpServer): Promise<{ tools: Array<{ name: string }> }> {
+  const handlers = (
+    server.server as unknown as {
+      _requestHandlers: Map<string, (req: unknown, extra: unknown) => Promise<{ tools: [] }>>;
+    }
+  )._requestHandlers;
+  const handler = handlers.get('tools/list');
+  if (!handler) throw new Error('tools/list handler not registered');
+  return handler(
+    { method: 'tools/list', params: {} },
+    { requestId: 'structured-output-test', sendNotification: vi.fn(), sendRequest: vi.fn() }
+  );
+}
+
+function registeredTool(server: McpServer, name: string): { outputSchema?: unknown } {
+  return (server as unknown as { _registeredTools: Record<string, { outputSchema?: unknown }> })
+    ._registeredTools[name]!;
+}
 
 describe('MCP result envelope helpers', () => {
   it('creates schema-valid success envelopes with non-empty text fallback', () => {
@@ -124,5 +200,81 @@ describe('MCP result envelope helpers', () => {
         warnings: [],
       })
     ).toThrow(z.ZodError);
+  });
+});
+
+describe('Phase 8 structured discovery tool integration', () => {
+  it('registers output schemas for search-tools, get-tool-schema, and execute-tool', async () => {
+    const { registerDiscoveryTools } = (await import('../src/graph-tools.js')) as {
+      registerDiscoveryTools: typeof registerDiscoveryToolsType;
+    };
+    const server = new McpServer({ name: 'test', version: '0.0.0' });
+    const graphClient = {
+      graphRequest: vi.fn().mockResolvedValue({
+        content: [{ type: 'text', text: JSON.stringify({ value: [{ id: 'm1', subject: 'Hello' }] }) }],
+      }),
+    };
+    registerDiscoveryTools(
+      server,
+      graphClient as unknown as Parameters<typeof registerDiscoveryTools>[1],
+      false,
+      true
+    );
+
+    for (const name of ['search-tools', 'get-tool-schema', 'execute-tool']) {
+      expect(registeredTool(server, name).outputSchema).toBeDefined();
+    }
+
+    const tools = await listTools(server);
+    for (const name of ['search-tools', 'get-tool-schema', 'execute-tool']) {
+      const listed = tools.tools.find((tool) => tool.name === name) as { outputSchema?: unknown };
+      expect(listed.outputSchema).toBeDefined();
+    }
+  });
+
+  it('returns schema-valid structuredContent while preserving text-only content', async () => {
+    const { registerDiscoveryTools } = (await import('../src/graph-tools.js')) as {
+      registerDiscoveryTools: typeof registerDiscoveryToolsType;
+    };
+    const server = new McpServer({ name: 'test', version: '0.0.0' });
+    const graphClient = {
+      graphRequest: vi.fn().mockResolvedValue({
+        content: [{ type: 'text', text: JSON.stringify({ value: [{ id: 'm1', subject: 'Hello' }] }) }],
+      }),
+    };
+    registerDiscoveryTools(
+      server,
+      graphClient as unknown as Parameters<typeof registerDiscoveryTools>[1],
+      false,
+      true
+    );
+
+    const ctx = {
+      tenantId: '11111111-1111-4111-8111-111111111111',
+      enabledToolsSet: new Set(['me.ListMessages']),
+      enabledToolsExplicit: true,
+      presetVersion: 'discovery-v1',
+    };
+
+    const search = await requestContext.run(ctx, () =>
+      callTool(server, 'search-tools', { query: 'list messages', limit: 1 })
+    );
+    expect(search.content[0]?.text).toContain('Found');
+    expect(search.structuredContent).toBeDefined();
+    expect(McpResultEnvelopeZod.parse(search)).toEqual(search);
+
+    const schema = await requestContext.run(ctx, () =>
+      callTool(server, 'get-tool-schema', { tool_name: 'me.ListMessages' })
+    );
+    expect(schema.content[0]?.text).toContain('me.ListMessages');
+    expect(schema.structuredContent).toBeDefined();
+    expect(McpResultEnvelopeZod.parse(schema)).toEqual(schema);
+
+    const executed = await requestContext.run(ctx, () =>
+      callTool(server, 'execute-tool', { tool_name: 'me.ListMessages', parameters: {} })
+    );
+    expect(executed.content[0]?.text).toContain('Executed me.ListMessages');
+    expect(executed.structuredContent).toBeDefined();
+    expect(McpResultEnvelopeZod.parse(executed)).toEqual(executed);
   });
 });
