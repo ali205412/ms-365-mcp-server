@@ -34,6 +34,7 @@ import {
   isConfirmationValid,
   type ToolRiskClassification,
 } from './lib/safe-writes/classifier.js';
+import { registerOperation, unregisterOperation } from './lib/mcp-progress/cancellation.js';
 // Re-export pure helpers so existing callers (tests, downstream modules)
 // keep working. New callers should import directly from
 // `./lib/graph-tools-pure.js` to avoid transitively pulling the 45 MB
@@ -604,6 +605,8 @@ async function executeGraphToolInner(
           'expandExtendedProperties',
           'confirmation',
           'confirmationId',
+          '_meta',
+          '_sendNotification',
         ].includes(paramName)
       ) {
         continue;
@@ -850,21 +853,57 @@ async function executeGraphToolInner(
       // a duplicate graphRequest call (preserves v1's "1 initial + N nextLinks"
       // call-count contract that existing fetchAllPages tests rely on).
       const firstPage = JSON.parse(response.content[0].text);
+      const ctx = requestContext.getStore();
+      const meta =
+        typeof params._meta === 'object' && params._meta !== null
+          ? (params._meta as { progressToken?: unknown })
+          : undefined;
+      const progressToken = meta?.progressToken;
+      const token =
+        typeof progressToken === 'string' || typeof progressToken === 'number'
+          ? progressToken
+          : undefined;
+      const operationKey = {
+        tenantId: ctx?.tenantId ?? tenantInfo.id,
+        requestId: ctx?.requestId,
+        progressToken: token !== undefined ? String(token) : undefined,
+      };
+      if (token !== undefined) registerOperation(operationKey);
       const combined = await fetchAllPages(path, options, graphClient, {
         seedFirstPage: firstPage,
+        progressToken: token,
+        sendNotification: typeof params._sendNotification === 'function' ? params._sendNotification : undefined,
+        capabilityProfile: ctx?.capabilityProfile,
+        operationKey,
       });
+      unregisterOperation(operationKey);
       firstPage.value = combined.value;
-      if (combined._truncated) {
+      if (combined._cancelled) {
+        const payload = {
+          status: 'cancelled',
+          operation: tool.alias,
+          resourceUri: combined._partialResourceUri,
+          partial: { value: combined.value },
+        };
+        response.content[0].text = JSON.stringify(payload);
+        response._meta = {
+          ...response._meta,
+          cancelled: true,
+          partialResourceUri: combined._partialResourceUri,
+        };
+      } else if (combined._truncated) {
         firstPage._truncated = true;
         if (combined._nextLink !== undefined) {
           firstPage._nextLink = combined._nextLink;
         }
       }
-      if (firstPage['@odata.count'] !== undefined) {
+      if (!combined._cancelled && firstPage['@odata.count'] !== undefined) {
         firstPage['@odata.count'] = combined.value.length;
       }
-      delete firstPage['@odata.nextLink'];
-      response.content[0].text = JSON.stringify(firstPage);
+      if (!combined._cancelled) {
+        delete firstPage['@odata.nextLink'];
+        response.content[0].text = JSON.stringify(firstPage);
+      }
       logger.info(
         `Pagination via page-iterator: items=${combined.value.length} truncated=${Boolean(combined._truncated)}`
       );
@@ -1159,7 +1198,19 @@ export function registerGraphTools(
         toolDescription,
         paramSchema,
         annotationsForRisk(tool.alias, risk),
-        async (params) => executeGraphTool(tool, endpointConfig, graphClient, params, authManager)
+        async (params, extra) =>
+          executeGraphTool(
+            tool,
+            endpointConfig,
+            graphClient,
+            {
+              ...params,
+              _meta: (extra as { _meta?: unknown } | undefined)?._meta,
+              _sendNotification: (extra as { sendNotification?: unknown } | undefined)
+                ?.sendNotification,
+            },
+            authManager
+          )
       );
       registeredCount++;
     } catch (error) {
