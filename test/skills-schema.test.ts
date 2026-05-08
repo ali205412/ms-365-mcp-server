@@ -26,7 +26,9 @@ describe('tenant skills schema migration', () => {
       returns: 'uuid',
       implementation: () => '00000000-0000-4000-8000-000000000001',
     });
-    db.public.none(upSql(tenantsMigrationPath).replace(/CREATE EXTENSION IF NOT EXISTS pgcrypto;/g, ''));
+    db.public.none(
+      upSql(tenantsMigrationPath).replace(/CREATE EXTENSION IF NOT EXISTS pgcrypto;/g, '')
+    );
     db.public.none(upSql(migrationPath));
 
     const columns = db.public.many(`

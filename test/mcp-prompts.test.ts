@@ -110,7 +110,8 @@ describe('MCP prompt registration with skills', () => {
       params: ['user-a'],
     });
     expect(visibleSkillWhereClause(1)).toEqual({
-      clause: "WHERE tenant_id = $1 AND enabled = true AND visibility IN ('tenant', 'admin', 'builtin-copy')",
+      clause:
+        "WHERE tenant_id = $1 AND enabled = true AND visibility IN ('tenant', 'admin', 'builtin-copy')",
       params: [],
     });
   });

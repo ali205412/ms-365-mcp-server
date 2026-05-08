@@ -40,7 +40,8 @@ function rowToSkillInput(row: TenantSkillRow): SkillInput {
     name: row.name,
     title: row.title,
     description: row.description,
-    frontmatter: typeof row.frontmatter === 'string' ? JSON.parse(row.frontmatter) : row.frontmatter,
+    frontmatter:
+      typeof row.frontmatter === 'string' ? JSON.parse(row.frontmatter) : row.frontmatter,
     body: row.body,
     arguments: parseJsonArray(row.arguments),
     visibility: row.visibility,

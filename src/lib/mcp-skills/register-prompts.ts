@@ -6,7 +6,9 @@ export interface SkillPromptDefinition extends PromptTemplateDefinition {
   readonly readOnly?: boolean;
 }
 
-export function builtinPromptToSkillPrompt(prompt: PromptTemplateDefinition): SkillPromptDefinition {
+export function builtinPromptToSkillPrompt(
+  prompt: PromptTemplateDefinition
+): SkillPromptDefinition {
   return { ...prompt, readOnly: true };
 }
 
