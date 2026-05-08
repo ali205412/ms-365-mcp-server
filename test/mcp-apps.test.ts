@@ -9,6 +9,20 @@ import { DISCOVERY_META_TOOL_NAMES, DISCOVERY_PRESET_VERSION } from '../src/lib/
 
 const TENANT_ID = '11111111-1111-4111-8111-111111111111';
 
+vi.mock('../src/generated/client.js', () => ({
+  api: {
+    endpoints: [
+      {
+        alias: 'list-mail-messages',
+        method: 'get',
+        path: '/me/messages',
+        description: 'List messages in the signed-in user mailbox.',
+        parameters: [],
+      },
+    ],
+  },
+}));
+
 function discoveryTenant() {
   return {
     id: TENANT_ID,
@@ -88,10 +102,8 @@ describe('MCP Apps foundation', () => {
     const list = await invokeResourcesList(server);
     const app = list.resources.find((resource) => resource.uri === 'ui://m365/inbox-triage.html');
 
-    expect(app).toMatchObject({
-      name: 'm365-app-inbox-triage',
-      mimeType: 'text/html;profile=mcp-app',
-    });
+    expect(app?.name).toBe('m365-app-inbox-triage');
+    expect(app?.mimeType).toBe('text/html;profile=mcp-app');
     expect(app?._meta?.ui).toMatchObject({
       csp: {
         defaultSrc: ["'none'"],

@@ -11,6 +11,7 @@ import { registerMemoryTools } from './lib/memory/tools.js';
 import { registerMcpResources } from './lib/mcp-resources/register.js';
 import { registerMcpPrompts, type RegisterMcpPromptsDeps } from './lib/mcp-prompts/register.js';
 import { registerSkillTools } from './lib/mcp-skills/tools.js';
+import { registerMcpApps } from './lib/mcp-apps/register.js';
 import { registerMcpCompletions } from './lib/mcp-completions/register.js';
 import { registerMcpLogging } from './lib/mcp-logging/register.js';
 import { registerConnectorDiagnosticsTool } from './lib/mcp-capabilities/diagnostics.js';
@@ -1067,6 +1068,16 @@ class MicrosoftGraphServer {
         orgMode: this.options.orgMode,
         loadBuiltInPrompts: this.promptDeps?.loadPrompts,
       });
+      const capabilityProfile = buildEffectiveCapabilityProfile({
+        transport: this.options.http ? 'streamable-http' : 'stdio',
+        surface: 'discovery',
+        tenantPolicy: { phase8Enabled: true },
+        advertisedCapabilities: { tools: {}, apps: {}, resources: {}, structuredToolResults: {} },
+      });
+      registerMcpApps(server, {
+        tenant: tenant ? { id: tenant.id, preset_version: tenant.preset_version } : undefined,
+        capabilityProfile,
+      });
       registerMcpResources(server, {
         tenant:
           tenant && enabledToolsSet
@@ -1092,12 +1103,7 @@ class MicrosoftGraphServer {
         transport: this.options.http ? 'streamable-http' : 'stdio',
         expectedDisplayName: 'Microsoft 365 MCP Gateway',
         metadataUrls: tenant ? { mcp: `/t/${tenant.id}/mcp` } : {},
-        profile: buildEffectiveCapabilityProfile({
-          transport: this.options.http ? 'streamable-http' : 'stdio',
-          surface: 'discovery',
-          tenantPolicy: { phase8Enabled: true },
-          advertisedCapabilities: { tools: {} },
-        }),
+        profile: capabilityProfile,
       });
     } else {
       registerGraphTools(
