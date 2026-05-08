@@ -1,4 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('../src/lib/mcp-completions/handlers.js', () => ({
+  completeAccount: () => [],
+  completeAlias: () => [],
+  completeTenantId: () => [],
+}));
+
 import { registerMcpPrompts } from '../src/lib/mcp-prompts/register.js';
 import { skillRowToPrompt, visibleSkillWhereClause } from '../src/lib/mcp-skills/store.js';
 import { publishPromptsListChanged } from '../src/lib/mcp-notifications/events.js';

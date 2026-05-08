@@ -10,6 +10,7 @@ import {
   type PromptTemplateDefinition,
 } from './frontmatter.js';
 import { renderPromptTemplate } from './renderer.js';
+import { mergeBuiltInAndSkillPrompts, renderSkillPrompt } from '../mcp-skills/register-prompts.js';
 import {
   completeAccount,
   completeAlias,
@@ -27,6 +28,8 @@ const DEFAULT_PROMPT_DIR = path.resolve(
 export interface RegisterMcpPromptsDeps {
   readonly promptDir?: string;
   readonly loadPrompts?: () => readonly PromptTemplateDefinition[];
+  readonly loadSkillPrompts?: () => readonly PromptTemplateDefinition[];
+  readonly enableEditableSkills?: boolean;
   readonly authManager?: AccountCompletionAuthManager;
 }
 
@@ -35,9 +38,12 @@ export interface RegisterMcpPromptsResult {
 }
 
 function loadPromptDefinitions(deps: RegisterMcpPromptsDeps): PromptTemplateDefinition[] {
-  const definitions = deps.loadPrompts
+  const builtIns = deps.loadPrompts
     ? [...deps.loadPrompts()]
     : loadPromptDirectory(deps.promptDir ?? DEFAULT_PROMPT_DIR);
+  const definitions = deps.enableEditableSkills
+    ? mergeBuiltInAndSkillPrompts(builtIns, deps.loadSkillPrompts?.() ?? [])
+    : builtIns;
   return definitions.sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -117,6 +123,10 @@ export function registerMcpPrompts(
         argsSchema: promptArgsSchema(prompt.arguments, deps),
       },
       (args): GetPromptResult => {
+        if (deps.enableEditableSkills && prompt.sourcePath.startsWith('tenant-skills:')) {
+          return renderSkillPrompt(prompt, args as Record<string, unknown>);
+        }
+
         const rendered = renderPromptTemplate(
           prompt.template,
           args as Record<string, unknown>,
@@ -143,7 +153,7 @@ export function registerMcpPrompts(
   }
 
   server.server.registerCapabilities({
-    prompts: { listChanged: false },
+    prompts: { listChanged: deps.enableEditableSkills === true },
   });
 
   return { registered: prompts.length };

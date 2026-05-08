@@ -30,6 +30,7 @@ export type AgenticEvent =
   | (AgenticEventBase & { type: 'tools/list_changed' })
   | (AgenticEventBase & { type: 'resources/list_changed' })
   | (AgenticEventBase & { type: 'resources/updated'; uris: string[] })
+  | (AgenticEventBase & { type: 'prompts/list_changed' })
   | (AgenticEventBase & { type: 'logging/message'; message: McpLogMessage });
 
 type PublishableAgenticEvent = AgenticEvent extends infer Event
@@ -52,6 +53,14 @@ export async function publishResourcesListChanged(
   reason?: string
 ): Promise<void> {
   await publishAgenticEvent(redis, { type: 'resources/list_changed', tenantId, reason });
+}
+
+export async function publishPromptsListChanged(
+  redis: RedisFacade,
+  tenantId: string,
+  reason?: string
+): Promise<void> {
+  await publishAgenticEvent(redis, { type: 'prompts/list_changed', tenantId, reason });
 }
 
 export async function publishResourceUpdated(
