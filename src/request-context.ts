@@ -81,7 +81,16 @@ export interface RequestContext {
   capabilityProfile?: ClientCapabilityProfile;
 }
 
-export const requestContext = new AsyncLocalStorage<RequestContext>();
+const REQUEST_CONTEXT_KEY = Symbol.for('ms-365-mcp-server.requestContext');
+
+type RequestContextGlobal = typeof globalThis & {
+  [REQUEST_CONTEXT_KEY]?: AsyncLocalStorage<RequestContext>;
+};
+
+const requestContextGlobal = globalThis as RequestContextGlobal;
+export const requestContext =
+  requestContextGlobal[REQUEST_CONTEXT_KEY] ?? new AsyncLocalStorage<RequestContext>();
+requestContextGlobal[REQUEST_CONTEXT_KEY] = requestContext;
 
 export function getRequestTokens(): RequestContext | undefined {
   return requestContext.getStore();

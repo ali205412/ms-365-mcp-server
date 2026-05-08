@@ -67,8 +67,10 @@ function textOf(result: Awaited<ReturnType<typeof readMcpResource>>): string {
   return result.contents[0].text;
 }
 
+type RequestHandler = (request: unknown, extra: unknown) => Promise<unknown>;
+
 async function invokeResourcesList(server: McpServer): Promise<{ resources: Array<{ uri: string; mimeType?: string }> }> {
-  const handler = (server.server as unknown as { _requestHandlers: Map<string, Function> })._requestHandlers.get(
+  const handler = (server.server as unknown as { _requestHandlers: Map<string, RequestHandler> })._requestHandlers.get(
     'resources/list'
   );
   if (!handler) throw new Error('resources/list missing');
@@ -78,7 +80,7 @@ async function invokeResourcesList(server: McpServer): Promise<{ resources: Arra
 async function invokeResourceTemplatesList(
   server: McpServer
 ): Promise<{ resourceTemplates: Array<{ uriTemplate: string; mimeType?: string }> }> {
-  const handler = (server.server as unknown as { _requestHandlers: Map<string, Function> })._requestHandlers.get(
+  const handler = (server.server as unknown as { _requestHandlers: Map<string, RequestHandler> })._requestHandlers.get(
     'resources/templates/list'
   );
   if (!handler) throw new Error('resources/templates/list missing');

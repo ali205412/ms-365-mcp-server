@@ -10,6 +10,7 @@ import { registerGraphTools, registerDiscoveryTools } from './graph-tools.js';
 import { registerMemoryTools } from './lib/memory/tools.js';
 import { registerMcpResources } from './lib/mcp-resources/register.js';
 import { registerMcpPrompts, type RegisterMcpPromptsDeps } from './lib/mcp-prompts/register.js';
+import { registerSkillTools } from './lib/mcp-skills/tools.js';
 import { registerMcpCompletions } from './lib/mcp-completions/register.js';
 import { registerMcpLogging } from './lib/mcp-logging/register.js';
 import { registerConnectorDiagnosticsTool } from './lib/mcp-capabilities/diagnostics.js';
@@ -1059,6 +1060,12 @@ class MicrosoftGraphServer {
         authManager: this.authManager,
         readOnly: this.options.readOnly,
         orgMode: this.options.orgMode,
+      });
+      registerSkillTools(server, {
+        redis: getRedis(),
+        readOnly: this.options.readOnly,
+        orgMode: this.options.orgMode,
+        loadBuiltInPrompts: this.promptDeps?.loadPrompts,
       });
       registerMcpResources(server, {
         tenant:

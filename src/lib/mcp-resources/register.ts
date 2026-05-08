@@ -4,6 +4,7 @@ import { JSON_MIME_TYPE, readMcpResource, type ReadMcpResourceDeps } from './rea
 import { registerResourceSubscriptionHandlers } from '../mcp-notifications/register-handlers.js';
 import type { RedisResourceSubscriptionStore } from '../mcp-notifications/resource-subscriptions.js';
 import { completeAlias } from '../mcp-completions/handlers.js';
+import { isDiscoverySurface } from '../tenant-surface/surface.js';
 
 export interface RegisterMcpResourcesDeps extends ReadMcpResourceDeps {
   resourceSubscriptions?: RedisResourceSubscriptionStore;
@@ -73,6 +74,30 @@ const TENANT_RESOURCE_PATHS = [
   'facts.json',
 ] as const;
 
+const SKILL_RESOURCE_TEMPLATES = [
+  {
+    name: 'tenant-skill-markdown-template',
+    uriTemplate: 'm365://tenant/{tenantId}/skills/{name}.md',
+    title: 'Tenant Skill Markdown Template',
+    description: 'Parameterized markdown view of an editable tenant skill.',
+    mimeType: 'text/markdown',
+  },
+  {
+    name: 'tenant-skill-schema-template',
+    uriTemplate: 'm365://tenant/{tenantId}/skills/{name}.schema.json',
+    title: 'Tenant Skill Schema Template',
+    description: 'Parameterized JSON schema view of an editable tenant skill.',
+    mimeType: JSON_MIME_TYPE,
+  },
+  {
+    name: 'tenant-skill-pack-template',
+    uriTemplate: 'm365://tenant/{tenantId}/skill-packs/{packName}.json',
+    title: 'Tenant Skill Pack Template',
+    description: 'Parameterized JSON skill pack export resource.',
+    mimeType: JSON_MIME_TYPE,
+  },
+] as const;
+
 function staticResourceDefinitions(): ResourceDefinition[] {
   return [
     ...STATIC_CATALOG_RESOURCES.map((resource) => ({
@@ -93,6 +118,18 @@ function tenantResourceDefinitions(tenantId: string): ResourceDefinition[] {
   }));
 }
 
+function skillResourceDefinitions(tenantId: string): ResourceDefinition[] {
+  return [
+    {
+      uri: `m365://tenant/${tenantId}/skills/index.json`,
+      name: 'tenant-skills-index',
+      title: 'Tenant Skills Index',
+      description: 'Read-only JSON index of editable skills visible to the caller tenant.',
+      mimeType: JSON_MIME_TYPE,
+    },
+  ];
+}
+
 function registerStaticResource(
   server: McpServer,
   resource: ResourceDefinition,
@@ -108,6 +145,21 @@ function registerStaticResource(
     },
     (uri) => readMcpResource(uri.toString(), deps)
   );
+}
+
+function registerSkillTemplates(server: McpServer, deps: RegisterMcpResourcesDeps): void {
+  for (const template of SKILL_RESOURCE_TEMPLATES) {
+    server.registerResource(
+      template.name,
+      new ResourceTemplate(template.uriTemplate, { list: undefined }),
+      {
+        title: template.title,
+        description: template.description,
+        mimeType: template.mimeType,
+      },
+      (uri) => readMcpResource(uri.toString(), deps)
+    );
+  }
 }
 
 function registerTemplates(server: McpServer, deps: RegisterMcpResourcesDeps): void {
@@ -165,5 +217,14 @@ export function registerMcpResources(server: McpServer, deps: RegisterMcpResourc
     registerStaticResource(server, resource, deps);
   }
 
+  if (isDiscoverySurface(deps.tenant?.preset_version)) {
+    for (const resource of skillResourceDefinitions(tenantId)) {
+      registerStaticResource(server, resource, deps);
+    }
+  }
+
   registerTemplates(server, deps);
+  if (isDiscoverySurface(deps.tenant?.preset_version)) {
+    registerSkillTemplates(server, deps);
+  }
 }

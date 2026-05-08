@@ -25,6 +25,14 @@ export interface TenantSkillRow {
   updated_at: Date | string;
 }
 
+export interface SkillRecord extends SkillInput {
+  readonly id?: string;
+  readonly tenantId?: string;
+  readonly ownerSubject?: string | null;
+  readonly createdAt?: string;
+  readonly updatedAt?: string;
+}
+
 export interface VisibleSkillWhereClause {
   readonly clause: string;
   readonly params: readonly unknown[];
@@ -35,8 +43,12 @@ function parseJsonArray(value: unknown): unknown[] {
   return z.array(z.unknown()).parse(value);
 }
 
-function rowToSkillInput(row: TenantSkillRow): SkillInput {
-  return SkillInputZod.parse({
+function toIsoString(value: Date | string): string {
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function rowToSkillInput(row: TenantSkillRow): SkillRecord {
+  const skill = SkillInputZod.parse({
     name: row.name,
     title: row.title,
     description: row.description,
@@ -50,6 +62,14 @@ function rowToSkillInput(row: TenantSkillRow): SkillInput {
     version: row.version,
     enabled: row.enabled,
   });
+  return {
+    ...skill,
+    id: row.id,
+    tenantId: row.tenant_id,
+    ownerSubject: row.owner_subject,
+    createdAt: toIsoString(row.created_at),
+    updatedAt: toIsoString(row.updated_at),
+  };
 }
 
 export function visibleSkillWhereClause(
@@ -69,15 +89,18 @@ export function visibleSkillWhereClause(
   };
 }
 
-export function skillRowToPrompt(row: TenantSkillRow): PromptTemplateDefinition {
-  const skill = rowToSkillInput(row);
+export function skillInputToPrompt(tenantId: string, skill: SkillInput): PromptTemplateDefinition {
   return {
-    sourcePath: `tenant-skills:${row.tenant_id}/${skill.name}`,
+    sourcePath: `tenant-skills:${tenantId}/${skill.name}`,
     name: skill.name,
     description: skill.description,
     arguments: skill.arguments,
     template: skill.body,
   };
+}
+
+export function skillRowToPrompt(row: TenantSkillRow): PromptTemplateDefinition {
+  return skillInputToPrompt(row.tenant_id, rowToSkillInput(row));
 }
 
 export async function listVisibleSkills(
@@ -97,11 +120,59 @@ export async function listVisibleSkills(
   return result.rows.map(skillRowToPrompt);
 }
 
-export async function getVisibleSkill(
+export async function listTenantSkillRecords(tenantId: string): Promise<SkillRecord[]> {
+  const tid = TenantIdZod.parse(tenantId);
+  const result = await getPool().query<TenantSkillRow>(
+    `SELECT id, tenant_id, owner_subject, name, title, description, frontmatter, body,
+            arguments, visibility, source, source_skill_name, version, enabled, created_at, updated_at
+     FROM tenant_skills
+     WHERE tenant_id = $1
+     ORDER BY name ASC`,
+    [tid]
+  );
+  return result.rows.map(rowToSkillInput);
+}
+
+export async function listVisibleSkillRecords(
+  tenantId: string,
+  ownerSubject?: string
+): Promise<SkillRecord[]> {
+  const tid = TenantIdZod.parse(tenantId);
+  const visible = visibleSkillWhereClause(1, ownerSubject);
+  const result = await getPool().query<TenantSkillRow>(
+    `SELECT id, tenant_id, owner_subject, name, title, description, frontmatter, body,
+            arguments, visibility, source, source_skill_name, version, enabled, created_at, updated_at
+     FROM tenant_skills
+     ${visible.clause}
+     ORDER BY name ASC`,
+    [tid, ...visible.params]
+  );
+  return result.rows.map(rowToSkillInput);
+}
+
+export async function getTenantSkillRecord(
+  tenantId: string,
+  name: string
+): Promise<SkillRecord | null> {
+  const tid = TenantIdZod.parse(tenantId);
+  const parsedName = SkillNameZod.parse(name);
+  const result = await getPool().query<TenantSkillRow>(
+    `SELECT id, tenant_id, owner_subject, name, title, description, frontmatter, body,
+            arguments, visibility, source, source_skill_name, version, enabled, created_at, updated_at
+     FROM tenant_skills
+     WHERE tenant_id = $1 AND name = $2
+     ORDER BY owner_subject NULLS FIRST
+     LIMIT 1`,
+    [tid, parsedName]
+  );
+  return result.rows[0] ? rowToSkillInput(result.rows[0]) : null;
+}
+
+export async function getVisibleSkillRecord(
   tenantId: string,
   name: string,
   ownerSubject?: string
-): Promise<PromptTemplateDefinition | null> {
+): Promise<SkillRecord | null> {
   const tid = TenantIdZod.parse(tenantId);
   const parsedName = SkillNameZod.parse(name);
   const visible = visibleSkillWhereClause(1, ownerSubject);
@@ -113,7 +184,16 @@ export async function getVisibleSkill(
      LIMIT 1`,
     [tid, ...visible.params, parsedName]
   );
-  return result.rows[0] ? skillRowToPrompt(result.rows[0]) : null;
+  return result.rows[0] ? rowToSkillInput(result.rows[0]) : null;
+}
+
+export async function getVisibleSkill(
+  tenantId: string,
+  name: string,
+  ownerSubject?: string
+): Promise<PromptTemplateDefinition | null> {
+  const skill = await getVisibleSkillRecord(tenantId, name, ownerSubject);
+  return skill ? skillInputToPrompt(tenantId, skill) : null;
 }
 
 export function forkBuiltinSkillInput(
@@ -134,4 +214,88 @@ export function forkBuiltinSkillInput(
     enabled: true,
     ...(ownerSubject ? { ownerSubject } : {}),
   };
+}
+
+export async function saveTenantSkill(
+  tenantId: string,
+  input: SkillInput & { ownerSubject?: string | null }
+): Promise<SkillRecord> {
+  const tid = TenantIdZod.parse(tenantId);
+  const { ownerSubject: rawOwnerSubject, ...rawSkill } = input;
+  const ownerSubject = OwnerSubjectZod.parse(rawOwnerSubject ?? undefined) ?? null;
+  const skill = SkillInputZod.parse(rawSkill);
+  const ownerWhere = ownerSubject === null ? 'owner_subject IS NULL' : 'owner_subject = $2';
+  const existing = await getPool().query<{ id: string; version: number }>(
+    `SELECT id, version
+     FROM tenant_skills
+     WHERE tenant_id = $1 AND ${ownerWhere} AND name = $3
+     LIMIT 1`,
+    [tid, ownerSubject, skill.name]
+  );
+
+  const params = [
+    tid,
+    ownerSubject,
+    skill.name,
+    skill.title,
+    skill.description,
+    JSON.stringify(skill.frontmatter),
+    skill.body,
+    JSON.stringify(skill.arguments),
+    skill.visibility,
+    skill.source,
+    skill.sourceSkillName ?? null,
+    skill.enabled,
+  ];
+
+  const result = existing.rows[0]
+    ? await getPool().query<TenantSkillRow>(
+        `UPDATE tenant_skills
+         SET title = $4,
+             description = $5,
+             frontmatter = $6::jsonb,
+             body = $7,
+             arguments = $8::jsonb,
+             visibility = $9,
+             source = $10,
+             source_skill_name = $11,
+             enabled = $12,
+             version = version + 1,
+             updated_at = NOW()
+         WHERE tenant_id = $1 AND ${ownerWhere} AND name = $3
+         RETURNING id, tenant_id, owner_subject, name, title, description, frontmatter, body,
+                   arguments, visibility, source, source_skill_name, version, enabled, created_at, updated_at`,
+        params
+      )
+    : await getPool().query<TenantSkillRow>(
+        `INSERT INTO tenant_skills (
+           tenant_id, owner_subject, name, title, description, frontmatter, body,
+           arguments, visibility, source, source_skill_name, enabled
+         )
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb, $9, $10, $11, $12)
+         RETURNING id, tenant_id, owner_subject, name, title, description, frontmatter, body,
+                   arguments, visibility, source, source_skill_name, version, enabled, created_at, updated_at`,
+        params
+      );
+
+  return rowToSkillInput(result.rows[0]);
+}
+
+export async function disableTenantSkill(
+  tenantId: string,
+  name: string,
+  ownerSubject?: string
+): Promise<{ deleted: boolean }> {
+  const tid = TenantIdZod.parse(tenantId);
+  const parsedName = SkillNameZod.parse(name);
+  const owner = OwnerSubjectZod.parse(ownerSubject) ?? null;
+  const ownerWhere = owner === null ? 'owner_subject IS NULL' : 'owner_subject = $2';
+  const result = await getPool().query<{ id: string }>(
+    `UPDATE tenant_skills
+     SET enabled = false, updated_at = NOW()
+     WHERE tenant_id = $1 AND ${ownerWhere} AND name = $3
+     RETURNING id`,
+    [tid, owner, parsedName]
+  );
+  return { deleted: result.rows.length > 0 };
 }

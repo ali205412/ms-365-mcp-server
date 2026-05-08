@@ -1,5 +1,7 @@
 import { WORKLOAD_GUIDE_SLUGS, type WorkloadGuideSlug } from './catalog.js';
 
+import type { SkillResourceDescriptor } from '../mcp-skills/resources.js';
+
 export type TenantResourceView =
   | 'enabled-tools'
   | 'scopes'
@@ -46,10 +48,18 @@ export interface TenantMcpResourceUri {
     | 'facts.json';
 }
 
+export interface SkillMcpResourceUri {
+  ok: true;
+  kind: 'skill';
+  tenantId: string;
+  descriptor: SkillResourceDescriptor;
+}
+
 export type ValidMcpResourceUri =
   | CatalogMcpResourceUri
   | EndpointMcpResourceUri
-  | TenantMcpResourceUri;
+  | TenantMcpResourceUri
+  | SkillMcpResourceUri;
 
 export type ParsedMcpResourceUri = ValidMcpResourceUri | InvalidMcpResourceUri;
 
@@ -127,6 +137,47 @@ function parseEndpointResource(pathname: string): ParsedMcpResourceUri {
   return { ok: true, kind: 'endpoint', alias };
 }
 
+function parseSkillTenantResource(
+  tenantId: string,
+  resourcePath: string
+): SkillMcpResourceUri | InvalidMcpResourceUri | null {
+  if (resourcePath === 'skills/index.json') {
+    return { ok: true, kind: 'skill', tenantId, descriptor: { view: 'skills/index' } };
+  }
+
+  const markdownMatch = /^skills\/([^/]+)\.md$/.exec(resourcePath);
+  if (markdownMatch) {
+    return {
+      ok: true,
+      kind: 'skill',
+      tenantId,
+      descriptor: { view: 'skills/markdown', name: markdownMatch[1] },
+    };
+  }
+
+  const schemaMatch = /^skills\/([^/]+)\.schema\.json$/.exec(resourcePath);
+  if (schemaMatch) {
+    return {
+      ok: true,
+      kind: 'skill',
+      tenantId,
+      descriptor: { view: 'skills/schema', name: schemaMatch[1] },
+    };
+  }
+
+  const packMatch = /^skill-packs\/([^/]+)\.json$/.exec(resourcePath);
+  if (packMatch) {
+    return {
+      ok: true,
+      kind: 'skill',
+      tenantId,
+      descriptor: { view: 'skill-pack', packName: packMatch[1] },
+    };
+  }
+
+  return null;
+}
+
 function parseTenantResource(pathname: string): ParsedMcpResourceUri {
   const segments = pathname.split('/');
   const tenantId = segments.shift();
@@ -135,6 +186,11 @@ function parseTenantResource(pathname: string): ParsedMcpResourceUri {
   }
 
   const resourcePath = segments.join('/');
+  const skillResource = parseSkillTenantResource(tenantId, resourcePath);
+  if (skillResource) {
+    return skillResource;
+  }
+
   const view = TENANT_VIEW_BY_PATH.get(resourcePath);
   if (!view) {
     return invalid('invalid_resource_uri', 'Unsupported tenant resource path.');
@@ -161,8 +217,8 @@ export function parseMcpResourceUri(raw: string): ParsedMcpResourceUri {
     return invalid('invalid_resource_uri', 'Resource URI is not a valid URL.');
   }
 
-  if (url.protocol !== 'mcp:') {
-    return invalid('invalid_scheme', 'Resource URI must use the mcp: scheme.');
+  if (url.protocol !== 'mcp:' && url.protocol !== 'm365:') {
+    return invalid('invalid_scheme', 'Resource URI must use the mcp: or m365: scheme.');
   }
 
   if (!hasNoUrlDecorators(url)) {
@@ -190,7 +246,7 @@ export function assertTenantResourceOwner(
   parsed: ParsedMcpResourceUri,
   callerTenantId: string | undefined
 ): ParsedMcpResourceUri {
-  if (!parsed.ok || parsed.kind !== 'tenant') {
+  if (!parsed.ok || (parsed.kind !== 'tenant' && parsed.kind !== 'skill')) {
     return parsed;
   }
 

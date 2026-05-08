@@ -9,6 +9,7 @@ import { listBookmarks } from '../memory/bookmarks.js';
 import { recallFacts } from '../memory/facts.js';
 import { listRecipes } from '../memory/recipes.js';
 import { getPool } from '../postgres.js';
+import { readSkillResource } from '../mcp-skills/resources.js';
 import { describeToolSchema } from '../tool-schema-describer.js';
 import {
   MARKDOWN_MIME_TYPE,
@@ -20,6 +21,7 @@ import {
   parseMcpResourceUri,
   type InvalidMcpResourceUri,
   type ParsedMcpResourceUri,
+  type SkillMcpResourceUri,
   type TenantMcpResourceUri,
 } from './uri.js';
 
@@ -255,6 +257,21 @@ async function readAuditRecent(tenantId: string): Promise<Record<string, unknown
   return result.rows.map(toAuditJson);
 }
 
+async function readSkillTenantResource(
+  parsed: SkillMcpResourceUri,
+  deps: ReadMcpResourceDeps
+): Promise<ReadResourceResult> {
+  const owned = assertTenantResourceOwner(parsed, getRequestTenant().id ?? deps.tenant?.id);
+  assertParsed(owned);
+  if (owned.kind !== 'skill') {
+    throw new McpError(ErrorCode.InvalidParams, 'Resource is not a skill URI.', {
+      code: 'invalid_resource_uri',
+    });
+  }
+
+  return readSkillResource(owned.tenantId, owned.descriptor);
+}
+
 async function readTenantResource(
   uri: string,
   parsed: TenantMcpResourceUri,
@@ -298,5 +315,7 @@ export async function readMcpResource(
       return readEndpointSchemaResource(uri, parsed.alias, deps);
     case 'tenant':
       return readTenantResource(uri, parsed, deps);
+    case 'skill':
+      return readSkillTenantResource(parsed, deps);
   }
 }
