@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: null
-last_updated: "2026-05-08T18:30:00.000Z"
-last_activity: 2026-05-08 -- Phase 08 Plan 08-06 completed
+last_updated: "2026-05-08T20:30:00.000Z"
+last_activity: 2026-05-08 -- Phase 08 Plan 08-08 completed
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 86
-  completed_plans: 78
-  percent: 90
+  completed_plans: 79
+  percent: 91
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-04-18)
 ## Current Position
 
 Phase: 08 (maximal-mcp-claude-connector-surface) — EXECUTING
-Plan: 6 of 14 completed; next 08-07
+Plan: 7 of 14 completed; next 08-07
 Status: Executing Phase 08
-Last activity: 2026-05-08 -- Phase 08 Plan 08-06 completed
+Last activity: 2026-05-08 -- Phase 08 Plan 08-08 completed
 
 Progress: [█████████░] 89% (8/9 phases)
 
@@ -49,7 +49,7 @@ Progress: [█████████░] 89% (8/9 phases)
 
 **Recent Trend:**
 
-- Last 5 plans: 08-02, 08-03, 08-04, 08-05, 08-06
+- Last 5 plans: 08-03, 08-04, 08-05, 08-06, 08-08
 - Trend: complete
 
 *Updated after each plan completion*
@@ -70,6 +70,7 @@ Recent decisions affecting current work:
 - [Phase 07]: Endpoint schema resources validate aliases against discoveryCatalogSet, not the visible discovery-v1 meta-tool set. — Allows discovery tenants to inspect generated Graph/product schemas without exposing them in tools/list.
 - [Phase 07]: Tenant resources are registered as concrete caller-tenant URIs; templates are limited to workload and endpoint schema families. — Prevents cross-tenant template enumeration while keeping resources/list discoverable for the caller tenant.
 - [Phase 08]: Editable skills are now exposed through discovery-mode skill tools and canonical `m365://tenant/{tenantId}/skills/...` resources with `mcp://` compatibility aliases; published saves validate tool/memory/resource references before persistence.
+- [Phase 08]: MCP Apps foundation registers discovery-gated `ui://m365/*.html` dashboard resources with strict CSP/sandbox metadata and exact text/structured/resource fallback for non-Apps clients.
 
 ### Roadmap Evolution
 

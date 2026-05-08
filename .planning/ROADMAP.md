@@ -207,7 +207,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 5. Graph Coverage Expansion & Per-Tenant Tool Selection | 0/8 | Not started | - |
 | 6. Operational Observability & Rate Limiting | 9/9 | Complete    | 2026-04-22 |
 | 7. Agentic Tool Surface + Per-Tenant Memory | 12/12 | Complete    | 2026-04-25 |
-| 8. Maximal MCP + Claude/Cowork Connector Surface | 0/14 | Scoped | - |
+| 8. Maximal MCP + Claude/Cowork Connector Surface | 7/14 | Executing | - |
 
 ### Phase 7: agentic-tool-surface: discovery default + MCP Resources/Prompts/Notifications/Logging/Completions + per-tenant bookmarks/recipes/facts memory + admin API + opt-in migration. Skips Tasks/Elicitation/Sampling/Roots (no claude.ai client). Full SPEC.md / PLAN.md to be filled in /gsd-plan-phase.
 
@@ -245,7 +245,7 @@ Plans:
 - [x] 08-05: Editable skill schema and prompt integration — migrations, built-in + DB prompt registry, `prompts.listChanged=true`
 - [x] 08-06: Skill tools and skill resources — list/get/save/delete/fork/render/import/export/validate plus `m365://tenant/.../skills` resources
 - [ ] 08-07: Skill packs and memory convergence — recipes/bookmarks/facts integration, pack import/export, built-in packs, isolation tests
-- [ ] 08-08: MCP Apps foundation — `ui://` resource serving, CSP/sandbox, app asset pipeline, app fallback contract
+- [x] 08-08: MCP Apps foundation — `ui://` resource serving, CSP/sandbox, app asset pipeline, app fallback contract
 - [ ] 08-09: App dashboards — inbox, calendar, Teams, file search, permissions, diagnostics, skill editor views
 - [ ] 08-10: Rich resources and resource templates — `m365://` canonical scheme, Graph-backed read-only resources, resource links
 - [ ] 08-11: Subscriptions and notifications expansion — prompts/list_changed, Graph webhook/delta resource updates, coalescing
