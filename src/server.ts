@@ -12,6 +12,8 @@ import { registerMcpResources } from './lib/mcp-resources/register.js';
 import { registerMcpPrompts, type RegisterMcpPromptsDeps } from './lib/mcp-prompts/register.js';
 import { registerMcpCompletions } from './lib/mcp-completions/register.js';
 import { registerMcpLogging } from './lib/mcp-logging/register.js';
+import { registerConnectorDiagnosticsTool } from './lib/mcp-capabilities/diagnostics.js';
+import { buildEffectiveCapabilityProfile } from './lib/mcp-capabilities/profile.js';
 import {
   mcpSessionRegistry,
   subscribeToAgenticEvents,
@@ -1075,6 +1077,20 @@ class MicrosoftGraphServer {
       registerMcpPrompts(server, { ...(this.promptDeps ?? {}), authManager: this.authManager });
       registerMcpCompletions(server);
       registerMcpLogging(server);
+      registerConnectorDiagnosticsTool(server, {
+        server: { name: 'Microsoft365MCP', version: this.version },
+        tenant: { id: tenant?.id ?? 'single-tenant' },
+        surface: 'discovery',
+        transport: this.options.http ? 'streamable-http' : 'stdio',
+        expectedDisplayName: 'Microsoft 365 MCP Gateway',
+        metadataUrls: tenant ? { mcp: `/t/${tenant.id}/mcp` } : {},
+        profile: buildEffectiveCapabilityProfile({
+          transport: this.options.http ? 'streamable-http' : 'stdio',
+          surface: 'discovery',
+          tenantPolicy: { phase8Enabled: true },
+          advertisedCapabilities: { tools: {} },
+        }),
+      });
     } else {
       registerGraphTools(
         server,

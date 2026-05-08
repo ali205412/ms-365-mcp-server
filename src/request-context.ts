@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import type { ClientCapabilityProfile } from './lib/mcp-capabilities/profile.js';
 import type { TenantRow } from './lib/tenant/tenant-row.js';
 
 /**
@@ -72,6 +73,12 @@ export interface RequestContext {
    * attribute keeps the full alias for high-fidelity trace queries.
    */
   toolAlias?: string;
+  /**
+   * Phase 8 session/request capability profile. Ephemeral only: seeded from
+   * Streamable HTTP initialize/session data or stdio defaults and never
+   * persisted to Postgres.
+   */
+  capabilityProfile?: ClientCapabilityProfile;
 }
 
 export const requestContext = new AsyncLocalStorage<RequestContext>();

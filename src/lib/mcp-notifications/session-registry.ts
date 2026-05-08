@@ -1,6 +1,7 @@
 import type { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { ResourceUpdatedNotification } from '@modelcontextprotocol/sdk/types.js';
 import logger from '../../logger.js';
+import type { ClientCapabilityProfile } from '../mcp-capabilities/profile.js';
 import { AGENTIC_EVENTS_CHANNEL, type AgenticEvent, type McpLogMessage } from './events.js';
 import {
   defaultResourceNotificationCoalescer,
@@ -24,6 +25,7 @@ export interface RegisteredMcpSession {
   server: McpNotificationServer;
   transport: StreamableHTTPServerTransport;
   surface: McpNotificationSurface;
+  capabilityProfile?: ClientCapabilityProfile;
 }
 
 export type RegisterSessionInput = RegisteredMcpSession;
