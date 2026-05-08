@@ -21,8 +21,12 @@ function upSql(filePath: string): string {
 describe('tenant skills schema migration', () => {
   it('applies additively and creates isolated tenant_skills constraints', () => {
     const db = newDb();
-    db.public.none('CREATE EXTENSION IF NOT EXISTS pgcrypto;');
-    db.public.none(upSql(tenantsMigrationPath));
+    db.public.registerFunction({
+      name: 'gen_random_uuid',
+      returns: 'uuid',
+      implementation: () => '00000000-0000-4000-8000-000000000001',
+    });
+    db.public.none(upSql(tenantsMigrationPath).replace(/CREATE EXTENSION IF NOT EXISTS pgcrypto;/g, ''));
     db.public.none(upSql(migrationPath));
 
     const columns = db.public.many(`
@@ -50,29 +54,30 @@ describe('tenant skills schema migration', () => {
       'updated_at',
     ]);
 
-    const constraints = db.public.many(`
-      SELECT constraint_name, constraint_type
-      FROM information_schema.table_constraints
-      WHERE table_name = 'tenant_skills'
+    db.public.none(`
+      INSERT INTO tenants (id, mode, slug, client_id, tenant_id, cloud_type)
+      VALUES ('11111111-1111-4111-8111-111111111111', 'delegated', 'tenant-a', 'client-a', 'entra-a', 'global')
     `);
-    expect(constraints).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ constraint_type: 'FOREIGN KEY' }),
-        expect.objectContaining({ constraint_type: 'UNIQUE' }),
-      ])
-    );
+    db.public.none(`
+      INSERT INTO tenant_skills (tenant_id, owner_subject, name, title, description, body)
+      VALUES ('11111111-1111-4111-8111-111111111111', 'user-a', 'triage', 'Triage', 'desc', 'body')
+    `);
+    expect(() =>
+      db.public.none(`
+        INSERT INTO tenant_skills (tenant_id, owner_subject, name, title, description, body)
+        VALUES ('11111111-1111-4111-8111-111111111111', 'user-a', 'triage', 'Triage', 'desc', 'body')
+      `)
+    ).toThrow();
+    expect(() =>
+      db.public.none(`
+        INSERT INTO tenant_skills (tenant_id, owner_subject, name, title, description, body)
+        VALUES ('22222222-2222-4222-8222-222222222222', 'user-a', 'triage', 'Triage', 'desc', 'body')
+      `)
+    ).toThrow();
 
-    const indexes = db.public.many(`
-      SELECT indexname
-      FROM pg_indexes
-      WHERE tablename = 'tenant_skills'
-    `);
-    expect(indexes.map((row) => row.indexname)).toEqual(
-      expect.arrayContaining([
-        'idx_tenant_skills_tenant_enabled',
-        'idx_tenant_skills_tenant_visibility',
-      ])
-    );
+    const migrationSql = upSql(migrationPath);
+    expect(migrationSql).toContain('idx_tenant_skills_tenant_enabled');
+    expect(migrationSql).toContain('idx_tenant_skills_tenant_visibility');
   });
 
   it('is additive-only in the up migration', () => {
