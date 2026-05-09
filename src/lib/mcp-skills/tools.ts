@@ -27,6 +27,7 @@ import {
 } from './store.js';
 import { getBuiltInSkillPack } from './builtin-packs.js';
 import { SkillPackConflictStrategyZod, exportSkillPack, importSkillPack } from './packs.js';
+import { SkillPackRootFileZod, readSkillPackFromRoot, writeSkillPackToRoot } from './roots.js';
 import { validateSkillReferences } from './validation.js';
 import type { PromptTemplateDefinition } from '../mcp-prompts/frontmatter.js';
 import type { RedisClient } from '../redis.js';
@@ -68,14 +69,16 @@ const ImportSkillPackInputZod = z
   .object({
     pack: z.unknown().optional(),
     builtInPackId: z.string().trim().min(1).max(64).optional(),
+    rootFile: SkillPackRootFileZod.optional(),
     conflictStrategy: SkillPackConflictStrategyZod.default('skip'),
     ownerSubject: z.string().trim().min(1).max(512).optional(),
   })
   .strict();
 const ImportSkillPackZod = ImportSkillPackInputZod.refine(
-  (value) => value.pack !== undefined || value.builtInPackId !== undefined,
+  (value) =>
+    value.pack !== undefined || value.builtInPackId !== undefined || value.rootFile !== undefined,
   {
-    message: 'pack or builtInPackId is required',
+    message: 'pack, builtInPackId, or rootFile is required',
   }
 );
 const ExportSkillPackZod = z
@@ -84,6 +87,7 @@ const ExportSkillPackZod = z
     packName: z.string().trim().min(1).max(64).optional(),
     ownerSubject: z.string().trim().min(1).max(512).optional(),
     includeMemory: z.boolean().default(true),
+    rootFile: SkillPackRootFileZod.optional(),
   })
   .strict();
 
@@ -390,7 +394,9 @@ export function registerSkillTools(server: McpServer, deps: RegisterSkillToolsDe
         );
       const pack = parsed.data.builtInPackId
         ? getBuiltInSkillPack(parsed.data.builtInPackId)
-        : parsed.data.pack;
+        : parsed.data.rootFile
+          ? await readSkillPackFromRoot(parsed.data.rootFile)
+          : parsed.data.pack;
       if (!pack) return result('import-skill-pack', { error: 'skill_pack_not_found' }, true);
       const imported = await importSkillPack(tenant.id, pack, {
         conflictStrategy: parsed.data.conflictStrategy,
@@ -417,8 +423,10 @@ export function registerSkillTools(server: McpServer, deps: RegisterSkillToolsDe
           { error: 'invalid_skill_export', details: parsed.error.issues },
           true
         );
-      const pack = await exportSkillPack(tenant.id, parsed.data);
-      return result('export-skill-pack', { pack });
+      const { rootFile, ...exportOptions } = parsed.data;
+      const pack = await exportSkillPack(tenant.id, exportOptions);
+      const rootWrite = rootFile ? await writeSkillPackToRoot(rootFile, pack) : undefined;
+      return result('export-skill-pack', { pack, ...(rootWrite ? { rootWrite } : {}) });
     }
   );
 
