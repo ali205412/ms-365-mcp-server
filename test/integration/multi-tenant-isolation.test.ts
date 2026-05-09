@@ -115,13 +115,17 @@ function normalizeTenantRow(row: TenantRow): TenantRow {
   };
 }
 
-function createLoadTenantStub(pool: Pool): express.RequestHandler & { evict: (tenantId: string) => void } {
+function createLoadTenantStub(
+  pool: Pool
+): express.RequestHandler & { evict: (tenantId: string) => void } {
   const cache = new Map<string, TenantRow>();
   const middleware = (async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const tenantId = req.params.tenantId;
     let tenant = cache.get(tenantId);
     if (!tenant) {
-      const { rows } = await pool.query<TenantRow>('SELECT * FROM tenants WHERE id = $1', [tenantId]);
+      const { rows } = await pool.query<TenantRow>('SELECT * FROM tenants WHERE id = $1', [
+        tenantId,
+      ]);
       const row = rows[0];
       if (!row) {
         res.status(404).json({ error: 'tenant_not_found', tenantId });

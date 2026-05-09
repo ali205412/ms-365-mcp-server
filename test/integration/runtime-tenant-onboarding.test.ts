@@ -115,7 +115,9 @@ function normalizeTenantRow(row: TenantRow): TenantRow {
   };
 }
 
-function createLoadTenantStub(pool: Pool): express.RequestHandler & { evict: (tenantId: string) => void } {
+function createLoadTenantStub(
+  pool: Pool
+): express.RequestHandler & { evict: (tenantId: string) => void } {
   const cache = new Map<string, TenantRow>();
   const middleware = (async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const tenantId = req.params.tenantId;

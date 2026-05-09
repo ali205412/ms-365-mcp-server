@@ -14,7 +14,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const OAUTH_LINE_RANGES = [
   { file: 'src/lib/oauth/register-handler.ts', fn: 'createRegisterHandler', start: 7, end: 53 },
-  { file: 'src/server.ts', fn: 'createTokenHandler', start: 170, end: 361 },
+  { file: 'src/lib/oauth/token-handler.ts', fn: 'createTokenHandler', start: 27, end: 174 },
   { file: 'src/lib/oauth/tenant-handlers.ts', fn: 'createAuthorizeHandler', start: 39, end: 173 },
   {
     file: 'src/lib/oauth/tenant-handlers.ts',
@@ -22,10 +22,10 @@ const OAUTH_LINE_RANGES = [
     start: 212,
     end: 355,
   },
-  { file: 'src/server.ts', fn: 'wellKnownAuthServerTenant', start: 844, end: 851 },
-  { file: 'src/server.ts', fn: 'wellKnownProtectedResourceTenant', start: 853, end: 860 },
-  { file: 'src/server.ts', fn: 'wellKnownAuthServer', start: 1247, end: 1262 },
-  { file: 'src/server.ts', fn: 'wellKnownProtectedResource', start: 1265, end: 1279 },
+  { file: 'src/server.ts', fn: 'wellKnownAuthServerTenant', start: 620, end: 627 },
+  { file: 'src/server.ts', fn: 'wellKnownProtectedResourceTenant', start: 629, end: 636 },
+  { file: 'src/server.ts', fn: 'wellKnownAuthServer', start: 1025, end: 1040 },
+  { file: 'src/server.ts', fn: 'wellKnownProtectedResource', start: 1043, end: 1057 },
 ];
 
 const COVERAGE_THRESHOLD_PERCENT = Number.parseFloat(
@@ -112,7 +112,7 @@ export function main() {
     if (!fileKey) {
       console.error(`check-oauth-coverage: ${range.file} not found in coverage-final.json`);
       console.error(
-        'Ensure vitest.config.js coverage.include contains src/server.ts and src/lib/oauth/tenant-handlers.ts.'
+        'Ensure vitest.config.js coverage.include contains src/server.ts and src/lib/oauth/*.ts.'
       );
       return 2;
     }

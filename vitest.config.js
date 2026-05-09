@@ -141,6 +141,7 @@ export default defineConfig({
       include: [
         'src/server.ts',
         'src/lib/oauth/register-handler.ts',
+        'src/lib/oauth/token-handler.ts',
         'src/lib/oauth/tenant-handlers.ts',
       ],
       reporter: ['json', 'lcov', 'text'],
