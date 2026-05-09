@@ -2,8 +2,8 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
 
-const DEFAULT_BATCH_SIZE = 2;
-const DEFAULT_VITEST_NODE_OPTIONS = '--max-old-space-size=12288';
+const DEFAULT_BATCH_SIZE = 1;
+const DEFAULT_VITEST_NODE_OPTIONS = '--max-old-space-size=2048';
 const batchSize = Number.parseInt(
   process.env.MS365_MCP_TEST_BATCH_SIZE ?? String(DEFAULT_BATCH_SIZE),
   10

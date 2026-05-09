@@ -28,14 +28,11 @@ import { buildMcpServerInstructions } from './mcp-instructions.js';
 import GraphClient from './graph-client.js';
 import AuthManager, { buildScopesFromEndpoints } from './auth.js';
 import { MicrosoftOAuthProvider } from './oauth-provider.js';
-import {
-  exchangeCodeForToken,
-  refreshAccessToken,
-  verifyMicrosoftBearerToken,
-} from './lib/microsoft-auth.js';
+import { verifyMicrosoftBearerToken } from './lib/microsoft-auth.js';
 import type { CommandOptions } from './cli.ts';
 import { getSecrets, type AppSecrets } from './secrets.js';
 import { getCloudEndpoints } from './cloud-config.js';
+import { parseHttpOption } from './lib/http-option.js';
 import { requestContext, getRequestTokens, getRequestOwnerSubject } from './request-context.js';
 import { mountHealth, type ReadinessCheck } from './lib/health.js';
 import { registerShutdownHooks } from './lib/shutdown.js';
@@ -46,13 +43,15 @@ import { resolveTrustProxySetting } from './lib/trust-proxy.js';
 import { createRateLimitMiddleware } from './lib/rate-limit/middleware.js';
 import { createRegisterHandler } from './lib/oauth/register-handler.js';
 import { createAuthorizeHandler, createTenantTokenHandler } from './lib/oauth/tenant-handlers.js';
+import { createTokenHandler } from './lib/oauth/token-handler.js';
 export { createRegisterHandler } from './lib/oauth/register-handler.js';
 export { createAuthorizeHandler, createTenantTokenHandler } from './lib/oauth/tenant-handlers.js';
+export { createTokenHandler } from './lib/oauth/token-handler.js';
+export { parseHttpOption } from './lib/http-option.js';
 export type {
   AuthorizeHandlerConfig,
   TenantTokenHandlerConfig,
 } from './lib/oauth/tenant-handlers.js';
-import type { CloudType } from './cloud-config.js';
 import type { PkceStore } from './lib/pkce-store/pkce-store.js';
 import { MemoryPkceStore } from './lib/pkce-store/memory-store.js';
 import type { TenantRow } from './lib/tenant/tenant-row.js';
@@ -78,20 +77,6 @@ import crypto from 'node:crypto';
 import { pinoHttp } from 'pino-http';
 import { nanoid } from 'nanoid';
 
-/**
- * Sentinel tenantId for the LEGACY single-tenant /authorize + /token mounts
- * that exist alongside the per-tenant /t/:tenantId/* routes (03-08).
- *
- * The legacy mounts predate URL-path routing and read tenant config from
- * `secrets.tenantId` (i.e., MS365_MCP_TENANT_ID env var). Their PKCE keys
- * still need a tenant segment to match the PkceStore contract — using a
- * single well-known sentinel gives them a stable, non-colliding key.
- *
- * This is NOT the per-tenant path — that lives in createAuthorizeHandler +
- * createTenantTokenHandler, which read `req.params.tenantId` from the
- * /t/:tenantId/* router. 03-09 consolidates the two by removing the
- * legacy mount entirely; at that point this sentinel disappears.
- */
 const LEGACY_SINGLE_TENANT_KEY = '_';
 
 function createHttpRouteRateLimit(): RequestHandler {
@@ -108,259 +93,7 @@ function createHttpRouteRateLimit(): RequestHandler {
   }) as unknown as RequestHandler;
 }
 
-/**
- * Parse HTTP option into host and port components.
- * Supports formats: "host:port", ":port", "port"
- * @param httpOption - The HTTP option value (string or boolean)
- * @returns Object with host (undefined if not specified) and port number
- */
-export { parseHttpOption } from './lib/http-option.js';
-import { parseHttpOption } from './lib/http-option.js';
-
-/**
- * Secrets slice the /token handler needs. Decoupled from the full
- * `AppSecrets` interface so tests can inject a minimal stub without
- * bootstrapping the secrets provider.
- */
-export interface TokenHandlerSecrets {
-  clientId: string;
-  clientSecret?: string;
-  tenantId?: string;
-  cloudType: CloudType;
-}
-
-function stripRefreshToken<T extends Record<string, unknown>>(result: T): Omit<T, 'refresh_token'> {
-  const { refresh_token: _refreshToken, ...publicResult } = result;
-  return publicResult;
-}
-
-/**
- * /token handler config (plan 03-03).
- *
- * The `pkceStore` dep is the PkceStore interface from
- * src/lib/pkce-store/pkce-store.ts — RedisPkceStore in HTTP mode, or
- * MemoryPkceStore in stdio / tests. The v1 in-memory lookup map was
- * removed along with its O(N) find scan at /token: we now compute
- * sha256(client_verifier) and issue a single takeByChallenge() call.
- */
-export interface TokenHandlerConfig {
-  secrets: TokenHandlerSecrets;
-  pkceStore: PkceStore;
-}
-
-/**
- * Build the token-exchange (POST /token) handler.
- *
- * Plan 01-07 (SECUR-05 + T-01-07) scrubs three log sites that leaked
- * request body in v1:
- *
- *   Site A — entry info log at "/token called": pino-native meta-first
- *     arg order; only `method`, `url`, `contentType`, `grant_type`
- *     values appear in the record. `body` is never attached.
- *   Site B — grant_type-missing error: meta carries ONLY the non-
- *     sensitive shape (`grant_type`, `has_code`, `has_refresh_token`).
- *     The raw body is never spread. Defense-in-depth: pino's
- *     `redact.paths` (plan 01-02) would catch a regression, but the
- *     invariant is maintained at the call site first.
- *   Site C — catch-block: stringify `error.message` and optional `code`
- *     only. Never spread the raw Error into the log meta — fetch
- *     failure wrappers carry `.response.body` which would leak.
- *
- * Exported so tests can mount the handler on a minimal Express app
- * without bootstrapping MicrosoftGraphServer / MSAL / secrets.
- */
-export function createTokenHandler(config: TokenHandlerConfig) {
-  const { secrets, pkceStore } = config;
-
-  return async (req: Request, res: Response): Promise<void> => {
-    try {
-      // Site A — pino-native order (meta, message). `body` NEVER goes in
-      // the meta object; only the three request-shape fields + the
-      // caller-advertised grant_type land in the log record. If the
-      // request arrives without a body, grant_type is reported as
-      // `undefined` — the grant_type-missing branch below then logs the
-      // authoritative [MISSING] marker.
-      logger.info(
-        {
-          method: req.method,
-          url: req.url,
-          contentType: req.get('Content-Type'),
-          grant_type: (req.body as Record<string, unknown> | undefined)?.grant_type,
-        },
-        'Token endpoint called'
-      );
-
-      const body = req.body as Record<string, unknown> | undefined;
-
-      if (!body) {
-        // No body: log only the empty-body sentinel. Nothing sensitive
-        // exists to log in this branch; kept as a separate site so the
-        // shape stays explicit.
-        logger.error({}, 'Token endpoint: Request body is undefined');
-        res.status(400).json({
-          error: 'invalid_request',
-          error_description: 'Request body is required',
-        });
-        return;
-      }
-
-      if (!body.grant_type) {
-        // Site B — redacted meta. Emits only shape booleans + the
-        // grant_type value (which is the MISSING marker here). The raw
-        // `body` reference is explicitly NEVER attached — tests enforce
-        // this invariant at the logger mock call level.
-        logger.error(
-          {
-            grant_type: '[MISSING]',
-            has_code: Boolean(body.code),
-            has_refresh_token: Boolean(body.refresh_token),
-            has_client_secret: Boolean(body.client_secret),
-          },
-          'Token endpoint: grant_type is missing'
-        );
-        res.status(400).json({
-          error: 'invalid_request',
-          error_description: 'grant_type parameter is required',
-        });
-        return;
-      }
-
-      if (body.grant_type === 'authorization_code') {
-        const tenantId = secrets.tenantId || 'common';
-        const clientId = secrets.clientId;
-        const clientSecret = secrets.clientSecret;
-
-        // Shape-only info log — `has_code` / `has_code_verifier` are
-        // booleans, `redirect_uri` is advertised publicly in OAuth
-        // metadata (no secret), clientId is non-secret, tenantId is
-        // non-secret. We intentionally do NOT log the raw code or
-        // code_verifier values.
-        logger.info(
-          {
-            redirect_uri: body.redirect_uri,
-            has_code: Boolean(body.code),
-            has_code_verifier: Boolean(body.code_verifier),
-            clientId,
-            tenantId,
-            hasClientSecret: Boolean(clientSecret),
-          },
-          'Token endpoint: authorization_code exchange'
-        );
-
-        // Two-leg PKCE (plan 03-03, SECUR-03):
-        // Hash the client's verifier once to obtain the clientCodeChallenge,
-        // then issue a single `takeByChallenge` against the PkceStore. This
-        // is an O(1) lookup + atomic delete through the store's backing
-        // Redis (or an in-memory Map in stdio mode). Replaces the v1 O(N)
-        // scan over the old in-memory store + per-entry SHA-256 comparison.
-        //
-        // The atomic read-and-delete protects against T-03-03-01 (replay):
-        // two concurrent /token calls with the same verifier → exactly one
-        // succeeds, the other gets null.
-        let serverCodeVerifier: string | undefined;
-        if (body.code_verifier) {
-          const clientVerifier = body.code_verifier as string;
-          const clientChallengeComputed = crypto
-            .createHash('sha256')
-            .update(clientVerifier)
-            .digest('base64url');
-
-          const pkceEntry = await pkceStore.takeByChallenge(
-            LEGACY_SINGLE_TENANT_KEY, // legacy /token mount — 03-09 retires this path
-            clientChallengeComputed
-          );
-          if (pkceEntry) {
-            serverCodeVerifier = pkceEntry.serverCodeVerifier;
-            logger.info(
-              { state: pkceEntry.state.substring(0, 8) + '...' },
-              'Two-leg PKCE: matched client verifier, using server verifier'
-            );
-          }
-        }
-
-        const result = await exchangeCodeForToken(
-          body.code as string,
-          body.redirect_uri as string,
-          clientId,
-          clientSecret,
-          tenantId,
-          serverCodeVerifier || (body.code_verifier as string | undefined),
-          secrets.cloudType
-        );
-        res.json(stripRefreshToken(result));
-      } else if (body.grant_type === 'refresh_token') {
-        // WR-01 fix: the legacy /token refresh_token branch accepted a
-        // refresh token from the request body, which violated the SECUR-02
-        // invariant that "refresh tokens NEVER cross the client boundary
-        // in v2" (the Phase 3 SessionStore wraps refresh tokens server-side;
-        // the Graph 401 path consults the store rather than reading any
-        // client-supplied token).
-        //
-        // Plan 03-09 retires the entire legacy mount; in the meantime
-        // operators on a v1-style HTTP deployment that still posts to
-        // /token (not /t/:tenantId/token) need a clear migration error
-        // rather than a working stale-trust path. Opt-in flag preserved
-        // for narrow migration windows.
-        if (process.env.MS365_MCP_LEGACY_OAUTH_REFRESH === '1') {
-          const tenantId = secrets.tenantId || 'common';
-          const clientId = secrets.clientId;
-          const clientSecret = secrets.clientSecret;
-
-          if (clientSecret) {
-            logger.warn(
-              {},
-              'Legacy /token refresh: confidential client with client_secret (MS365_MCP_LEGACY_OAUTH_REFRESH=1 opt-in; refresh-token-from-body crosses trust boundary)'
-            );
-          } else {
-            logger.warn(
-              {},
-              'Legacy /token refresh: public client without client_secret (MS365_MCP_LEGACY_OAUTH_REFRESH=1 opt-in; refresh-token-from-body crosses trust boundary)'
-            );
-          }
-
-          const result = await refreshAccessToken(
-            body.refresh_token as string,
-            clientId,
-            clientSecret,
-            tenantId,
-            secrets.cloudType
-          );
-          res.json(stripRefreshToken(result));
-        } else {
-          res.status(400).json({
-            error: 'unsupported_grant_type',
-            error_description:
-              'refresh_token grant retired on the legacy /token mount in v2. ' +
-              'Use /t/:tenantId/token and rely on the server-side SessionStore ' +
-              '(refresh tokens never cross the client trust boundary in v2). ' +
-              'For narrow migration windows, opt back in with MS365_MCP_LEGACY_OAUTH_REFRESH=1.',
-          });
-        }
-      } else {
-        res.status(400).json({
-          error: 'unsupported_grant_type',
-          error_description: `Grant type '${body.grant_type}' is not supported`,
-        });
-      }
-    } catch (error) {
-      // Site C — stringify the error message only. Never spread the raw
-      // Error (fetch-failure wrappers carry `.response.body` which would
-      // leak refresh tokens / codes into the log record). The optional
-      // `code` field is useful for filtering without being sensitive.
-      logger.error(
-        {
-          err: error instanceof Error ? error.message : String(error),
-          code: (error as { code?: string } | undefined)?.code,
-        },
-        'Token endpoint error'
-      );
-      res.status(500).json({
-        error: 'server_error',
-        error_description: 'Internal server error during token exchange',
-      });
-    }
-  };
-}
+// Legacy /token handler lives in src/lib/oauth/token-handler.ts so handler tests do not import the full MCP server/tool graph.
 
 // Per-tenant OAuth handlers live in src/lib/oauth/tenant-handlers.ts so
 // handler tests do not import the full MCP server/tool graph.
