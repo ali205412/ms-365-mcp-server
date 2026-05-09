@@ -41,3 +41,4 @@ CREATE INDEX IF NOT EXISTS idx_tenant_skills_tenant_owner
 
 -- Down Migration
 -- No-op: this phase requires additive-only schema changes.
+SELECT 1;

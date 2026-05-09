@@ -6,7 +6,10 @@ import { __setPoolForTesting } from '../src/lib/postgres.js';
 import { requestContext } from '../src/request-context.js';
 import { readMcpResource } from '../src/lib/mcp-resources/read.js';
 import { registerMcpResources } from '../src/lib/mcp-resources/register.js';
-import { DISCOVERY_META_TOOL_NAMES, DISCOVERY_PRESET_VERSION } from '../src/lib/tenant-surface/surface.js';
+import {
+  DISCOVERY_META_TOOL_NAMES,
+  DISCOVERY_PRESET_VERSION,
+} from '../src/lib/tenant-surface/surface.js';
 
 const TENANT_A = '11111111-1111-4111-8111-111111111111';
 const TENANT_B = '22222222-2222-4222-8222-222222222222';
@@ -48,6 +51,33 @@ async function installSchema(pool: Pool): Promise<void> {
       created_at timestamptz NOT NULL DEFAULT NOW(),
       updated_at timestamptz NOT NULL DEFAULT NOW()
     );
+    CREATE TABLE tenant_tool_recipes (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      name text NOT NULL,
+      alias text NOT NULL,
+      params jsonb NOT NULL DEFAULT '{}'::jsonb,
+      note text,
+      last_run_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE tenant_tool_bookmarks (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      alias text NOT NULL,
+      label text,
+      note text,
+      last_used_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE tenant_facts (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      scope text NOT NULL,
+      content text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT NOW(),
+      updated_at timestamptz NOT NULL DEFAULT NOW()
+    );
   `);
   await pool.query(`INSERT INTO tenants (id) VALUES ($1), ($2)`, [TENANT_A, TENANT_B]);
   await pool.query(
@@ -69,10 +99,12 @@ function textOf(result: Awaited<ReturnType<typeof readMcpResource>>): string {
 
 type RequestHandler = (request: unknown, extra: unknown) => Promise<unknown>;
 
-async function invokeResourcesList(server: McpServer): Promise<{ resources: Array<{ uri: string; mimeType?: string }> }> {
-  const handler = (server.server as unknown as { _requestHandlers: Map<string, RequestHandler> })._requestHandlers.get(
-    'resources/list'
-  );
+async function invokeResourcesList(
+  server: McpServer
+): Promise<{ resources: Array<{ uri: string; mimeType?: string }> }> {
+  const handler = (
+    server.server as unknown as { _requestHandlers: Map<string, RequestHandler> }
+  )._requestHandlers.get('resources/list');
   if (!handler) throw new Error('resources/list missing');
   return handler({ method: 'resources/list', params: {} }, { requestId: 'test' });
 }
@@ -80,9 +112,9 @@ async function invokeResourcesList(server: McpServer): Promise<{ resources: Arra
 async function invokeResourceTemplatesList(
   server: McpServer
 ): Promise<{ resourceTemplates: Array<{ uriTemplate: string; mimeType?: string }> }> {
-  const handler = (server.server as unknown as { _requestHandlers: Map<string, RequestHandler> })._requestHandlers.get(
-    'resources/templates/list'
-  );
+  const handler = (
+    server.server as unknown as { _requestHandlers: Map<string, RequestHandler> }
+  )._requestHandlers.get('resources/templates/list');
   if (!handler) throw new Error('resources/templates/list missing');
   return handler({ method: 'resources/templates/list', params: {} }, { requestId: 'test' });
 }
@@ -114,11 +146,20 @@ describe('Phase 8 Plan 08-06 skill resources', () => {
       });
       expect(textOf(markdown)).toContain('Handle {{account}}');
 
-      const schema = await readMcpResource(`m365://tenant/${TENANT_A}/skills/triage.schema.json`, {});
-      expect(JSON.parse(textOf(schema))).toMatchObject({ name: 'triage', arguments: [{ name: 'account' }] });
+      const schema = await readMcpResource(
+        `m365://tenant/${TENANT_A}/skills/triage.schema.json`,
+        {}
+      );
+      expect(JSON.parse(textOf(schema))).toMatchObject({
+        name: 'triage',
+        arguments: [{ name: 'account' }],
+      });
 
       const pack = await readMcpResource(`m365://tenant/${TENANT_A}/skill-packs/default.json`, {});
-      expect(JSON.parse(textOf(pack))).toMatchObject({ packName: 'default', skills: [{ name: 'triage' }] });
+      expect(JSON.parse(textOf(pack))).toMatchObject({
+        packName: 'default',
+        skills: [{ name: 'triage' }],
+      });
     });
   });
 
@@ -135,7 +176,9 @@ describe('Phase 8 Plan 08-06 skill resources', () => {
       `m365://tenant/${TENANT_A}/skills/triage.md?x=1`,
       `m365://tenant/${TENANT_A}/skills/triage.md#frag`,
     ]) {
-      await expect(readMcpResource(uri, {})).rejects.toMatchObject({ data: { code: 'invalid_resource_uri' } });
+      await expect(readMcpResource(uri, {})).rejects.toMatchObject({
+        data: { code: 'invalid_resource_uri' },
+      });
     }
   });
 
@@ -158,7 +201,9 @@ describe('Phase 8 Plan 08-06 skill resources', () => {
       },
     });
 
-    const list = await requestContext.run({ tenantId: TENANT_A }, () => invokeResourcesList(discoveryServer));
+    const list = await requestContext.run({ tenantId: TENANT_A }, () =>
+      invokeResourcesList(discoveryServer)
+    );
     expect(list.resources.map((resource) => resource.uri)).toContain(
       `m365://tenant/${TENANT_A}/skills/index.json`
     );
@@ -181,7 +226,17 @@ describe('Phase 8 Plan 08-06 skill resources', () => {
         preset_version: 'essentials-v1',
       },
     });
-    const staticUris = (await invokeResourcesList(staticServer)).resources.map((resource) => resource.uri);
-    expect(staticUris.some((uri) => uri.startsWith('m365://'))).toBe(false);
+    const staticUris = (await invokeResourcesList(staticServer)).resources.map(
+      (resource) => resource.uri
+    );
+    expect(staticUris).toContain('m365://catalog/navigation-guide.md');
+    expect(staticUris).not.toContain(`m365://tenant/${TENANT_B}/skills/index.json`);
+
+    const staticTemplates = (await invokeResourceTemplatesList(staticServer)).resourceTemplates.map(
+      (template) => template.uriTemplate
+    );
+    expect(staticTemplates).not.toContain('m365://tenant/{tenantId}/skills/{name}.md');
+    expect(staticTemplates).not.toContain('m365://tenant/{tenantId}/skills/{name}.schema.json');
+    expect(staticTemplates).not.toContain('m365://tenant/{tenantId}/skill-packs/{packName}.json');
   });
 });

@@ -44,7 +44,9 @@ async function validateRecipeRefs(
 ): Promise<SkillValidationIssue[]> {
   const checks = await Promise.all(refs.map((name) => getRecipeByName(tenantId, name)));
   return refs.flatMap((ref, index) =>
-    checks[index] ? [] : [issue('recipe_not_visible', `Referenced recipe is not visible: ${ref}`, ref)]
+    checks[index]
+      ? []
+      : [issue('recipe_not_visible', `Referenced recipe is not visible: ${ref}`, ref)]
   );
 }
 
@@ -58,7 +60,9 @@ async function validateBookmarkRefs(
     const found = bookmarks.some(
       (bookmark) => bookmark.id === ref || bookmark.alias === ref || bookmark.label === ref
     );
-    return found ? [] : [issue('bookmark_not_visible', `Referenced bookmark is not visible: ${ref}`, ref)];
+    return found
+      ? []
+      : [issue('bookmark_not_visible', `Referenced bookmark is not visible: ${ref}`, ref)];
   });
 }
 
@@ -68,14 +72,13 @@ async function validateFactRefs(
 ): Promise<SkillValidationIssue[]> {
   const checks = await Promise.all(refs.map((scope) => recallFacts(tenantId, { scope, limit: 1 })));
   return refs.flatMap((ref, index) =>
-    checks[index].length > 0 ? [] : [issue('fact_not_visible', `Referenced fact scope is not visible: ${ref}`, ref)]
+    checks[index].length > 0
+      ? []
+      : [issue('fact_not_visible', `Referenced fact scope is not visible: ${ref}`, ref)]
   );
 }
 
-function validateResourceRefs(
-  tenantId: string,
-  refs: readonly string[]
-): SkillValidationIssue[] {
+function validateResourceRefs(tenantId: string, refs: readonly string[]): SkillValidationIssue[] {
   return refs.flatMap((ref) => {
     const parsed = assertTenantResourceOwner(parseMcpResourceUri(ref), tenantId);
     if (!parsed.ok) {
@@ -101,7 +104,9 @@ function validateToolRefs(
       continue;
     }
     if (deps.enabledToolsSet && !deps.enabledToolsSet.has(alias)) {
-      errors.push(issue('tool_not_enabled', `Referenced tool is not enabled for caller: ${alias}`, alias));
+      errors.push(
+        issue('tool_not_enabled', `Referenced tool is not enabled for caller: ${alias}`, alias)
+      );
       continue;
     }
 
@@ -145,8 +150,17 @@ export async function validateSkillReferences(
     validateBookmarkRefs(deps.tenantId, stringArray(skill.frontmatter.bookmarks)),
     validateFactRefs(deps.tenantId, stringArray(skill.frontmatter.facts)),
   ]);
-  const resourceErrors = validateResourceRefs(deps.tenantId, stringArray(skill.frontmatter.resources));
-  const errors = [...toolResult.errors, ...recipeErrors, ...bookmarkErrors, ...factErrors, ...resourceErrors];
+  const resourceErrors = validateResourceRefs(
+    deps.tenantId,
+    stringArray(skill.frontmatter.resources)
+  );
+  const errors = [
+    ...toolResult.errors,
+    ...recipeErrors,
+    ...bookmarkErrors,
+    ...factErrors,
+    ...resourceErrors,
+  ];
   const highRiskTools = [...new Set(toolResult.highRiskTools)].sort();
 
   return {

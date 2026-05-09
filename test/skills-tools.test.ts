@@ -108,7 +108,10 @@ async function callTool(
 ): Promise<CallToolResult> {
   const registered = (
     server as unknown as {
-      _registeredTools: Record<string, { handler: (args: unknown, extra: unknown) => Promise<CallToolResult> }>;
+      _registeredTools: Record<
+        string,
+        { handler: (args: unknown, extra: unknown) => Promise<CallToolResult> }
+      >;
     }
   )._registeredTools;
   const tool = registered[name];
@@ -167,49 +170,55 @@ describe('Phase 8 Plan 08-06 skill tools', () => {
     });
 
     const events = await collectEvents(redis, async () => {
-      await requestContext.run({ tenantId: TENANT_A, enabledToolsSet: new Set(['list-mail-messages']) }, async () => {
-        const forked = await callTool(server, 'fork-builtin-skill', { name: 'triage' });
-        expect(forked.isError).toBeFalsy();
+      await requestContext.run(
+        { tenantId: TENANT_A, enabledToolsSet: new Set(['list-mail-messages']) },
+        async () => {
+          const forked = await callTool(server, 'fork-builtin-skill', { name: 'triage' });
+          expect(forked.isError).toBeFalsy();
 
-        const saved = await callTool(server, 'save-skill', {
-          name: 'triage',
-          title: 'Tenant triage',
-          description: 'Edited triage',
-          body: 'Edited {{account}}',
-          arguments: [{ name: 'account', required: true }],
-          frontmatter: { tools: ['list-mail-messages'], risk: 'low' },
-          visibility: 'tenant',
-          published: true,
-        });
-        expect(saved.isError).toBeFalsy();
+          const saved = await callTool(server, 'save-skill', {
+            name: 'triage',
+            title: 'Tenant triage',
+            description: 'Edited triage',
+            body: 'Edited {{account}}',
+            arguments: [{ name: 'account', required: true }],
+            frontmatter: { tools: ['list-mail-messages'], risk: 'low' },
+            visibility: 'tenant',
+            published: true,
+          });
+          expect(saved.isError).toBeFalsy();
 
-        const rendered = await callTool(server, 'render-skill', {
-          name: 'triage',
-          args: { account: '<inbox>' },
-        });
-        expect(bodyOf(rendered)).toMatchObject({ text: 'Edited &lt;inbox&gt;' });
+          const rendered = await callTool(server, 'render-skill', {
+            name: 'triage',
+            args: { account: '<inbox>' },
+          });
+          expect(bodyOf(rendered)).toMatchObject({ text: 'Edited &lt;inbox&gt;' });
 
-        const listed = await callTool(server, 'list-skills', {});
-        expect((bodyOf(listed).skills as Array<{ name: string }>).map((skill) => skill.name)).toContain(
-          'triage'
-        );
+          const listed = await callTool(server, 'list-skills', {});
+          expect(
+            (bodyOf(listed).skills as Array<{ name: string }>).map((skill) => skill.name)
+          ).toContain('triage');
 
-        const deleted = await callTool(server, 'delete-skill', { name: 'triage' });
-        expect(bodyOf(deleted)).toMatchObject({ deleted: true });
-        const afterDelete = await callTool(server, 'list-skills', {});
-        expect((bodyOf(afterDelete).skills as Array<{ name: string }>).map((skill) => skill.name)).not.toContain(
-          'triage'
-        );
-      });
-    });
-
-    await requestContext.run({ tenantId: TENANT_B, enabledToolsSet: new Set(['list-mail-messages']) }, async () => {
-      const tenantBList = await callTool(server, 'list-skills', {});
-      expect((bodyOf(tenantBList).skills as Array<{ name: string }>).map((skill) => skill.name)).toContain(
-        'triage'
+          const deleted = await callTool(server, 'delete-skill', { name: 'triage' });
+          expect(bodyOf(deleted)).toMatchObject({ deleted: true });
+          const afterDelete = await callTool(server, 'list-skills', {});
+          expect(
+            (bodyOf(afterDelete).skills as Array<{ name: string }>).map((skill) => skill.name)
+          ).not.toContain('triage');
+        }
       );
-      expect((bodyOf(tenantBList).skills as Array<{ source: string }>)[0].source).toBe('builtin');
     });
+
+    await requestContext.run(
+      { tenantId: TENANT_B, enabledToolsSet: new Set(['list-mail-messages']) },
+      async () => {
+        const tenantBList = await callTool(server, 'list-skills', {});
+        expect(
+          (bodyOf(tenantBList).skills as Array<{ name: string }>).map((skill) => skill.name)
+        ).toContain('triage');
+        expect((bodyOf(tenantBList).skills as Array<{ source: string }>)[0].source).toBe('builtin');
+      }
+    );
 
     expect(events).toEqual(
       expect.arrayContaining([
@@ -227,52 +236,58 @@ describe('Phase 8 Plan 08-06 skill tools', () => {
     const { registerSkillTools } = await import('../src/lib/mcp-skills/tools.js');
     registerSkillTools(server, { redis, loadBuiltInPrompts: () => [] });
 
-    await requestContext.run({ tenantId: TENANT_A, enabledToolsSet: new Set(['list-mail-messages']) }, async () => {
-      const published = await callTool(server, 'save-skill', {
-        name: 'bad_refs',
-        title: 'Bad refs',
-        description: 'References a disabled tool',
-        body: 'Use disabled tool',
-        frontmatter: { tools: ['send-mail'] },
-        published: true,
-      });
-      expect(published.isError).toBe(true);
-      expect(bodyOf(published)).toMatchObject({ error: 'skill_validation_failed' });
+    await requestContext.run(
+      { tenantId: TENANT_A, enabledToolsSet: new Set(['list-mail-messages']) },
+      async () => {
+        const published = await callTool(server, 'save-skill', {
+          name: 'bad_refs',
+          title: 'Bad refs',
+          description: 'References a disabled tool',
+          body: 'Use disabled tool',
+          frontmatter: { tools: ['send-mail'] },
+          published: true,
+        });
+        expect(published.isError).toBe(true);
+        expect(bodyOf(published)).toMatchObject({ error: 'skill_validation_failed' });
 
-      const draft = await callTool(server, 'save-skill', {
-        name: 'bad_refs',
-        title: 'Bad refs',
-        description: 'Draft can carry warnings',
-        body: 'Use disabled tool',
-        frontmatter: { tools: ['send-mail'] },
-        published: false,
-      });
-      expect(draft.isError).toBeFalsy();
-      expect((bodyOf(draft).validation as { ok: boolean; warnings: unknown[] }).ok).toBe(false);
-    });
+        const draft = await callTool(server, 'save-skill', {
+          name: 'bad_refs',
+          title: 'Bad refs',
+          description: 'Draft can carry warnings',
+          body: 'Use disabled tool',
+          frontmatter: { tools: ['send-mail'] },
+          published: false,
+        });
+        expect(draft.isError).toBeFalsy();
+        expect((bodyOf(draft).validation as { ok: boolean; warnings: unknown[] }).ok).toBe(false);
+      }
+    );
   });
 
   it('returns confirmation-required validation for high-risk tool metadata', async () => {
     const { registerSkillTools } = await import('../src/lib/mcp-skills/tools.js');
     registerSkillTools(server, { redis, loadBuiltInPrompts: () => [] });
 
-    await requestContext.run({ tenantId: TENANT_A, enabledToolsSet: new Set(['send-mail']) }, async () => {
-      const result = await callTool(server, 'validate-skill', {
-        skill: {
-          name: 'send_status',
-          title: 'Send status',
-          description: 'Prepare a send-mail workflow',
-          body: 'Send a status email',
-          frontmatter: { tools: ['send-mail'] },
-        },
-      });
-      expect(result.isError).toBeFalsy();
-      expect(bodyOf(result)).toMatchObject({
-        validation: {
-          confirmationRequired: true,
-          highRiskTools: ['send-mail'],
-        },
-      });
-    });
+    await requestContext.run(
+      { tenantId: TENANT_A, enabledToolsSet: new Set(['send-mail']) },
+      async () => {
+        const result = await callTool(server, 'validate-skill', {
+          skill: {
+            name: 'send_status',
+            title: 'Send status',
+            description: 'Prepare a send-mail workflow',
+            body: 'Send a status email',
+            frontmatter: { tools: ['send-mail'] },
+          },
+        });
+        expect(result.isError).toBeFalsy();
+        expect(bodyOf(result)).toMatchObject({
+          validation: {
+            confirmationRequired: true,
+            highRiskTools: ['send-mail'],
+          },
+        });
+      }
+    );
   });
 });
