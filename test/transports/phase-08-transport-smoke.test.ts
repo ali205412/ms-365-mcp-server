@@ -50,7 +50,9 @@ function buildDiscoveryServer(): McpServer {
   return server;
 }
 
-async function startApp(app: express.Express): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+async function startApp(
+  app: express.Express
+): Promise<{ baseUrl: string; close: () => Promise<void> }> {
   const server = await new Promise<http.Server>((resolve) => {
     const next = http.createServer(app).listen(0, () => resolve(next));
   });
@@ -63,7 +65,8 @@ async function startApp(app: express.Express): Promise<{ baseUrl: string; close:
 
 async function readJsonRpcResponse(response: Response): Promise<Record<string, unknown>> {
   const contentType = response.headers.get('content-type') ?? '';
-  if (contentType.includes('application/json')) return (await response.json()) as Record<string, unknown>;
+  if (contentType.includes('application/json'))
+    return (await response.json()) as Record<string, unknown>;
   const text = await response.text();
   const dataLine = text.split('\n').find((line) => line.startsWith('data:'));
   if (!dataLine) throw new Error(`No SSE data line found in ${text}`);
@@ -91,7 +94,10 @@ describe('Phase 08 transport smoke', () => {
     const app = express();
     app.use(express.json());
     app.use('/t/:tenantId', (req, _res, next) => {
-      (req as express.Request & { tenant?: TenantRow }).tenant = { ...TENANT, id: req.params.tenantId };
+      (req as express.Request & { tenant?: TenantRow }).tenant = {
+        ...TENANT,
+        id: req.params.tenantId,
+      };
       next();
     });
     app.post(
@@ -139,7 +145,10 @@ describe('Phase 08 transport smoke', () => {
     const app = express();
     app.use(express.json());
     app.use('/t/:tenantId', (req, _res, next) => {
-      (req as express.Request & { tenant?: TenantRow }).tenant = { ...TENANT, id: req.params.tenantId };
+      (req as express.Request & { tenant?: TenantRow }).tenant = {
+        ...TENANT,
+        id: req.params.tenantId,
+      };
       next();
     });
     const deps = { buildMcpServer: () => buildDiscoveryServer() };

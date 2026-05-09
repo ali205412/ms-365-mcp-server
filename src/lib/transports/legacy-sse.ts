@@ -148,8 +148,7 @@ export function createLegacySsePostHandler(_deps: LegacySseDeps): RequestHandler
       // correlation.
       res.status(501).json({
         error: 'legacy_sse_limited_support',
-        hint:
-          'Legacy SSE has limited Phase 08 support. Use /t/{tenantId}/mcp for the full Streamable HTTP connector surface.',
+        hint: 'Legacy SSE has limited Phase 08 support. Use /t/{tenantId}/mcp for the full Streamable HTTP connector surface.',
         jsonrpc: '2.0',
         id: body?.id ?? null,
       });
