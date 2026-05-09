@@ -29,12 +29,17 @@ import { emitMcpLogEvent } from './lib/mcp-logging/register.js';
 import { createMcpErrorEnvelope, createMcpResultEnvelope } from './lib/mcp-results/envelope.js';
 import { MCP_STRUCTURED_CONTENT_OUTPUT_SCHEMA } from './lib/mcp-results/schemas.js';
 import {
+  graphResourceLinksForToolResult,
+  shouldUseResourceLinkedText,
+} from './lib/mcp-resources/graph-backed.js';
+import {
   classifyToolRisk,
   confirmationIdFor,
   isConfirmationValid,
   type ToolRiskClassification,
 } from './lib/safe-writes/classifier.js';
 import { registerOperation, unregisterOperation } from './lib/mcp-progress/cancellation.js';
+import type { ProgressNotificationSender } from './lib/mcp-progress/progress.js';
 // Re-export pure helpers so existing callers (tests, downstream modules)
 // keep working. New callers should import directly from
 // `./lib/graph-tools-pure.js` to avoid transitively pulling the 45 MB
@@ -871,12 +876,15 @@ async function executeGraphToolInner(
         requestId: ctx?.requestId,
         progressToken: token !== undefined ? String(token) : undefined,
       };
+      const sendNotification =
+        typeof params._sendNotification === 'function'
+          ? (params._sendNotification as ProgressNotificationSender)
+          : undefined;
       if (token !== undefined) registerOperation(operationKey);
       const combined = await fetchAllPages(path, options, graphClient, {
         seedFirstPage: firstPage,
         progressToken: token,
-        sendNotification:
-          typeof params._sendNotification === 'function' ? params._sendNotification : undefined,
+        sendNotification,
         capabilityProfile: ctx?.capabilityProfile,
         operationKey,
       });
@@ -2082,15 +2090,29 @@ export function registerDiscoveryTools(
         orgMode,
       });
       if (result.isError) return result;
+      const data = graphResultData(result);
+      const resources = graphResourceLinksForToolResult({
+        toolName: tool_name,
+        tenantId: getRequestTenant().id,
+        data,
+        parameters,
+      });
+      const envelope = createMcpResultEnvelope({
+        toolName: 'execute-tool',
+        summary: `Executed ${tool_name}.`,
+        data,
+        resources,
+        nextActions:
+          resources.length > 0
+            ? ['Review the returned data or open linked resources for durable, bounded reads.']
+            : ['Review the returned data and call another tool if more detail is needed.'],
+        meta: { ...result._meta, toolAlias: tool_name },
+      });
       return {
-        ...createMcpResultEnvelope({
-          toolName: 'execute-tool',
-          summary: `Executed ${tool_name}.`,
-          data: graphResultData(result),
-          nextActions: ['Review the returned data and call another tool if more detail is needed.'],
-          meta: { ...result._meta, toolAlias: tool_name },
-        }),
-        content: result.content,
+        ...envelope,
+        content: shouldUseResourceLinkedText(resultPayloadBytes(result), resources)
+          ? envelope.content
+          : result.content,
       };
     }
   );

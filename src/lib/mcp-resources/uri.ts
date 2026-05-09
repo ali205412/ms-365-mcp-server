@@ -10,6 +10,18 @@ export type TenantResourceView =
   | 'recipes'
   | 'facts';
 
+export type ConnectorResourceView = 'connector/capabilities' | 'connector/diagnostics';
+
+export type GraphBackedResourceKind =
+  | 'user'
+  | 'group'
+  | 'team'
+  | 'team-channel'
+  | 'site'
+  | 'drive-item'
+  | 'mail-message'
+  | 'calendar-event';
+
 export type ResourceUriErrorCode =
   | 'invalid_scheme'
   | 'invalid_resource_uri'
@@ -48,6 +60,14 @@ export interface TenantMcpResourceUri {
     | 'facts.json';
 }
 
+export interface ConnectorMcpResourceUri {
+  ok: true;
+  kind: 'connector';
+  tenantId: string;
+  view: ConnectorResourceView;
+  path: 'connector/capabilities.json' | 'connector/diagnostics.json';
+}
+
 export interface SkillMcpResourceUri {
   ok: true;
   kind: 'skill';
@@ -55,11 +75,30 @@ export interface SkillMcpResourceUri {
   descriptor: SkillResourceDescriptor;
 }
 
+export interface GraphBackedMcpResourceUri {
+  ok: true;
+  kind: 'graph';
+  tenantId: string;
+  graphKind: GraphBackedResourceKind;
+  ids: Readonly<Record<string, string>>;
+  path:
+    | `users/${string}.json`
+    | `groups/${string}.json`
+    | `teams/${string}.json`
+    | `teams/${string}/channels/${string}.json`
+    | `sites/${string}.json`
+    | `drives/${string}/items/${string}.json`
+    | `mail/messages/${string}.json`
+    | `calendar/events/${string}.json`;
+}
+
 export type ValidMcpResourceUri =
   | CatalogMcpResourceUri
   | EndpointMcpResourceUri
   | TenantMcpResourceUri
-  | SkillMcpResourceUri;
+  | ConnectorMcpResourceUri
+  | SkillMcpResourceUri
+  | GraphBackedMcpResourceUri;
 
 export type ParsedMcpResourceUri = ValidMcpResourceUri | InvalidMcpResourceUri;
 
@@ -77,6 +116,62 @@ const TENANT_VIEW_BY_PATH: ReadonlyMap<string, TenantResourceView> = Object.free
     ['facts.json', 'facts'],
   ])
 );
+
+const CONNECTOR_VIEW_BY_PATH: ReadonlyMap<string, ConnectorResourceView> = Object.freeze(
+  new Map<string, ConnectorResourceView>([
+    ['connector/capabilities.json', 'connector/capabilities'],
+    ['connector/diagnostics.json', 'connector/diagnostics'],
+  ])
+);
+
+interface GraphPattern {
+  readonly pattern: RegExp;
+  readonly kind: GraphBackedResourceKind;
+  readonly ids: (match: RegExpExecArray) => Readonly<Record<string, string>>;
+}
+
+const GRAPH_PATTERNS: readonly GraphPattern[] = Object.freeze([
+  {
+    pattern: /^users\/([^/]+)\.json$/,
+    kind: 'user',
+    ids: (match) => ({ userId: match[1] }),
+  },
+  {
+    pattern: /^groups\/([^/]+)\.json$/,
+    kind: 'group',
+    ids: (match) => ({ groupId: match[1] }),
+  },
+  {
+    pattern: /^teams\/([^/]+)\/channels\/([^/]+)\.json$/,
+    kind: 'team-channel',
+    ids: (match) => ({ teamId: match[1], channelId: match[2] }),
+  },
+  {
+    pattern: /^teams\/([^/]+)\.json$/,
+    kind: 'team',
+    ids: (match) => ({ teamId: match[1] }),
+  },
+  {
+    pattern: /^sites\/([^/]+)\.json$/,
+    kind: 'site',
+    ids: (match) => ({ siteId: match[1] }),
+  },
+  {
+    pattern: /^drives\/([^/]+)\/items\/([^/]+)\.json$/,
+    kind: 'drive-item',
+    ids: (match) => ({ driveId: match[1], itemId: match[2] }),
+  },
+  {
+    pattern: /^mail\/messages\/([^/]+)\.json$/,
+    kind: 'mail-message',
+    ids: (match) => ({ messageId: match[1] }),
+  },
+  {
+    pattern: /^calendar\/events\/([^/]+)\.json$/,
+    kind: 'calendar-event',
+    ids: (match) => ({ eventId: match[1] }),
+  },
+]);
 
 function invalid(code: ResourceUriErrorCode, message: string): InvalidMcpResourceUri {
   return { ok: false, code, message };
@@ -137,6 +232,21 @@ function parseEndpointResource(pathname: string): ParsedMcpResourceUri {
   return { ok: true, kind: 'endpoint', alias };
 }
 
+function parseConnectorTenantResource(
+  tenantId: string,
+  resourcePath: string
+): ConnectorMcpResourceUri | null {
+  const view = CONNECTOR_VIEW_BY_PATH.get(resourcePath);
+  if (!view) return null;
+  return {
+    ok: true,
+    kind: 'connector',
+    tenantId,
+    view,
+    path: resourcePath as ConnectorMcpResourceUri['path'],
+  };
+}
+
 function parseSkillTenantResource(
   tenantId: string,
   resourcePath: string
@@ -178,6 +288,25 @@ function parseSkillTenantResource(
   return null;
 }
 
+function parseGraphTenantResource(
+  tenantId: string,
+  resourcePath: string
+): GraphBackedMcpResourceUri | null {
+  for (const graphPattern of GRAPH_PATTERNS) {
+    const match = graphPattern.pattern.exec(resourcePath);
+    if (!match) continue;
+    return {
+      ok: true,
+      kind: 'graph',
+      tenantId,
+      graphKind: graphPattern.kind,
+      ids: graphPattern.ids(match),
+      path: resourcePath as GraphBackedMcpResourceUri['path'],
+    };
+  }
+  return null;
+}
+
 function parseTenantResource(pathname: string): ParsedMcpResourceUri {
   const segments = pathname.split('/');
   const tenantId = segments.shift();
@@ -189,6 +318,16 @@ function parseTenantResource(pathname: string): ParsedMcpResourceUri {
   const skillResource = parseSkillTenantResource(tenantId, resourcePath);
   if (skillResource) {
     return skillResource;
+  }
+
+  const connectorResource = parseConnectorTenantResource(tenantId, resourcePath);
+  if (connectorResource) {
+    return connectorResource;
+  }
+
+  const graphResource = parseGraphTenantResource(tenantId, resourcePath);
+  if (graphResource) {
+    return graphResource;
   }
 
   const view = TENANT_VIEW_BY_PATH.get(resourcePath);
@@ -217,8 +356,8 @@ export function parseMcpResourceUri(raw: string): ParsedMcpResourceUri {
     return invalid('invalid_resource_uri', 'Resource URI is not a valid URL.');
   }
 
-  if (url.protocol !== 'mcp:' && url.protocol !== 'm365:') {
-    return invalid('invalid_scheme', 'Resource URI must use the mcp: or m365: scheme.');
+  if (url.protocol !== 'm365:' && url.protocol !== 'mcp:') {
+    return invalid('invalid_scheme', 'Resource URI must use the m365: or mcp: scheme.');
   }
 
   if (!hasNoUrlDecorators(url)) {
@@ -246,7 +385,13 @@ export function assertTenantResourceOwner(
   parsed: ParsedMcpResourceUri,
   callerTenantId: string | undefined
 ): ParsedMcpResourceUri {
-  if (!parsed.ok || (parsed.kind !== 'tenant' && parsed.kind !== 'skill')) {
+  if (
+    !parsed.ok ||
+    (parsed.kind !== 'tenant' &&
+      parsed.kind !== 'skill' &&
+      parsed.kind !== 'connector' &&
+      parsed.kind !== 'graph')
+  ) {
     return parsed;
   }
 
