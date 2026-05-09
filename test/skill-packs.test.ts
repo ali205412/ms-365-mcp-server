@@ -1,3 +1,7 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { DataType, newDb } from 'pg-mem';
 import type { Pool } from 'pg';
@@ -269,6 +273,46 @@ describe('Phase 8 Plan 08-07 skill packs', () => {
       skipped: { skills: ['builtin-skill'] },
     });
     expect(await getTenantSkillRecord(TENANT_A, 'builtin-skill')).toBeNull();
+  });
+
+  it('imports and exports skill packs through local-only file roots', async () => {
+    const { writeSkillPackToRoot } = await import('../src/lib/mcp-skills/roots.js');
+    const { registerSkillTools } = await import('../src/lib/mcp-skills/tools.js');
+    const root = await mkdtemp(path.join(tmpdir(), 'm365-skill-pack-root-'));
+    const rootUri = pathToFileURL(`${root}/`).toString();
+    const server = new McpServer({ name: 'skill-packs-test', version: '0.0.0' });
+    registerSkillTools(server, { redis: new MemoryRedisFacade(), loadBuiltInPrompts: () => [] });
+
+    try {
+      await writeSkillPackToRoot({ rootUri, path: 'packs/input.json' }, pack('Root pack body'));
+
+      await requestContext.run(
+        { tenantId: TENANT_A, enabledToolsSet: new Set(['list-mail-messages']) },
+        async () => {
+          const imported = await callTool(server, 'import-skill-pack', {
+            rootFile: { rootUri, path: 'packs/input.json' },
+          });
+          expect(imported.isError).toBeFalsy();
+          expect(bodyOf(imported)).toMatchObject({ imported: { skills: 1 } });
+
+          const exported = await callTool(server, 'export-skill-pack', {
+            names: ['triage-mail'],
+            packName: 'root-export',
+            rootFile: { rootUri, path: 'exports/roundtrip.json' },
+          });
+          expect(bodyOf(exported).rootWrite).toMatchObject({
+            rootUri,
+            path: 'exports/roundtrip.json',
+          });
+          const written = JSON.parse(
+            await readFile(path.join(root, 'exports/roundtrip.json'), 'utf8')
+          ) as Record<string, unknown>;
+          expect(written).toMatchObject({ packName: 'root-export' });
+        }
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('declares stable built-in pack ids and imports built-in packs only when explicit', async () => {
