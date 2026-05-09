@@ -1,5 +1,6 @@
 import type { ClientCapabilityProfile, CapabilityName } from './profile.js';
 import { getRequestTokens } from '../../request-context.js';
+import { confirmationIdFor, type ToolRiskClassification } from '../safe-writes/classifier.js';
 
 const SECRET_KEY_PATTERN = /authorization|cookie|token|secret|password|credential/i;
 const BEARER_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
@@ -46,6 +47,12 @@ export interface ElicitationClient {
 
 export interface AgenticWrapperOptions {
   readonly profile?: ClientCapabilityProfile;
+  readonly samplingEnabled?: boolean;
+}
+
+export interface HighRiskConfirmationInput {
+  readonly alias: string;
+  readonly risk: ToolRiskClassification;
 }
 
 function activeProfile(profile?: ClientCapabilityProfile): ClientCapabilityProfile | undefined {
@@ -60,6 +67,14 @@ function disabledReason(name: CapabilityName, profile?: ClientCapabilityProfile)
   return (
     activeProfile(profile)?.capabilities[name]?.disabledReason ??
     `${name} disabled because no client capability profile is active`
+  );
+}
+
+function samplingConfigured(options: AgenticWrapperOptions): boolean {
+  if (options.samplingEnabled !== undefined) return options.samplingEnabled;
+  return (
+    process.env.MS365_MCP_SAMPLING_ENABLED === '1' ||
+    process.env.MS365_MCP_SAMPLING_ENABLED === 'true'
   );
 }
 
@@ -103,10 +118,16 @@ export async function requestSamplingWithFallback(
   options: AgenticWrapperOptions = {}
 ): Promise<SamplingResult> {
   const sanitized = sanitizeSamplingRequest(request);
-  if (!capabilityEnabled('sampling', options.profile) || !client?.createMessage) {
-    const reason = !client?.createMessage
-      ? 'sampling disabled because no client createMessage handler is available'
-      : disabledReason('sampling', options.profile);
+  if (
+    !samplingConfigured(options) ||
+    !capabilityEnabled('sampling', options.profile) ||
+    !client?.createMessage
+  ) {
+    const reason = !samplingConfigured(options)
+      ? 'sampling disabled because MS365_MCP_SAMPLING_ENABLED is not enabled'
+      : !client?.createMessage
+        ? 'sampling disabled because no client createMessage handler is available'
+        : disabledReason('sampling', options.profile);
     return {
       ok: true,
       usedCapability: false,
@@ -145,4 +166,37 @@ export async function requestElicitationWithFallback(
 
   const response = await client.elicit(sanitized);
   return { ok: true, usedCapability: true, request: sanitized, response };
+}
+
+export async function requestHighRiskConfirmationWithFallback(
+  client: ElicitationClient | undefined,
+  input: HighRiskConfirmationInput,
+  options: AgenticWrapperOptions = {}
+): Promise<ElicitationResult> {
+  const confirmationId = confirmationIdFor(input.alias, input.risk.riskLevel);
+  return requestElicitationWithFallback(
+    client,
+    {
+      message: `Confirm ${input.alias} (${input.risk.riskLevel} risk) before continuing.`,
+      requestedSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['confirmation', 'confirmationId'],
+        properties: {
+          confirmation: { const: true },
+          confirmationId: { const: confirmationId },
+        },
+      },
+      fallbackResponse: {
+        action: 'confirmation_required',
+        content: {
+          alias: input.alias,
+          riskLevel: input.risk.riskLevel,
+          confirmationId,
+          nextCall: { confirmation: true, confirmationId },
+        },
+      },
+    },
+    options
+  );
 }

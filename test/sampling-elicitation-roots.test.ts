@@ -6,8 +6,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { buildEffectiveCapabilityProfile } from '../src/lib/mcp-capabilities/profile.js';
 import {
   requestElicitationWithFallback,
+  requestHighRiskConfirmationWithFallback,
   requestSamplingWithFallback,
 } from '../src/lib/mcp-capabilities/agentic-wrappers.js';
+import { classifyToolRisk } from '../src/lib/safe-writes/classifier.js';
 import { readSkillPackFromRoot, writeSkillPackToRoot } from '../src/lib/mcp-skills/roots.js';
 
 function profile(capabilities: Record<string, unknown>) {
@@ -40,10 +42,18 @@ describe('Phase 8 Plan 08-13 sampling, elicitation, and roots wrappers', () => {
     });
     expect(createMessage).not.toHaveBeenCalled();
 
+    const defaultOff = await requestSamplingWithFallback(
+      { createMessage },
+      { messages: [{ role: 'user', content: 'Summarize safely.' }], fallbackText: 'default-off' },
+      { profile: profile({ tools: {}, sampling: {} }) }
+    );
+    expect(defaultOff.usedCapability).toBe(false);
+    expect(defaultOff.fallbackReason).toContain('MS365_MCP_SAMPLING_ENABLED');
+
     const sampled = await requestSamplingWithFallback(
       { createMessage },
       { messages: [{ role: 'user', content: 'Summarize safely.' }] },
-      { profile: profile({ tools: {}, sampling: {} }) }
+      { profile: profile({ tools: {}, sampling: {} }), samplingEnabled: true }
     );
     expect(sampled.usedCapability).toBe(true);
     expect(createMessage).toHaveBeenCalledOnce();
@@ -72,6 +82,34 @@ describe('Phase 8 Plan 08-13 sampling, elicitation, and roots wrappers', () => {
     expect(elicited.response).toEqual({ action: 'accept', content: { approved: true } });
   });
 
+  it('uses elicitation for high-risk confirmations and falls back to exact next-call shape', async () => {
+    const risk = classifyToolRisk({ alias: 'send-mail', method: 'POST' });
+    const elicit = vi.fn(async () => ({ action: 'accept', content: { confirmation: true } }));
+
+    const fallback = await requestHighRiskConfirmationWithFallback(
+      undefined,
+      { alias: 'send-mail', risk },
+      { profile: profile({ tools: {} }) }
+    );
+    expect(fallback.usedCapability).toBe(false);
+    expect(fallback.response).toMatchObject({
+      action: 'confirmation_required',
+      content: {
+        alias: 'send-mail',
+        riskLevel: 'high',
+        nextCall: { confirmation: true },
+      },
+    });
+
+    const elicited = await requestHighRiskConfirmationWithFallback(
+      { elicit },
+      { alias: 'send-mail', risk },
+      { profile: profile({ tools: {}, elicitation: {} }) }
+    );
+    expect(elicited.usedCapability).toBe(true);
+    expect(elicit).toHaveBeenCalledOnce();
+  });
+
   it('reads and writes skill packs only within declared local file roots', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'm365-roots-test-'));
     const rootUri = pathToFileURL(`${root}/`).toString();
@@ -88,6 +126,18 @@ describe('Phase 8 Plan 08-13 sampling, elicitation, and roots wrappers', () => {
       await expect(
         readSkillPackFromRoot({ rootUri: 'https://example.invalid/root', path: 'pack.json' })
       ).rejects.toThrow(/file:\/\//);
+      await expect(writeSkillPackToRoot({ rootUri, path: '.env' }, pack)).rejects.toThrow(
+        /secret-looking/
+      );
+      await expect(
+        writeSkillPackToRoot({ rootUri, path: 'credentials.json' }, pack)
+      ).rejects.toThrow(/secret-looking/);
+      await expect(
+        writeSkillPackToRoot({ rootUri, path: 'packs/private.pem' }, pack)
+      ).rejects.toThrow(/secret-looking/);
+      await expect(
+        writeSkillPackToRoot({ rootUri, path: 'packs/root-pack.txt' }, pack)
+      ).rejects.toThrow(/\.json/);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

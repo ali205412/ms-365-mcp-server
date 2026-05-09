@@ -37,7 +37,14 @@ patterns-established:
   - "Agentic wrappers sanitize token-shaped keys and bearer strings before forwarding sampling requests to clients."
   - "Skill pack tool fallback accepts rootFile for import/export without trusting arbitrary remote roots."
 
-requirements-completed: []
+requirements-completed:
+  - Phase 8 SPEC AC 14
+  - Phase 8 SPEC AC 22
+  - Phase 8 SPEC AC 23
+  - Phase 8 SPEC AC 24
+  - Phase 8 SPEC AC 25
+  - Phase 8 SPEC AC 26
+  - Phase 8 SPEC AC 30
 
 duration: 45min
 completed: 2026-05-09
@@ -57,10 +64,10 @@ completed: 2026-05-09
 
 ## Accomplishments
 
-- Added sampling and elicitation wrapper helpers that only invoke client handlers when the effective capability profile permits them.
+- Added sampling and elicitation wrapper helpers that only invoke client handlers when config and the effective capability profile permit them.
 - Added deterministic fallbacks for sampling and elicitation so clients without these MCP capabilities still receive stable responses.
 - Added recursive redaction for token-shaped keys, bearer strings, and token assignment strings before sampling payloads reach clients.
-- Added local-only `file://` roots helpers for skill-pack JSON import/export, with path traversal protection.
+- Added local-only `file://` roots helpers for skill-pack JSON import/export, with path traversal, size, extension, symlink, and secret-file protections.
 - Wired `import-skill-pack` and `export-skill-pack` to accept optional `rootFile` arguments while retaining existing direct payload and built-in pack fallbacks.
 
 ## Task Commits
@@ -74,8 +81,8 @@ Each task was committed atomically:
 
 ## Files Created/Modified
 
-- `src/lib/mcp-capabilities/agentic-wrappers.ts` - Capability-gated sampling/elicitation wrappers and redaction utilities.
-- `src/lib/mcp-skills/roots.ts` - Local file-root read/write helpers for skill-pack JSON payloads.
+- `src/lib/mcp-capabilities/agentic-wrappers.ts` - Config/capability-gated sampling, elicitation, high-risk confirmation, and redaction utilities.
+- `src/lib/mcp-skills/roots.ts` - Local file-root read/write helpers with size, extension, symlink, and secret-file protections for skill-pack JSON payloads.
 - `src/lib/mcp-skills/tools.ts` - Adds `rootFile` support to skill-pack import/export tools.
 - `test/sampling-elicitation-roots.test.ts` - Covers sampling, elicitation, and roots fallback behavior.
 - `test/sampling-redaction.test.ts` - Covers recursive sampling payload redaction.
@@ -83,15 +90,16 @@ Each task was committed atomically:
 
 ## Verification
 
-- `npx vitest run test/sampling-elicitation-roots.test.ts test/sampling-redaction.test.ts` — PASS (5 tests)
+- `npx vitest run test/sampling-elicitation-roots.test.ts test/sampling-redaction.test.ts` — PASS (expanded with sampling default-off, high-risk confirmation, and roots secret/extension guard coverage)
 - `npx vitest run test/sampling-elicitation-roots.test.ts test/skill-packs.test.ts` — PASS (7 tests)
 - `npx eslint "src/lib/mcp-capabilities/agentic-wrappers.ts" "src/lib/mcp-skills/roots.ts" "src/lib/mcp-skills/tools.ts" "test/sampling-elicitation-roots.test.ts" "test/sampling-redaction.test.ts" "test/skill-packs.test.ts"` — PASS
 - `npx tsc --noEmit` — FAIL due to pre-existing `src/index.ts:252` missing `publicBaseUrl` in a connector doctor call; unrelated to this plan's changed files.
 
 ## Decisions Made
 
+- Kept sampling default-off unless `MS365_MCP_SAMPLING_ENABLED=1|true` or an explicit server/test config enables it.
 - Used deterministic fallback objects instead of throwing when sampling or elicitation capabilities are unavailable.
-- Limited roots support to local `file://` URIs only; no remote roots or implicit roots discovery were added.
+- Limited roots support to local `file://` JSON skill-pack files only; no remote roots, unsafe extensions, secret filenames, or implicit roots discovery were added.
 - Kept existing skill-pack direct JSON payload fallback intact and added `rootFile` as an optional path for compatible clients.
 
 ## Deviations from Plan

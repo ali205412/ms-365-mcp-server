@@ -33,7 +33,7 @@ describe('Phase 8 Plan 08-13 sampling redaction', () => {
         ],
         modelPreferences: { clientSecret: 'secret-client-value', hint: 'safe' },
       },
-      { profile: samplingProfile() }
+      { profile: samplingProfile(), samplingEnabled: true }
     );
 
     const sanitized = createMessage.mock.calls[0][0] as Record<string, unknown>;
