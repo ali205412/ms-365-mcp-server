@@ -51,9 +51,11 @@ function run(command, args, env = process.env) {
   });
 }
 
-function vitestEnv() {
+function vitestEnv(files) {
+  const batchNeedsIntegration = files.some(isIntegrationFile);
   return {
     ...process.env,
+    MS365_MCP_INTEGRATION: batchNeedsIntegration ? process.env.MS365_MCP_INTEGRATION : undefined,
     NODE_OPTIONS: vitestNodeOptions,
   };
 }
@@ -117,7 +119,7 @@ function runVitest(files, batchIndex, batchCount) {
   console.log(`[vitest-batched] ${label}: ${files.length} file(s)`);
 
   const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-  const result = run(command, ['vitest', 'run', ...extraArgs, ...files], vitestEnv());
+  const result = run(command, ['vitest', 'run', ...extraArgs, ...files], vitestEnv(files));
 
   if (result.error) {
     throw result.error;
