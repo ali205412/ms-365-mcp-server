@@ -4,7 +4,12 @@ import { JSON_MIME_TYPE, readMcpResource, type ReadMcpResourceDeps } from './rea
 import { GRAPH_BACKED_RESOURCE_TEMPLATES } from './graph-backed.js';
 import { registerResourceSubscriptionHandlers } from '../mcp-notifications/register-handlers.js';
 import type { RedisResourceSubscriptionStore } from '../mcp-notifications/resource-subscriptions.js';
-import { completeAlias, completeTenantId } from '../mcp-completions/handlers.js';
+import {
+  completeAlias,
+  completeGraphBacked,
+  completeTenantId,
+  type GraphCompletionProviderName,
+} from '../mcp-completions/handlers.js';
 import { isDiscoverySurface } from '../tenant-surface/surface.js';
 
 export interface RegisterMcpResourcesDeps extends ReadMcpResourceDeps {
@@ -25,7 +30,10 @@ interface TemplateDefinition {
   title: string;
   description: string;
   mimeType: string;
-  complete?: Record<string, (value: string) => string[] | Promise<string[]>>;
+  complete?: Record<
+    string,
+    (value: string, context?: Record<string, unknown>) => string[] | Promise<string[]>
+  >;
 }
 
 const SCOPE_MAP_RESOURCE: ResourceDefinition = Object.freeze({
@@ -251,6 +259,17 @@ function registerSkillTemplates(server: McpServer, deps: RegisterMcpResourcesDep
   }
 }
 
+const GRAPH_TEMPLATE_COMPLETIONS: Record<string, GraphCompletionProviderName> = Object.freeze({
+  'tenant-user-resource-template': 'user',
+  'tenant-group-resource-template': 'group',
+  'tenant-team-resource-template': 'team',
+  'tenant-team-channel-resource-template': 'channel',
+  'tenant-site-resource-template': 'site',
+  'tenant-drive-item-resource-template': 'drive',
+  'tenant-mail-message-resource-template': 'mailFolder',
+  'tenant-calendar-event-resource-template': 'event',
+});
+
 function registerTemplates(server: McpServer, deps: RegisterMcpResourcesDeps): void {
   for (const scheme of ['m365', 'mcp'] as const) {
     registerTemplate(
@@ -287,11 +306,36 @@ function registerTemplates(server: McpServer, deps: RegisterMcpResourcesDeps): v
   }
 
   for (const template of GRAPH_BACKED_RESOURCE_TEMPLATES) {
+    const provider = GRAPH_TEMPLATE_COMPLETIONS[template.name];
     registerTemplate(
       server,
       {
         ...template,
-        complete: { tenantId: completeTenantId },
+        complete: {
+          tenantId: completeTenantId,
+          ...(provider
+            ? {
+                userId: (value, context) =>
+                  completeGraphBacked(provider, value, { graphClient: deps.graphClient }, context),
+                groupId: (value, context) =>
+                  completeGraphBacked(provider, value, { graphClient: deps.graphClient }, context),
+                teamId: (value, context) =>
+                  completeGraphBacked(provider, value, { graphClient: deps.graphClient }, context),
+                channelId: (value, context) =>
+                  completeGraphBacked(provider, value, { graphClient: deps.graphClient }, context),
+                siteId: (value, context) =>
+                  completeGraphBacked(provider, value, { graphClient: deps.graphClient }, context),
+                driveId: (value, context) =>
+                  completeGraphBacked(provider, value, { graphClient: deps.graphClient }, context),
+                itemId: (value, context) =>
+                  completeGraphBacked(provider, value, { graphClient: deps.graphClient }, context),
+                messageId: (value, context) =>
+                  completeGraphBacked(provider, value, { graphClient: deps.graphClient }, context),
+                eventId: (value, context) =>
+                  completeGraphBacked(provider, value, { graphClient: deps.graphClient }, context),
+              }
+            : {}),
+        },
       },
       deps
     );

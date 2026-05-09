@@ -14,6 +14,10 @@ import { mergeBuiltInAndSkillPrompts, renderSkillPrompt } from '../mcp-skills/re
 import {
   completeAccount,
   completeAlias,
+  completeBookmark,
+  completeFactScope,
+  completeRecipeName,
+  completeSkillName,
   completeTenantId,
   type AccountCompletionAuthManager,
 } from '../mcp-completions/handlers.js';
@@ -73,7 +77,17 @@ function promptArgsSchema(
           ? (value: string) => completeAccount(value, { authManager: deps.authManager })
           : arg.name === 'alias'
             ? (value: string) => completeAlias(value)
-            : undefined;
+            : arg.name === 'skill' || arg.name === 'skillName'
+              ? (value: string) => completeSkillName(value)
+              : arg.name === 'recipe' || arg.name === 'recipeName'
+                ? (value: string) => completeRecipeName(value)
+                : arg.name === 'bookmark' ||
+                    arg.name === 'bookmarkLabel' ||
+                    arg.name === 'bookmarkAlias'
+                  ? (value: string) => completeBookmark(value)
+                  : arg.name === 'factScope' || arg.name === 'scope'
+                    ? (value: string) => completeFactScope(value)
+                    : undefined;
     if (arg.required !== true) {
       schema = schema.optional();
     }
