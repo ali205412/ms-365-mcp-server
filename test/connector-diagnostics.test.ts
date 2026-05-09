@@ -123,6 +123,7 @@ describe('connector diagnostics', () => {
         sendToolListChanged: () => undefined,
         sendResourceListChanged: () => undefined,
         sendResourceUpdated: () => undefined,
+        sendPromptListChanged: () => undefined,
         sendLoggingMessage: () => undefined,
       },
       transport: {} as never,

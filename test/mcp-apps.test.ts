@@ -5,7 +5,10 @@ import { buildEffectiveCapabilityProfile } from '../src/lib/mcp-capabilities/pro
 import { registerMcpApps, createAppViewResult } from '../src/lib/mcp-apps/register.js';
 import { readMcpAppResource } from '../src/lib/mcp-apps/assets.js';
 import MicrosoftGraphServer from '../src/server.js';
-import { DISCOVERY_META_TOOL_NAMES, DISCOVERY_PRESET_VERSION } from '../src/lib/tenant-surface/surface.js';
+import {
+  DISCOVERY_META_TOOL_NAMES,
+  DISCOVERY_PRESET_VERSION,
+} from '../src/lib/tenant-surface/surface.js';
 
 const TENANT_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -51,7 +54,12 @@ function noAppsProfile() {
 }
 
 async function invokeResourcesList(server: McpServer): Promise<{
-  resources: Array<{ uri: string; name: string; mimeType?: string; _meta?: Record<string, unknown> }>;
+  resources: Array<{
+    uri: string;
+    name: string;
+    mimeType?: string;
+    _meta?: Record<string, unknown>;
+  }>;
 }> {
   const handlers = (
     server.server as unknown as {
@@ -64,7 +72,12 @@ async function invokeResourcesList(server: McpServer): Promise<{
     { method: 'resources/list', params: {} },
     { requestId: 'test', sendNotification: vi.fn(), sendRequest: vi.fn() }
   ) as Promise<{
-    resources: Array<{ uri: string; name: string; mimeType?: string; _meta?: Record<string, unknown> }>;
+    resources: Array<{
+      uri: string;
+      name: string;
+      mimeType?: string;
+      _meta?: Record<string, unknown>;
+    }>;
   }>;
 }
 
@@ -131,7 +144,9 @@ describe('MCP Apps foundation', () => {
       profile: appsProfile(),
       summary: 'Calendar brief ready.',
       data: { eventCount: 2 },
-      resources: [{ uri: `m365://tenant/${TENANT_ID}/calendar/events/upcoming.json`, name: 'events' }],
+      resources: [
+        { uri: `m365://tenant/${TENANT_ID}/calendar/events/upcoming.json`, name: 'events' },
+      ],
     });
 
     expect(result.isError).toBeUndefined();

@@ -12,7 +12,7 @@ export interface ConnectorDiagnosticsInput {
   requestLike?: unknown;
 }
 
-export interface ConnectorDiagnosticsPayload {
+export interface ConnectorDiagnosticsPayload extends Record<string, unknown> {
   server: { name: string; version: string };
   tenant: { id: string };
   surface: McpSurfaceMode;

@@ -11,10 +11,12 @@ import { APP_MIME_TYPE, APP_UI_META, assertSecretFreePayload } from './security.
 export interface RegisterMcpAppsDeps {
   tenant?: { id?: string; preset_version?: string };
   capabilityProfile?: ClientCapabilityProfile;
+  registerTools?: boolean;
 }
 
 export interface CreateAppViewResultInput {
   dashboard: DashboardSlug;
+  toolName?: string;
   profile?: ClientCapabilityProfile;
   summary: string;
   data?: unknown;
@@ -49,7 +51,7 @@ export function createAppViewResult(input: CreateAppViewResultInput): CallToolRe
   const appEnabled = appsEffective(input.profile);
   const fallbackWarning = appEnabled ? [] : [APP_UNSUPPORTED_FALLBACK];
   const result = createMcpResultEnvelope({
-    toolName: `${input.dashboard}-view`,
+    toolName: input.toolName ?? `${input.dashboard}-view`,
     summary: input.summary,
     data: safeData(input.data),
     resources: input.resources,
@@ -66,13 +68,19 @@ export function createAppViewResult(input: CreateAppViewResultInput): CallToolRe
     },
   });
 
-  if (!appEnabled && !result.content[0].text.includes(APP_UNSUPPORTED_FALLBACK)) {
+  const firstContent = result.content[0];
+  const firstText =
+    firstContent && 'text' in firstContent && typeof firstContent.text === 'string'
+      ? firstContent.text
+      : '';
+
+  if (!appEnabled && !firstText.includes(APP_UNSUPPORTED_FALLBACK)) {
     return {
       ...result,
       content: [
         {
           type: 'text',
-          text: `${result.content[0].text}\n\n${APP_UNSUPPORTED_FALLBACK}`,
+          text: `${firstText}\n\n${APP_UNSUPPORTED_FALLBACK}`,
         },
       ],
     };
@@ -113,7 +121,9 @@ function registerAppTool(
       outputSchema: z.object({}).passthrough(),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
       _meta: {
-        ...(appsEffective(profile) ? { ui: { resourceUri: app.uri }, 'ui/resourceUri': app.uri } : {}),
+        ...(appsEffective(profile)
+          ? { ui: { resourceUri: app.uri }, 'ui/resourceUri': app.uri }
+          : {}),
         dashboard: app.slug,
       },
     },
@@ -139,6 +149,6 @@ export function registerMcpApps(server: McpServer, deps: RegisterMcpAppsDeps): v
 
   for (const app of APP_DEFINITIONS) {
     registerAppResource(server, app);
-    registerAppTool(server, app, deps.capabilityProfile);
+    if (deps.registerTools !== false) registerAppTool(server, app, deps.capabilityProfile);
   }
 }

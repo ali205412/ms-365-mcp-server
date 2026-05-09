@@ -1,7 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { APP_ASSET_DIST_PATHS, APP_ASSET_SOURCE_DIR, scanAppAssets } from '../src/lib/mcp-apps/assets.js';
+import {
+  APP_ASSET_DIST_PATHS,
+  APP_ASSET_SOURCE_DIR,
+  scanAppAssets,
+} from '../src/lib/mcp-apps/assets.js';
 import { sanitizeHtmlSnippet, validateAppAssetText } from '../src/lib/mcp-apps/security.js';
 
 const FORBIDDEN_MARKERS = ['access_token', 'refresh_token', 'client_secret', '.env'];
@@ -23,11 +27,15 @@ describe('MCP app resource security', () => {
       });
     }
 
-    expect(validateAppAssetText('<script src="http://evil.example/app.js"></script>', 'app.html')).toEqual({
+    expect(
+      validateAppAssetText('<script src="http://evil.example/app.js"></script>', 'app.html')
+    ).toEqual({
       ok: false,
       reason: expect.stringContaining('external script'),
     });
-    expect(validateAppAssetText('<script src="https://evil.example/app.js"></script>', 'app.html')).toEqual({
+    expect(
+      validateAppAssetText('<script src="https://evil.example/app.js"></script>', 'app.html')
+    ).toEqual({
       ok: false,
       reason: expect.stringContaining('external script'),
     });
@@ -40,8 +48,21 @@ describe('MCP app resource security', () => {
     expect(result.findings).toEqual([]);
   });
 
-  it('app shell asset is part of the tsup copy pipeline', () => {
-    expect(fs.existsSync(path.join(APP_ASSET_SOURCE_DIR, 'app-shell.html'))).toBe(true);
-    expect(APP_ASSET_DIST_PATHS).toContain('dist/apps/app-shell.html');
+  it('dashboard app assets are part of the tsup copy pipeline', () => {
+    const assetNames = [
+      'app-shell.html',
+      'inbox-triage.html',
+      'calendar-brief.html',
+      'teams-digest.html',
+      'file-search.html',
+      'permissions-overview.html',
+      'connector-diagnostics.html',
+      'skill-editor.html',
+    ];
+
+    for (const assetName of assetNames) {
+      expect(fs.existsSync(path.join(APP_ASSET_SOURCE_DIR, assetName))).toBe(true);
+      expect(APP_ASSET_DIST_PATHS).toContain(`dist/apps/${assetName}`);
+    }
   });
 });

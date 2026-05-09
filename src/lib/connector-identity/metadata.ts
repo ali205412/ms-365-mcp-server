@@ -1,9 +1,5 @@
-export {
-  CONNECTOR_IDENTITY_ENV,
-  resolveConnectorIdentity,
-  type ConnectorIdentity,
-  type ConnectorIdentityInput,
-} from './config.js';
+export { CONNECTOR_IDENTITY_ENV, resolveConnectorIdentity } from './config.js';
+export type { ConnectorIdentity, ConnectorIdentityInput } from './config.js';
 
 import {
   CONNECTOR_DEFAULT_DISPLAY_NAME,
@@ -11,6 +7,7 @@ import {
   CONNECTOR_SLUG,
   resolveConnectorIdentity,
   type ConnectorIdentity,
+  type ConnectorIdentityInput,
 } from './config.js';
 
 export interface ConnectorMetadataInput {
@@ -120,11 +117,6 @@ function identityFields(identity: ConnectorIdentity): Record<string, unknown> {
 export function buildServerInfo(input: ConnectorIdentityInput): { name: string; version: string } {
   const identity = resolveConnectorIdentity(input);
   return { name: identity.name, version: identity.version };
-}
-
-export interface ConnectorIdentityInput {
-  version: string;
-  tenantDisplayName?: string | null;
 }
 
 export function buildOAuthAuthorizationServerMetadata(

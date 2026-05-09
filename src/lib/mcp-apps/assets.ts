@@ -8,7 +8,16 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export const APP_ASSET_SOURCE_DIR = path.resolve(__dirname, '..', '..', 'apps');
-export const APP_ASSET_DIST_PATHS = Object.freeze(['dist/apps/app-shell.html']);
+export const APP_ASSET_DIST_PATHS = Object.freeze([
+  'dist/apps/app-shell.html',
+  'dist/apps/inbox-triage.html',
+  'dist/apps/calendar-brief.html',
+  'dist/apps/teams-digest.html',
+  'dist/apps/file-search.html',
+  'dist/apps/permissions-overview.html',
+  'dist/apps/connector-diagnostics.html',
+  'dist/apps/skill-editor.html',
+]);
 
 const APP_HOST = 'm365';
 const APP_SHELL_FILE = 'app-shell.html';
@@ -91,8 +100,10 @@ function appDefinitionForUri(uri: string): AppDefinition | undefined {
   return APP_DEFINITIONS.find((app) => app.uri === uri);
 }
 
-function readAppShell(): string {
+function readAppAsset(fileName: string): string {
   const candidates = [
+    path.resolve(__dirname, '..', '..', 'apps', fileName),
+    path.resolve(__dirname, '..', '..', '..', 'src', 'apps', fileName),
     path.resolve(__dirname, '..', '..', 'apps', APP_SHELL_FILE),
     path.resolve(__dirname, '..', '..', '..', 'src', 'apps', APP_SHELL_FILE),
   ];
@@ -101,7 +112,7 @@ function readAppShell(): string {
     if (fs.existsSync(candidate)) return fs.readFileSync(candidate, 'utf-8');
   }
 
-  throw new McpError(ErrorCode.InvalidParams, 'MCP app shell asset not found.', {
+  throw new McpError(ErrorCode.InvalidParams, 'MCP app asset not found.', {
     code: 'invalid_resource_uri',
   });
 }
@@ -140,9 +151,10 @@ function parseAppUri(raw: string): AppDefinition {
 }
 
 export async function readMcpAppResource(uri: string): Promise<ReadResourceResult> {
-  parseAppUri(uri);
-  const text = readAppShell();
-  const validation = validateAppAssetText(text, APP_SHELL_FILE);
+  const app = parseAppUri(uri);
+  const fileName = `${app.slug}.html`;
+  const text = readAppAsset(fileName);
+  const validation = validateAppAssetText(text, fileName);
   if (!validation.ok) {
     throw new McpError(ErrorCode.InternalError, validation.reason ?? 'Invalid MCP app asset.', {
       code: 'invalid_app_asset',
