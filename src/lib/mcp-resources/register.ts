@@ -259,16 +259,27 @@ function registerSkillTemplates(server: McpServer, deps: RegisterMcpResourcesDep
   }
 }
 
-const GRAPH_TEMPLATE_COMPLETIONS: Record<string, GraphCompletionProviderName> = Object.freeze({
-  'tenant-user-resource-template': 'user',
-  'tenant-group-resource-template': 'group',
-  'tenant-team-resource-template': 'team',
-  'tenant-team-channel-resource-template': 'channel',
-  'tenant-site-resource-template': 'site',
-  'tenant-drive-item-resource-template': 'drive',
-  'tenant-mail-message-resource-template': 'mailFolder',
-  'tenant-calendar-event-resource-template': 'event',
+const GRAPH_TEMPLATE_COMPLETIONS: Record<
+  string,
+  Record<string, GraphCompletionProviderName>
+> = Object.freeze({
+  'tenant-user-resource-template': { userId: 'user' },
+  'tenant-group-resource-template': { groupId: 'group' },
+  'tenant-team-resource-template': { teamId: 'team' },
+  'tenant-team-channel-resource-template': { teamId: 'team', channelId: 'channel' },
+  'tenant-site-resource-template': { siteId: 'site' },
+  'tenant-drive-item-resource-template': { driveId: 'drive', itemId: 'driveItem' },
+  'tenant-mail-message-resource-template': { messageId: 'message' },
+  'tenant-calendar-event-resource-template': { eventId: 'event' },
 });
+
+function completeGraphVariable(
+  provider: GraphCompletionProviderName,
+  deps: RegisterMcpResourcesDeps
+): (value: string, context?: Record<string, unknown>) => Promise<string[]> {
+  return (value, context) =>
+    completeGraphBacked(provider, value, { graphClient: deps.graphClient }, context);
+}
 
 function registerTemplates(server: McpServer, deps: RegisterMcpResourcesDeps): void {
   for (const scheme of ['m365', 'mcp'] as const) {
@@ -306,35 +317,20 @@ function registerTemplates(server: McpServer, deps: RegisterMcpResourcesDeps): v
   }
 
   for (const template of GRAPH_BACKED_RESOURCE_TEMPLATES) {
-    const provider = GRAPH_TEMPLATE_COMPLETIONS[template.name];
+    const providers = GRAPH_TEMPLATE_COMPLETIONS[template.name] ?? {};
+    const completions = Object.fromEntries(
+      Object.entries(providers).map(([name, provider]) => [
+        name,
+        completeGraphVariable(provider, deps),
+      ])
+    );
     registerTemplate(
       server,
       {
         ...template,
         complete: {
           tenantId: completeTenantId,
-          ...(provider
-            ? {
-                userId: (value, context) =>
-                  completeGraphBacked(provider, value, { graphClient: deps.graphClient }, context),
-                groupId: (value, context) =>
-                  completeGraphBacked(provider, value, { graphClient: deps.graphClient }, context),
-                teamId: (value, context) =>
-                  completeGraphBacked(provider, value, { graphClient: deps.graphClient }, context),
-                channelId: (value, context) =>
-                  completeGraphBacked(provider, value, { graphClient: deps.graphClient }, context),
-                siteId: (value, context) =>
-                  completeGraphBacked(provider, value, { graphClient: deps.graphClient }, context),
-                driveId: (value, context) =>
-                  completeGraphBacked(provider, value, { graphClient: deps.graphClient }, context),
-                itemId: (value, context) =>
-                  completeGraphBacked(provider, value, { graphClient: deps.graphClient }, context),
-                messageId: (value, context) =>
-                  completeGraphBacked(provider, value, { graphClient: deps.graphClient }, context),
-                eventId: (value, context) =>
-                  completeGraphBacked(provider, value, { graphClient: deps.graphClient }, context),
-              }
-            : {}),
+          ...completions,
         },
       },
       deps

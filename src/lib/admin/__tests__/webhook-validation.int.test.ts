@@ -274,7 +274,7 @@ describe('plan 04-07 Task 1 — webhook validation-token echo', () => {
     }
   });
 
-  it('Test 5: malformed tenantId — non-GUID path segment → 404 from loadTenant regex', async () => {
+  it('Test 5: malformed tenantId — non-GUID path segment with no tenant row returns 404', async () => {
     const pool = await makePool();
     const redis = new MemoryRedisFacade();
     const tenantPool = makeTenantPoolStub(crypto.randomBytes(32));

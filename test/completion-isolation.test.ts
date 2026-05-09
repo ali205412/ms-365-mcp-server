@@ -58,7 +58,7 @@ describe('Graph-backed completion isolation', () => {
     vi.clearAllMocks();
   });
 
-  it('does not reuse cached results across tenants, sessions, or accounts', async () => {
+  it('reuses cached results across request IDs but not tenants or accounts', async () => {
     const client = graphClient('tenant');
 
     const a1 = await requestContext.run(ctx(), () =>
@@ -81,7 +81,7 @@ describe('Graph-backed completion isolation', () => {
     expect(b).toEqual(a1);
     expect(sessionB).toEqual(a1);
     expect(accountB).toEqual(a1);
-    expect(client.graphRequest).toHaveBeenCalledTimes(4);
+    expect(client.graphRequest).toHaveBeenCalledTimes(3);
   });
 
   it('fails closed when the backing tool or scope is disabled', async () => {

@@ -570,6 +570,8 @@ class MicrosoftGraphServer {
       })
     );
 
+    const tenantOauthRouteRateLimit = createHttpRouteRateLimit();
+
     // Per-tenant OAuth discovery — /.well-known/* URLs scoped to a tenant
     // segment so downstream clients bind the right issuer. publicBase
     // (MS365_MCP_PUBLIC_URL) is the canonical external origin for all OAuth
@@ -617,45 +619,63 @@ class MicrosoftGraphServer {
       });
 
     // OIDC-discovery shape (well-known after path).
-    app.get('/t/:tenantId/.well-known/oauth-authorization-server', async (req, res) => {
-      const tenant = (req as Request & { tenant?: TenantRow }).tenant;
-      if (!tenant) {
-        res.status(404).json({ error: 'tenant_not_found' });
-        return;
+    app.get(
+      '/t/:tenantId/.well-known/oauth-authorization-server',
+      tenantOauthRouteRateLimit,
+      async (req, res) => {
+        const tenant = (req as Request & { tenant?: TenantRow }).tenant;
+        if (!tenant) {
+          res.status(404).json({ error: 'tenant_not_found' });
+          return;
+        }
+        res.json(buildAuthServerMetadata(tenant, req));
       }
-      res.json(buildAuthServerMetadata(tenant, req));
-    });
+    );
 
-    app.get('/t/:tenantId/.well-known/oauth-protected-resource', async (req, res) => {
-      const tenant = (req as Request & { tenant?: TenantRow }).tenant;
-      if (!tenant) {
-        res.status(404).json({ error: 'tenant_not_found' });
-        return;
+    app.get(
+      '/t/:tenantId/.well-known/oauth-protected-resource',
+      tenantOauthRouteRateLimit,
+      async (req, res) => {
+        const tenant = (req as Request & { tenant?: TenantRow }).tenant;
+        if (!tenant) {
+          res.status(404).json({ error: 'tenant_not_found' });
+          return;
+        }
+        res.json(buildProtectedResourceMetadata(tenant, req));
       }
-      res.json(buildProtectedResourceMetadata(tenant, req));
-    });
+    );
 
     // RFC 8414 shape (well-known between host and path). These routes do NOT
     // go through the `/t/:tenantId/*` prefix where loadTenant is mounted at
     // line 1134, so we apply loadTenant inline. Both routes serve the same
     // body as the OIDC-discovery-shape variants above.
-    app.get('/.well-known/oauth-authorization-server/t/:tenantId', loadTenant, async (req, res) => {
-      const tenant = (req as Request & { tenant?: TenantRow }).tenant;
-      if (!tenant) {
-        res.status(404).json({ error: 'tenant_not_found' });
-        return;
+    app.get(
+      '/.well-known/oauth-authorization-server/t/:tenantId',
+      tenantOauthRouteRateLimit,
+      loadTenant,
+      async (req, res) => {
+        const tenant = (req as Request & { tenant?: TenantRow }).tenant;
+        if (!tenant) {
+          res.status(404).json({ error: 'tenant_not_found' });
+          return;
+        }
+        res.json(buildAuthServerMetadata(tenant, req));
       }
-      res.json(buildAuthServerMetadata(tenant, req));
-    });
+    );
 
-    app.get('/.well-known/oauth-protected-resource/t/:tenantId', loadTenant, async (req, res) => {
-      const tenant = (req as Request & { tenant?: TenantRow }).tenant;
-      if (!tenant) {
-        res.status(404).json({ error: 'tenant_not_found' });
-        return;
+    app.get(
+      '/.well-known/oauth-protected-resource/t/:tenantId',
+      tenantOauthRouteRateLimit,
+      loadTenant,
+      async (req, res) => {
+        const tenant = (req as Request & { tenant?: TenantRow }).tenant;
+        if (!tenant) {
+          res.status(404).json({ error: 'tenant_not_found' });
+          return;
+        }
+        res.json(buildProtectedResourceMetadata(tenant, req));
       }
-      res.json(buildProtectedResourceMetadata(tenant, req));
-    });
+    );
 
     app.get('/t/:tenantId/.well-known/mcp-connector', async (req, res) => {
       const tenant = (req as Request & { tenant?: TenantRow }).tenant;
@@ -678,6 +698,7 @@ class MicrosoftGraphServer {
     // oauth.token.exchange audit rows via writeAuditStandalone.
     app.get(
       '/t/:tenantId/authorize',
+      tenantOauthRouteRateLimit,
       createAuthorizeHandler({
         pkceStore: this.pkceStore,
         pgPool: pg,
@@ -686,6 +707,7 @@ class MicrosoftGraphServer {
     );
     app.post(
       '/t/:tenantId/token',
+      tenantOauthRouteRateLimit,
       createTenantTokenHandler({
         pkceStore: this.pkceStore,
         tenantPool,

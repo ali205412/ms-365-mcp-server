@@ -68,6 +68,8 @@ export type GraphCompletionProviderName =
   | 'channel'
   | 'site'
   | 'drive'
+  | 'driveItem'
+  | 'message'
   | 'mailFolder'
   | 'calendar'
   | 'event';
@@ -106,10 +108,6 @@ function requestOwnerSubject(deps: CompletionProviderDeps): string | undefined {
 function requestAccountId(): string | undefined {
   const ctx = getRequestTokens();
   return ctx?.authClientId ?? ctx?.clientAccessToken;
-}
-
-function requestSessionId(): string | undefined {
-  return getRequestTokens()?.requestId;
 }
 
 function requestAllowedScopes(): readonly string[] {
@@ -285,6 +283,18 @@ function graphSearchPath(path: string, query: string, property = 'displayName'):
   return `${path}&$search=${encodeURIComponent(search)}`;
 }
 
+function contextString(
+  context: Record<string, unknown> | undefined,
+  keys: readonly string[]
+): string | undefined {
+  const direct = firstString(context ?? {}, keys);
+  if (direct) return direct;
+  const args = context?.arguments;
+  return typeof args === 'object' && args !== null
+    ? firstString(args as Record<string, unknown>, keys)
+    : undefined;
+}
+
 const GRAPH_PROVIDERS: Readonly<Record<GraphCompletionProviderName, GraphProviderDefinition>> = {
   user: {
     name: 'user',
@@ -319,7 +329,7 @@ const GRAPH_PROVIDERS: Readonly<Record<GraphCompletionProviderName, GraphProvide
     toolName: 'list-team-channels',
     requiredId: 'teamId',
     path: (query, context) => {
-      const teamId = firstString(context ?? {}, ['teamId', 'team-id']);
+      const teamId = contextString(context, ['teamId', 'team-id']);
       if (!teamId) return null;
       return appendFilter(
         topSelect(`/teams/${encodeURIComponent(teamId)}/channels`, ['id', 'displayName']),
@@ -344,6 +354,30 @@ const GRAPH_PROVIDERS: Readonly<Record<GraphCompletionProviderName, GraphProvide
         query ? `startswith(name,'${encodeODataString(query)}')` : undefined
       ),
     labelKeys: ['name', 'id'],
+  },
+  driveItem: {
+    name: 'driveItem',
+    toolName: 'get-drive-item',
+    requiredId: 'driveId',
+    path: (query, context) => {
+      const driveId = contextString(context, ['driveId', 'drive-id']);
+      if (!driveId) return null;
+      return appendFilter(
+        topSelect(`/drives/${encodeURIComponent(driveId)}/root/children`, ['id', 'name', 'webUrl']),
+        query ? `startswith(name,'${encodeODataString(query)}')` : undefined
+      );
+    },
+    labelKeys: ['name', 'webUrl', 'id'],
+  },
+  message: {
+    name: 'message',
+    toolName: 'list-mail-messages',
+    path: (query) =>
+      appendFilter(
+        topSelect('/me/messages', ['id', 'subject', 'from', 'receivedDateTime']),
+        query ? `contains(subject,'${encodeODataString(query)}')` : undefined
+      ),
+    labelKeys: ['subject', 'id'],
   },
   mailFolder: {
     name: 'mailFolder',
@@ -416,7 +450,6 @@ export async function completeGraphBacked(
 
   const key = completionCacheKey({
     tenantId: tenant.id,
-    sessionId: requestSessionId(),
     accountId: requestAccountId(),
     provider,
     query,

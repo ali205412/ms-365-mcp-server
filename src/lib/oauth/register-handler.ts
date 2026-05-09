@@ -7,6 +7,10 @@ import { resolveConnectorIdentity } from '../connector-identity/metadata.js';
 export function createRegisterHandler(policy: RedirectUriPolicy) {
   return async (req: Request, res: Response): Promise<void> => {
     const body = (req.body as Record<string, unknown>) ?? {};
+    const requestedGrantTypes = Array.isArray(body.grant_types) ? body.grant_types : [];
+    const grantTypes = requestedGrantTypes.filter(
+      (grant): grant is string => grant === 'authorization_code'
+    );
 
     logger.info(
       {
@@ -43,7 +47,7 @@ export function createRegisterHandler(policy: RedirectUriPolicy) {
       client_id: clientId,
       client_id_issued_at: Math.floor(Date.now() / 1000),
       redirect_uris: redirectUris,
-      grant_types: body.grant_types || ['authorization_code', 'refresh_token'],
+      grant_types: grantTypes.length ? grantTypes : ['authorization_code'],
       response_types: body.response_types || ['code'],
       token_endpoint_auth_method: body.token_endpoint_auth_method || 'none',
       client_name:

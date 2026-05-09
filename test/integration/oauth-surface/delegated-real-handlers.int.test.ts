@@ -262,7 +262,7 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
     );
   });
 
-  it('/token rejects missing verifier and PKCE misses before MSAL', async () => {
+  it('/token rejects missing verifier, missing code, and PKCE misses before MSAL', async () => {
     harness = await startApp({});
 
     const missingVerifier = await fetch(`${harness.url}/token`, {
@@ -271,6 +271,23 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
       body: new URLSearchParams({ grant_type: 'authorization_code', code: 'auth-code-1' }),
     });
     expect(missingVerifier.status).toBe(400);
+
+    const missingCodePkce = newPkce();
+    const missingCode = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code_verifier: missingCodePkce.verifier,
+      }),
+    });
+    expect(missingCode.status).toBe(400);
+    const missingCodeBody = (await missingCode.json()) as {
+      error: string;
+      error_description: string;
+    };
+    expect(missingCodeBody.error).toBe('invalid_request');
+    expect(missingCodeBody.error_description).toBe('code required');
 
     const pkce = newPkce();
     const pkceMiss = await fetch(`${harness.url}/token`, {

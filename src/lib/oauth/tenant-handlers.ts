@@ -257,6 +257,16 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
         .json({ error: 'invalid_request', error_description: 'code_verifier required' });
       return;
     }
+    if (typeof body?.code !== 'string' || body.code.length === 0) {
+      emitTokenAudit(
+        tenant.id,
+        'failure',
+        { error: 'invalid_request', reason: 'code required' },
+        req
+      );
+      res.status(400).json({ error: 'invalid_request', error_description: 'code required' });
+      return;
+    }
 
     const clientCodeChallenge = crypto
       .createHash('sha256')

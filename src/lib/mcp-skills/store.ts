@@ -169,8 +169,7 @@ export async function getTenantSkillRecord(
     `SELECT id, tenant_id, owner_subject, name, title, description, frontmatter, body,
             arguments, visibility, source, source_skill_name, version, enabled, created_at, updated_at
      FROM tenant_skills
-     WHERE tenant_id = $1 AND name = $2
-     ORDER BY owner_subject NULLS FIRST
+     WHERE tenant_id = $1 AND name = $2 AND owner_subject IS NULL
      LIMIT 1`,
     [tid, parsedName]
   );
@@ -184,12 +183,17 @@ export async function getVisibleSkillRecord(
 ): Promise<SkillRecord | null> {
   const tid = TenantIdZod.parse(tenantId);
   const parsedName = SkillNameZod.parse(name);
-  const visible = visibleSkillWhereClause(1, ownerSubject);
+  const owner = OwnerSubjectZod.parse(ownerSubject);
+  const visible = visibleSkillWhereClause(1, owner);
+  const ownerPrecedence = owner
+    ? 'ORDER BY CASE WHEN owner_subject = $2 THEN 0 ELSE 1 END, owner_subject NULLS LAST'
+    : 'ORDER BY owner_subject NULLS LAST';
   const result = await getPool().query<TenantSkillRow>(
     `SELECT id, tenant_id, owner_subject, name, title, description, frontmatter, body,
             arguments, visibility, source, source_skill_name, version, enabled, created_at, updated_at
      FROM tenant_skills
      ${visible.clause} AND name = $${2 + visible.params.length}
+     ${ownerPrecedence}
      LIMIT 1`,
     [tid, ...visible.params, parsedName]
   );
@@ -203,12 +207,17 @@ export async function getAccessibleSkillRecord(
 ): Promise<SkillRecord | null> {
   const tid = TenantIdZod.parse(tenantId);
   const parsedName = SkillNameZod.parse(name);
-  const accessible = accessibleSkillWhereClause(1, ownerSubject);
+  const owner = OwnerSubjectZod.parse(ownerSubject);
+  const accessible = accessibleSkillWhereClause(1, owner);
+  const ownerPrecedence = owner
+    ? 'ORDER BY CASE WHEN owner_subject = $2 THEN 0 ELSE 1 END, owner_subject NULLS LAST'
+    : 'ORDER BY owner_subject NULLS LAST';
   const result = await getPool().query<TenantSkillRow>(
     `SELECT id, tenant_id, owner_subject, name, title, description, frontmatter, body,
             arguments, visibility, source, source_skill_name, version, enabled, created_at, updated_at
      FROM tenant_skills
      ${accessible.clause} AND name = $${2 + accessible.params.length}
+     ${ownerPrecedence}
      LIMIT 1`,
     [tid, ...accessible.params, parsedName]
   );

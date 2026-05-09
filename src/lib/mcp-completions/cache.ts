@@ -5,7 +5,6 @@ export const COMPLETION_CACHE_TTL_MS = 30_000;
 
 export interface CompletionCacheKeyInput {
   tenantId: string;
-  sessionId?: string;
   accountId?: string;
   provider: string;
   query: string;
@@ -44,7 +43,6 @@ function capabilityProfileHash(profile?: ClientCapabilityProfile): string {
 export function completionCacheKey(input: CompletionCacheKeyInput): string {
   return [
     input.tenantId,
-    input.sessionId ?? 'no-session',
     input.accountId ?? 'no-account',
     input.provider,
     input.query.trim().toLowerCase(),

@@ -4,11 +4,6 @@ export interface RegisterMcpCompletionsResult {
   registered: true;
 }
 
-type CompletionCapableMcpServer = {
-  setCompletionRequestHandler?: () => void;
-};
-
-export function registerMcpCompletions(server: McpServer): RegisterMcpCompletionsResult {
-  (server as unknown as CompletionCapableMcpServer).setCompletionRequestHandler?.();
+export function registerMcpCompletions(_server: McpServer): RegisterMcpCompletionsResult {
   return { registered: true };
 }

@@ -68,6 +68,20 @@ export function createTokenHandler(config: TokenHandlerConfig) {
       }
 
       if (body.grant_type === 'authorization_code') {
+        if (typeof body.code !== 'string' || body.code.length === 0) {
+          res.status(400).json({
+            error: 'invalid_request',
+            error_description: 'code parameter is required',
+          });
+          return;
+        }
+        if (typeof body.redirect_uri !== 'string' || body.redirect_uri.length === 0) {
+          res.status(400).json({
+            error: 'invalid_request',
+            error_description: 'redirect_uri parameter is required',
+          });
+          return;
+        }
         const tenantId = secrets.tenantId || 'common';
         const clientId = secrets.clientId;
         const clientSecret = secrets.clientSecret;

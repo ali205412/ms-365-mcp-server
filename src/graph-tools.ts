@@ -615,6 +615,7 @@ async function executeGraphToolInner(
           'confirmationId',
           '_meta',
           '_sendNotification',
+          '_signal',
         ].includes(paramName)
       ) {
         continue;
@@ -787,10 +788,16 @@ async function executeGraphToolInner(
       excludeResponse?: boolean;
       queryParams?: Record<string, string>;
       accessToken?: string;
+      signal?: AbortSignal;
     } = {
       method: tool.method.toUpperCase(),
       headers,
     };
+
+    const requestSignal = params._signal instanceof AbortSignal ? params._signal : undefined;
+    if (requestSignal) {
+      options.signal = requestSignal;
+    }
 
     if (options.method !== 'GET' && body) {
       if (config?.contentType === 'text/html') {
@@ -887,6 +894,7 @@ async function executeGraphToolInner(
         sendNotification,
         capabilityProfile: ctx?.capabilityProfile,
         operationKey,
+        signal: requestSignal,
       });
       unregisterOperation(operationKey);
       firstPage.value = combined.value;
@@ -1220,6 +1228,7 @@ export function registerGraphTools(
               _meta: (extra as { _meta?: unknown } | undefined)?._meta,
               _sendNotification: (extra as { sendNotification?: unknown } | undefined)
                 ?.sendNotification,
+              _signal: (extra as { signal?: unknown } | undefined)?.signal,
             },
             authManager
           )
