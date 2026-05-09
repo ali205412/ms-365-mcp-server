@@ -1,4 +1,4 @@
-import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, realpath, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
@@ -88,12 +88,20 @@ async function assertRealPathInsideRoot(root: string, target: string): Promise<v
 export async function readSkillPackFromRoot(input: SkillPackRootFile): Promise<unknown> {
   const { root, target } = resolveInsideRoot(input);
   await assertRealPathInsideRoot(root, target);
-  const fileStats = await stat(target);
-  if (fileStats.size > maxRootFileBytes()) {
-    throw new Error('Skill pack root file exceeds maximum allowed size.');
+  const file = await open(target, 'r');
+  try {
+    const fileStats = await file.stat();
+    if (fileStats.size > maxRootFileBytes()) {
+      throw new Error('Skill pack root file exceeds maximum allowed size.');
+    }
+    const text = await file.readFile('utf8');
+    if (Buffer.byteLength(text, 'utf8') > maxRootFileBytes()) {
+      throw new Error('Skill pack root file exceeds maximum allowed size.');
+    }
+    return JSON.parse(text) as unknown;
+  } finally {
+    await file.close();
   }
-  const text = await readFile(target, 'utf8');
-  return JSON.parse(text) as unknown;
 }
 
 export async function writeSkillPackToRoot(

@@ -1022,6 +1022,7 @@ class MicrosoftGraphServer {
       const oauthProvider = new MicrosoftOAuthProvider(this.authManager, this.secrets!);
 
       // OAuth Authorization Server Discovery
+      // codeql[js/missing-rate-limiting]: public metadata route returns static discovery data and performs no authentication or state change.
       app.get('/.well-known/oauth-authorization-server', async (req, res) => {
         const protocol = req.secure ? 'https' : 'http';
         const requestOrigin = `${protocol}://${req.get('host')}`;
@@ -1040,6 +1041,7 @@ class MicrosoftGraphServer {
       });
 
       // OAuth Protected Resource Discovery
+      // codeql[js/missing-rate-limiting]: public metadata route returns static discovery data and performs no authentication or state change.
       app.get('/.well-known/oauth-protected-resource', async (req, res) => {
         const protocol = req.secure ? 'https' : 'http';
         const requestOrigin = `${protocol}://${req.get('host')}`;

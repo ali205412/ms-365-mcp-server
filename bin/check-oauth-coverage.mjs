@@ -12,7 +12,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const OAUTH_LINE_RANGES = [
+const HANDLER_LINE_RANGES = [
   { file: 'src/lib/oauth/register-handler.ts', fn: 'createRegisterHandler', start: 7, end: 53 },
   { file: 'src/lib/oauth/token-handler.ts', fn: 'createTokenHandler', start: 27, end: 174 },
   { file: 'src/lib/oauth/tenant-handlers.ts', fn: 'createAuthorizeHandler', start: 39, end: 173 },
@@ -24,8 +24,8 @@ const OAUTH_LINE_RANGES = [
   },
   { file: 'src/server.ts', fn: 'wellKnownAuthServerTenant', start: 620, end: 627 },
   { file: 'src/server.ts', fn: 'wellKnownProtectedResourceTenant', start: 629, end: 636 },
-  { file: 'src/server.ts', fn: 'wellKnownAuthServer', start: 1025, end: 1040 },
-  { file: 'src/server.ts', fn: 'wellKnownProtectedResource', start: 1043, end: 1057 },
+  { file: 'src/server.ts', fn: 'wellKnownAuthServer', start: 1026, end: 1041 },
+  { file: 'src/server.ts', fn: 'wellKnownProtectedResource', start: 1045, end: 1059 },
 ];
 
 const COVERAGE_THRESHOLD_PERCENT = Number.parseFloat(
@@ -51,7 +51,7 @@ function matchesRangeMarker(range, window) {
 
 function verifyLineRanges() {
   const drift = [];
-  for (const range of OAUTH_LINE_RANGES) {
+  for (const range of HANDLER_LINE_RANGES) {
     const filePath = path.resolve(__dirname, '..', range.file);
     let lines;
     try {
@@ -74,12 +74,12 @@ function verifyLineRanges() {
   }
 
   if (drift.length > 0) {
-    console.error('check-oauth-coverage: OAUTH_LINE_RANGES drifted from source:');
+    console.error('check-oauth-coverage: HANDLER_LINE_RANGES drifted from source:');
     for (const d of drift) {
       console.error(`  ${d.fn} in ${d.file} at start=${d.start} — marker not found`);
       console.error(`    window:\n${d.window}`);
     }
-    console.error('Re-run grep for handler function names/routes and update OAUTH_LINE_RANGES.');
+    console.error('Re-run grep for handler function names/routes and update HANDLER_LINE_RANGES.');
     return 3;
   }
   return 0;
@@ -103,11 +103,11 @@ export function main() {
     return 2;
   }
 
-  const perFn = Object.fromEntries(OAUTH_LINE_RANGES.map((r) => [r.fn, { hit: 0, total: 0 }]));
+  const perFn = Object.fromEntries(HANDLER_LINE_RANGES.map((r) => [r.fn, { hit: 0, total: 0 }]));
   let hit = 0;
   let total = 0;
 
-  for (const range of OAUTH_LINE_RANGES) {
+  for (const range of HANDLER_LINE_RANGES) {
     const fileKey = findCoverageKey(cov, range.file);
     if (!fileKey) {
       console.error(`check-oauth-coverage: ${range.file} not found in coverage-final.json`);
