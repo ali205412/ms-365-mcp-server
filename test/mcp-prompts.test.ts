@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('../src/lib/mcp-completions/handlers.js', () => ({
   completeAccount: () => [],
   completeAlias: () => [],
+  completeBookmark: () => [],
+  completeFactScope: () => [],
+  completeRecipeName: () => [],
+  completeSkillName: () => [],
   completeTenantId: () => [],
 }));
 
@@ -106,12 +110,12 @@ describe('MCP prompt registration with skills', () => {
   it('uses tenant and owner predicates for visible skill queries', () => {
     expect(visibleSkillWhereClause(1, 'user-a')).toEqual({
       clause:
-        "WHERE tenant_id = $1 AND enabled = true AND (visibility IN ('tenant', 'admin', 'builtin-copy') OR (visibility = 'user' AND owner_subject = $2))",
+        "WHERE tenant_id = $1 AND enabled = true AND ((visibility IN ('tenant', 'admin', 'builtin-copy') AND owner_subject IS NULL) OR (visibility = 'user' AND owner_subject = $2))",
       params: ['user-a'],
     });
     expect(visibleSkillWhereClause(1)).toEqual({
       clause:
-        "WHERE tenant_id = $1 AND enabled = true AND visibility IN ('tenant', 'admin', 'builtin-copy')",
+        "WHERE tenant_id = $1 AND enabled = true AND visibility IN ('tenant', 'admin', 'builtin-copy') AND owner_subject IS NULL",
       params: [],
     });
   });

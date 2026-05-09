@@ -1,7 +1,7 @@
 /**
  * Dynamic-registration redirect_uri validation (plan 06-05, ROADMAP SC#4).
  *
- * Verifies src/server.ts createRegisterHandler rejects:
+ * Verifies createRegisterHandler rejects:
  *   - javascript: scheme
  *   - data: scheme
  *   - missing host (https://)
@@ -43,7 +43,7 @@ describe('plan 06-05 — dynamic /register redirect_uri validation (SC#4)', () =
     publicUrlHost: string | null;
   }): Promise<void> {
     vi.resetModules();
-    const { createRegisterHandler } = await import('../../../src/server.js');
+    const { createRegisterHandler } = await import('../../../src/lib/oauth/register-handler.js');
     const app = express();
     app.use(express.json());
     app.post('/register', createRegisterHandler(policy));

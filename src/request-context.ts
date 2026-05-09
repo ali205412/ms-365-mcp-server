@@ -79,6 +79,8 @@ export interface RequestContext {
    * persisted to Postgres.
    */
   capabilityProfile?: ClientCapabilityProfile;
+  /** Authenticated user/session owner for user-scoped editable skills. */
+  ownerSubject?: string;
 }
 
 const REQUEST_CONTEXT_KEY = Symbol.for('ms-365-mcp-server.requestContext');
@@ -94,6 +96,11 @@ requestContextGlobal[REQUEST_CONTEXT_KEY] = requestContext;
 
 export function getRequestTokens(): RequestContext | undefined {
   return requestContext.getStore();
+}
+
+export function getRequestOwnerSubject(): string | undefined {
+  const value = requestContext.getStore()?.ownerSubject;
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
 }
 
 export function getRequestId(): string | undefined {

@@ -61,23 +61,35 @@ describe('tenant skills schema migration', () => {
       VALUES ('11111111-1111-4111-8111-111111111111', 'delegated', 'tenant-a', 'client-a', 'entra-a', 'global')
     `);
     db.public.none(`
-      INSERT INTO tenant_skills (tenant_id, owner_subject, name, title, description, body)
-      VALUES ('11111111-1111-4111-8111-111111111111', 'user-a', 'triage', 'Triage', 'desc', 'body')
+      INSERT INTO tenant_skills (id, tenant_id, owner_subject, name, title, description, body)
+      VALUES ('00000000-0000-4000-8000-000000000002', '11111111-1111-4111-8111-111111111111', 'user-a', 'triage', 'Triage', 'desc', 'body')
     `);
     expect(() =>
       db.public.none(`
-        INSERT INTO tenant_skills (tenant_id, owner_subject, name, title, description, body)
-        VALUES ('11111111-1111-4111-8111-111111111111', 'user-a', 'triage', 'Triage', 'desc', 'body')
+        INSERT INTO tenant_skills (id, tenant_id, owner_subject, name, title, description, body)
+        VALUES ('00000000-0000-4000-8000-000000000003', '11111111-1111-4111-8111-111111111111', 'user-a', 'triage', 'Triage', 'desc', 'body')
+      `)
+    ).toThrow();
+    db.public.none(`
+      INSERT INTO tenant_skills (id, tenant_id, owner_subject, name, title, description, body)
+      VALUES ('00000000-0000-4000-8000-000000000004', '11111111-1111-4111-8111-111111111111', NULL, 'tenant-triage', 'Triage', 'desc', 'body')
+    `);
+    expect(() =>
+      db.public.none(`
+        INSERT INTO tenant_skills (id, tenant_id, owner_subject, name, title, description, body)
+        VALUES ('00000000-0000-4000-8000-000000000005', '11111111-1111-4111-8111-111111111111', NULL, 'tenant-triage', 'Triage', 'desc', 'body')
       `)
     ).toThrow();
     expect(() =>
       db.public.none(`
-        INSERT INTO tenant_skills (tenant_id, owner_subject, name, title, description, body)
-        VALUES ('22222222-2222-4222-8222-222222222222', 'user-a', 'triage', 'Triage', 'desc', 'body')
+        INSERT INTO tenant_skills (id, tenant_id, owner_subject, name, title, description, body)
+        VALUES ('00000000-0000-4000-8000-000000000006', '22222222-2222-4222-8222-222222222222', 'user-a', 'triage', 'Triage', 'desc', 'body')
       `)
     ).toThrow();
 
     const migrationSql = upSql(migrationPath);
+    expect(migrationSql).toContain('idx_tenant_skills_unique_tenant_name');
+    expect(migrationSql).toContain('idx_tenant_skills_unique_owner_name');
     expect(migrationSql).toContain('idx_tenant_skills_tenant_enabled');
     expect(migrationSql).toContain('idx_tenant_skills_tenant_visibility');
   });

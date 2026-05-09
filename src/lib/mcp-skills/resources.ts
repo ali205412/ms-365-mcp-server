@@ -66,9 +66,13 @@ function skillMarkdown(skill: SkillRecord): string {
   return `---\n${frontmatter}\n---\n${skill.body}`;
 }
 
-async function requireSkill(tenantId: string, name: string): Promise<SkillRecord> {
+async function requireSkill(
+  tenantId: string,
+  name: string,
+  ownerSubject?: string
+): Promise<SkillRecord> {
   const parsedName = SkillNameZod.parse(name);
-  const skill = await getVisibleSkillRecord(tenantId, parsedName);
+  const skill = await getVisibleSkillRecord(tenantId, parsedName, ownerSubject);
   if (!skill) {
     throw new McpError(ErrorCode.InvalidParams, `Skill resource not found: ${name}`, {
       code: 'invalid_resource_uri',
@@ -79,27 +83,31 @@ async function requireSkill(tenantId: string, name: string): Promise<SkillRecord
 
 export async function readSkillResource(
   tenantId: string,
-  descriptor: SkillResourceDescriptor
+  descriptor: SkillResourceDescriptor,
+  ownerSubject?: string
 ): Promise<ReadResourceResult> {
   const canonical = canonicalSkillUri(tenantId, descriptor);
   switch (descriptor.view) {
     case 'skills/index': {
-      const skills = await listVisibleSkillRecords(tenantId);
+      const skills = await listVisibleSkillRecords(tenantId, ownerSubject);
       return jsonResult(canonical, {
         uri: canonical,
         skills: skills.map((skill) => publicSkill(skill)),
       });
     }
     case 'skills/markdown': {
-      const skill = await requireSkill(tenantId, descriptor.name ?? '');
+      const skill = await requireSkill(tenantId, descriptor.name ?? '', ownerSubject);
       return textResult(canonical, SKILL_MARKDOWN_MIME_TYPE, skillMarkdown(skill));
     }
     case 'skills/schema': {
-      const skill = await requireSkill(tenantId, descriptor.name ?? '');
+      const skill = await requireSkill(tenantId, descriptor.name ?? '', ownerSubject);
       return jsonResult(canonical, publicSkill(skill));
     }
     case 'skill-pack': {
-      const pack = await exportSkillPack(tenantId, { packName: descriptor.packName ?? 'default' });
+      const pack = await exportSkillPack(tenantId, {
+        packName: descriptor.packName ?? 'default',
+        ownerSubject: ownerSubject,
+      });
       return jsonResult(canonical, {
         uri: canonical,
         ...pack,

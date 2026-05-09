@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { api } from '../../generated/client.js';
 import {
   getFlow,
+  getRequestOwnerSubject,
   getRequestTenant,
   getRequestTokens,
   type AuthFlow,
@@ -98,7 +99,7 @@ function bound(values: readonly string[]): string[] {
 }
 
 function requestOwnerSubject(deps: CompletionProviderDeps): string | undefined {
-  const raw = deps.ownerSubject ?? getRequestTokens()?.authClientId;
+  const raw = deps.ownerSubject ?? getRequestOwnerSubject();
   return typeof raw === 'string' && raw.length > 0 ? raw : undefined;
 }
 

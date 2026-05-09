@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import logger from '../../logger.js';
-import { getRequestTenant } from '../../request-context.js';
+import { getRequestOwnerSubject, getRequestTenant } from '../../request-context.js';
 import {
   renderSkillTemplate,
   SkillArgumentZod,
@@ -18,9 +18,10 @@ import {
 import {
   disableTenantSkill,
   forkBuiltinSkillInput,
-  getTenantSkillRecord,
+  getAccessibleSkillRecord,
   getVisibleSkillRecord,
   listTenantSkillRecords,
+  listVisibleSkillRecords,
   saveTenantSkill,
   skillInputToPrompt,
   type SkillRecord,
@@ -60,7 +61,6 @@ const SaveSkillZod = z
     sourceSkillName: SkillNameZod.optional(),
     version: z.number().int().min(1).default(1),
     enabled: z.boolean().default(true),
-    ownerSubject: z.string().trim().min(1).max(512).optional(),
     published: z.boolean().default(true),
   })
   .strict();
@@ -71,7 +71,6 @@ const ImportSkillPackInputZod = z
     builtInPackId: z.string().trim().min(1).max(64).optional(),
     rootFile: SkillPackRootFileZod.optional(),
     conflictStrategy: SkillPackConflictStrategyZod.default('skip'),
-    ownerSubject: z.string().trim().min(1).max(512).optional(),
   })
   .strict();
 const ImportSkillPackZod = ImportSkillPackInputZod.refine(
@@ -85,7 +84,6 @@ const ExportSkillPackZod = z
   .object({
     names: z.array(SkillNameZod).optional(),
     packName: z.string().trim().min(1).max(64).optional(),
-    ownerSubject: z.string().trim().min(1).max(512).optional(),
     includeMemory: z.boolean().default(true),
     rootFile: SkillPackRootFileZod.optional(),
   })
@@ -194,11 +192,24 @@ function result(toolName: string, data: Record<string, unknown>, isError = false
 async function visibleSkillByName(
   tenantId: string,
   name: string,
-  deps: RegisterSkillToolsDeps
+  deps: RegisterSkillToolsDeps,
+  ownerSubject?: string
 ): Promise<SkillRecord | null> {
-  const tenantRecord = await getTenantSkillRecord(tenantId, name);
-  if (tenantRecord) return tenantRecord.enabled ? tenantRecord : null;
+  const tenantRecord = await getVisibleSkillRecord(tenantId, name, ownerSubject);
+  if (tenantRecord) return tenantRecord;
   return builtInSkills(deps).find((skill) => skill.name === name) ?? null;
+}
+
+async function editableSkillByName(
+  tenantId: string,
+  name: string,
+  ownerSubject?: string
+): Promise<SkillRecord | null> {
+  return getAccessibleSkillRecord(tenantId, name, ownerSubject);
+}
+
+function ownerForSkillInput(visibility: string): string | undefined {
+  return visibility === 'user' ? getRequestOwnerSubject() : undefined;
 }
 
 export function registerSkillTools(server: McpServer, deps: RegisterSkillToolsDeps): void {
@@ -213,10 +224,18 @@ export function registerSkillTools(server: McpServer, deps: RegisterSkillToolsDe
         if (!parsed.success) return result('list-skills', { error: 'invalid_skill_filter' }, true);
         const tenant = requireTenant();
         if (!tenant) return result('list-skills', { error: 'tenant_required' }, true);
+        const ownerSubject = getRequestOwnerSubject();
         const allRows = await listTenantSkillRecords(tenant.id);
-        const rows = allRows.filter((skill) => skill.enabled);
+        const rows = await listVisibleSkillRecords(tenant.id, ownerSubject);
         const suppressed = new Set(
-          allRows.filter((skill) => !skill.enabled).map((skill) => skill.name)
+          allRows
+            .filter(
+              (skill) =>
+                !skill.enabled &&
+                skill.ownerSubject === null &&
+                ['tenant', 'admin', 'builtin-copy'].includes(skill.visibility)
+            )
+            .map((skill) => skill.name)
         );
         const merged = new Map<string, SkillRecord>();
         for (const skill of builtInSkills(deps)) {
@@ -238,7 +257,12 @@ export function registerSkillTools(server: McpServer, deps: RegisterSkillToolsDe
       if (!tenant) return result('get-skill', { error: 'tenant_required' }, true);
       const parsed = SkillLookupZod.safeParse(args);
       if (!parsed.success) return result('get-skill', { error: 'invalid_skill_name' }, true);
-      const skill = await visibleSkillByName(tenant.id, parsed.data.name, deps);
+      const skill = await visibleSkillByName(
+        tenant.id,
+        parsed.data.name,
+        deps,
+        getRequestOwnerSubject()
+      );
       if (!skill) return result('get-skill', { error: 'skill_not_found' }, true);
       return result('get-skill', { skill: { ...toPublicSkill(skill), body: skill.body } });
     }
@@ -256,8 +280,11 @@ export function registerSkillTools(server: McpServer, deps: RegisterSkillToolsDe
       if (!parsed.success) {
         return result('save-skill', { error: 'invalid_skill', details: parsed.error.issues }, true);
       }
-      const { published, ...skillInputWithOwner } = parsed.data;
-      const { ownerSubject, ...skillInput } = skillInputWithOwner;
+      const { published, ...skillInput } = parsed.data;
+      const ownerSubject = ownerForSkillInput(skillInput.visibility);
+      if (skillInput.visibility === 'user' && !ownerSubject) {
+        return result('save-skill', { error: 'owner_subject_required' }, true);
+      }
       const validation = await validateSkillReferences(skillInput, {
         tenantId: tenant.id,
         enabledToolsSet: tenant.enabledToolsSet,
@@ -294,11 +321,14 @@ export function registerSkillTools(server: McpServer, deps: RegisterSkillToolsDe
       if (!tenant) return result('delete-skill', { error: 'tenant_required' }, true);
       const parsed = SkillLookupZod.safeParse(args);
       if (!parsed.success) return result('delete-skill', { error: 'invalid_skill_name' }, true);
-      const existing = await getVisibleSkillRecord(tenant.id, parsed.data.name);
+      const ownerSubject = getRequestOwnerSubject();
+      const existing = await editableSkillByName(tenant.id, parsed.data.name, ownerSubject);
       if (!existing && builtInSkills(deps).some((skill) => skill.name === parsed.data.name)) {
         return result('delete-skill', { error: 'builtin_skill_readonly' }, true);
       }
-      const deleted = await disableTenantSkill(tenant.id, parsed.data.name);
+      const deleted = existing
+        ? await disableTenantSkill(tenant.id, parsed.data.name, existing.ownerSubject ?? undefined)
+        : { deleted: false };
       if (deleted.deleted) await publishSkillChange(deps.redis, tenant.id, parsed.data.name);
       return result('delete-skill', deleted);
     }
@@ -319,7 +349,10 @@ export function registerSkillTools(server: McpServer, deps: RegisterSkillToolsDe
         .loadBuiltInPrompts?.()
         .find((prompt) => prompt.name === parsed.data.name);
       if (!builtIn) return result('fork-builtin-skill', { error: 'builtin_skill_not_found' }, true);
-      const skill = await saveTenantSkill(tenant.id, forkBuiltinSkillInput(builtIn));
+      const skill = await saveTenantSkill(
+        tenant.id,
+        forkBuiltinSkillInput(builtIn, getRequestOwnerSubject())
+      );
       await publishSkillChange(deps.redis, tenant.id, skill.name);
       return result('fork-builtin-skill', { skill: toPublicSkill(skill) });
     }
@@ -335,7 +368,12 @@ export function registerSkillTools(server: McpServer, deps: RegisterSkillToolsDe
       if (!tenant) return result('render-skill', { error: 'tenant_required' }, true);
       const parsed = RenderSkillZod.safeParse(args);
       if (!parsed.success) return result('render-skill', { error: 'invalid_render_args' }, true);
-      const skill = await visibleSkillByName(tenant.id, parsed.data.name, deps);
+      const skill = await visibleSkillByName(
+        tenant.id,
+        parsed.data.name,
+        deps,
+        getRequestOwnerSubject()
+      );
       if (!skill) return result('render-skill', { error: 'skill_not_found' }, true);
       const rendered = renderSkillTemplate(skill.body, parsed.data.args, skill.arguments);
       if (!rendered.ok)
@@ -400,7 +438,7 @@ export function registerSkillTools(server: McpServer, deps: RegisterSkillToolsDe
       if (!pack) return result('import-skill-pack', { error: 'skill_pack_not_found' }, true);
       const imported = await importSkillPack(tenant.id, pack, {
         conflictStrategy: parsed.data.conflictStrategy,
-        ownerSubject: parsed.data.ownerSubject,
+        ownerSubject: getRequestOwnerSubject(),
         builtInSkillNames: new Set(builtInSkills(deps).map((skill) => skill.name)),
       });
       if (imported.imported.skills > 0) await publishSkillChange(deps.redis, tenant.id);
@@ -424,7 +462,10 @@ export function registerSkillTools(server: McpServer, deps: RegisterSkillToolsDe
           true
         );
       const { rootFile, ...exportOptions } = parsed.data;
-      const pack = await exportSkillPack(tenant.id, exportOptions);
+      const pack = await exportSkillPack(tenant.id, {
+        ...exportOptions,
+        ownerSubject: getRequestOwnerSubject(),
+      });
       const rootWrite = rootFile ? await writeSkillPackToRoot(rootFile, pack) : undefined;
       return result('export-skill-pack', { pack, ...(rootWrite ? { rootWrite } : {}) });
     }

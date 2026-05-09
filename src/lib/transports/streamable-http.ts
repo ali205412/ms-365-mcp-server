@@ -37,7 +37,7 @@ import {
 import type { RedisResourceSubscriptionStore } from '../mcp-notifications/resource-subscriptions.js';
 
 export interface StreamableHttpDeps {
-  buildMcpServer: (tenant: TenantRow) => McpServer;
+  buildMcpServer: (tenant: TenantRow) => McpServer | Promise<McpServer>;
   sessionRegistry?: McpSessionRegistry;
   resourceSubscriptions?: RedisResourceSubscriptionStore;
   surface?: McpNotificationSurface;
@@ -104,7 +104,7 @@ export function createStreamableHttpHandler(deps: StreamableHttpDeps): RequestHa
       return;
     }
 
-    const server = deps.buildMcpServer(tenant);
+    const server = await deps.buildMcpServer(tenant);
     const notificationServer: McpNotificationServer = {
       sendToolListChanged: () => server.sendToolListChanged(),
       sendResourceListChanged: () => server.sendResourceListChanged(),
@@ -158,7 +158,7 @@ async function handleStatelessRequest(
   deps: StreamableHttpDeps,
   _profile: ClientCapabilityProfile
 ): Promise<void> {
-  const server = deps.buildMcpServer(tenant);
+  const server = await deps.buildMcpServer(tenant);
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
   });

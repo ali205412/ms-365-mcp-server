@@ -72,21 +72,30 @@ function rowToSkillInput(row: TenantSkillRow): SkillRecord {
   };
 }
 
-export function visibleSkillWhereClause(
+function accessibleSkillWhereClause(
   tenantParamIndex: number,
-  ownerSubject?: string
+  ownerSubject?: string,
+  enabledOnly = false
 ): VisibleSkillWhereClause {
   const owner = OwnerSubjectZod.parse(ownerSubject);
+  const enabled = enabledOnly ? 'enabled = true AND ' : '';
   if (!owner) {
     return {
-      clause: `WHERE tenant_id = $${tenantParamIndex} AND enabled = true AND visibility IN ('tenant', 'admin', 'builtin-copy')`,
+      clause: `WHERE tenant_id = $${tenantParamIndex} AND ${enabled}visibility IN ('tenant', 'admin', 'builtin-copy') AND owner_subject IS NULL`,
       params: [],
     };
   }
   return {
-    clause: `WHERE tenant_id = $${tenantParamIndex} AND enabled = true AND (visibility IN ('tenant', 'admin', 'builtin-copy') OR (visibility = 'user' AND owner_subject = $${tenantParamIndex + 1}))`,
+    clause: `WHERE tenant_id = $${tenantParamIndex} AND ${enabled}((visibility IN ('tenant', 'admin', 'builtin-copy') AND owner_subject IS NULL) OR (visibility = 'user' AND owner_subject = $${tenantParamIndex + 1}))`,
     params: [owner],
   };
+}
+
+export function visibleSkillWhereClause(
+  tenantParamIndex: number,
+  ownerSubject?: string
+): VisibleSkillWhereClause {
+  return accessibleSkillWhereClause(tenantParamIndex, ownerSubject, true);
 }
 
 export function skillInputToPrompt(tenantId: string, skill: SkillInput): PromptTemplateDefinition {
@@ -183,6 +192,25 @@ export async function getVisibleSkillRecord(
      ${visible.clause} AND name = $${2 + visible.params.length}
      LIMIT 1`,
     [tid, ...visible.params, parsedName]
+  );
+  return result.rows[0] ? rowToSkillInput(result.rows[0]) : null;
+}
+
+export async function getAccessibleSkillRecord(
+  tenantId: string,
+  name: string,
+  ownerSubject?: string
+): Promise<SkillRecord | null> {
+  const tid = TenantIdZod.parse(tenantId);
+  const parsedName = SkillNameZod.parse(name);
+  const accessible = accessibleSkillWhereClause(1, ownerSubject);
+  const result = await getPool().query<TenantSkillRow>(
+    `SELECT id, tenant_id, owner_subject, name, title, description, frontmatter, body,
+            arguments, visibility, source, source_skill_name, version, enabled, created_at, updated_at
+     FROM tenant_skills
+     ${accessible.clause} AND name = $${2 + accessible.params.length}
+     LIMIT 1`,
+    [tid, ...accessible.params, parsedName]
   );
   return result.rows[0] ? rowToSkillInput(result.rows[0]) : null;
 }

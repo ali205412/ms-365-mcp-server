@@ -15,7 +15,11 @@ export default defineConfig({
     // Phase 6 plan 06-04: preserve the chmod behavior AND copy the Lua script.
     const { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync } = await import('node:fs');
     const path = await import('node:path');
-    const copyTree = (srcDir: string, distDir: string, predicate: (name: string) => boolean): void => {
+    const copyTree = (
+      srcDir: string,
+      distDir: string,
+      predicate: (name: string) => boolean
+    ): void => {
       if (!existsSync(srcDir)) return;
       mkdirSync(distDir, { recursive: true });
       for (const entry of readdirSync(srcDir, { withFileTypes: true })) {

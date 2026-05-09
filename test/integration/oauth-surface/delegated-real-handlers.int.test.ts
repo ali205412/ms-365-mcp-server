@@ -1,8 +1,8 @@
 /**
  * OAuth-surface coverage for the real tenant delegated handlers.
  *
- * The D-10 coverage gate counts src/server.ts createAuthorizeHandler and
- * createTenantTokenHandler lines directly. This file mounts those exported
+ * The D-10 coverage gate counts src/lib/oauth/tenant-handlers.ts
+ * createAuthorizeHandler and createTenantTokenHandler lines directly. This file mounts those
  * handlers with in-memory deps so the gate covers the production branches
  * instead of only the PKCE simulator used by the cross-tenant store test.
  */
@@ -86,7 +86,7 @@ async function startApp(options: {
   };
 
   const { createAuthorizeHandler, createTenantTokenHandler } =
-    await import('../../../src/server.js');
+    await import('../../../src/lib/oauth/tenant-handlers.js');
 
   const app = express();
   app.use(express.json());

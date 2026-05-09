@@ -21,7 +21,6 @@ CREATE TABLE IF NOT EXISTS tenant_skills (
   enabled boolean NOT NULL DEFAULT true,
   created_at timestamptz NOT NULL DEFAULT NOW(),
   updated_at timestamptz NOT NULL DEFAULT NOW(),
-  UNIQUE (tenant_id, owner_subject, name),
   CONSTRAINT tenant_skills_visibility_check
     CHECK (visibility IN ('tenant', 'user', 'admin', 'builtin-copy')),
   CONSTRAINT tenant_skills_source_check
@@ -29,6 +28,14 @@ CREATE TABLE IF NOT EXISTS tenant_skills (
   CONSTRAINT tenant_skills_version_check
     CHECK (version >= 1)
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tenant_skills_unique_tenant_name
+  ON tenant_skills (tenant_id, name)
+  WHERE owner_subject IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tenant_skills_unique_owner_name
+  ON tenant_skills (tenant_id, owner_subject, name)
+  WHERE owner_subject IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_tenant_skills_tenant_enabled
   ON tenant_skills (tenant_id, enabled);
