@@ -1020,29 +1020,32 @@ class MicrosoftGraphServer {
       await this.mountTenantRoutes(app, publicBase, oauthRedirectHosts);
 
       const oauthProvider = new MicrosoftOAuthProvider(this.authManager, this.secrets!);
+      const oauthMetadataRateLimit = createHttpRouteRateLimit();
 
       // OAuth Authorization Server Discovery
-      // codeql[js/missing-rate-limiting]: public metadata route returns static discovery data and performs no authentication or state change.
-      app.get('/.well-known/oauth-authorization-server', async (req, res) => {
-        const protocol = req.secure ? 'https' : 'http';
-        const requestOrigin = `${protocol}://${req.get('host')}`;
-        const externalBase = publicBase ?? requestOrigin;
+      app.get(
+        '/.well-known/oauth-authorization-server',
+        oauthMetadataRateLimit,
+        async (req, res) => {
+          const protocol = req.secure ? 'https' : 'http';
+          const requestOrigin = `${protocol}://${req.get('host')}`;
+          const externalBase = publicBase ?? requestOrigin;
 
-        const scopes = buildScopesFromEndpoints(this.options.orgMode, this.options.enabledTools);
+          const scopes = buildScopesFromEndpoints(this.options.orgMode, this.options.enabledTools);
 
-        res.json(
-          buildOAuthAuthorizationServerMetadata({
-            publicBaseUrl: externalBase,
-            scopes,
-            version: this.version,
-            dynamicRegistration: this.options.enableDynamicRegistration,
-          })
-        );
-      });
+          res.json(
+            buildOAuthAuthorizationServerMetadata({
+              publicBaseUrl: externalBase,
+              scopes,
+              version: this.version,
+              dynamicRegistration: this.options.enableDynamicRegistration,
+            })
+          );
+        }
+      );
 
       // OAuth Protected Resource Discovery
-      // codeql[js/missing-rate-limiting]: public metadata route returns static discovery data and performs no authentication or state change.
-      app.get('/.well-known/oauth-protected-resource', async (req, res) => {
+      app.get('/.well-known/oauth-protected-resource', oauthMetadataRateLimit, async (req, res) => {
         const protocol = req.secure ? 'https' : 'http';
         const requestOrigin = `${protocol}://${req.get('host')}`;
         const externalBase = publicBase ?? requestOrigin;

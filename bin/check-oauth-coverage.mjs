@@ -24,8 +24,8 @@ const HANDLER_LINE_RANGES = [
   },
   { file: 'src/server.ts', fn: 'wellKnownAuthServerTenant', start: 620, end: 627 },
   { file: 'src/server.ts', fn: 'wellKnownProtectedResourceTenant', start: 629, end: 636 },
-  { file: 'src/server.ts', fn: 'wellKnownAuthServer', start: 1026, end: 1041 },
-  { file: 'src/server.ts', fn: 'wellKnownProtectedResource', start: 1045, end: 1059 },
+  { file: 'src/server.ts', fn: 'wellKnownAuthServer', start: 1026, end: 1045 },
+  { file: 'src/server.ts', fn: 'wellKnownProtectedResource', start: 1048, end: 1062 },
 ];
 
 const COVERAGE_THRESHOLD_PERCENT = Number.parseFloat(
