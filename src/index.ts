@@ -250,8 +250,10 @@ async function main(): Promise<void> {
 
     if (args.connectorDoctor) {
       const result = await connectorDoctor({
+        publicBaseUrl: args.connectorDoctor,
         publicUrl: args.connectorDoctor,
         tenantId: args.tenantId ?? process.env.MS365_MCP_TENANT_ID,
+        tenantDisplayName: args.tenantDisplayName,
         observedName: args.observedName,
         version,
       });

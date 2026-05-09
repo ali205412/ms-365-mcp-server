@@ -29,6 +29,10 @@ program
     'Check public OAuth and connector metadata surfaces for connector name consistency'
   )
   .option('--observed-name <name>', 'Hosted connector display name observed in the client UI')
+  .option(
+    '--tenant-display-name <name>',
+    'Tenant display name expected in connector metadata during --connector-doctor checks'
+  )
   .option('--list-accounts', 'List all cached accounts')
   .option('--select-account <accountId>', 'Select a specific account by ID')
   .option('--remove-account <accountId>', 'Remove a specific account by ID')
@@ -126,6 +130,7 @@ export interface CommandOptions {
   healthCheck?: boolean;
   connectorDoctor?: string;
   observedName?: string;
+  tenantDisplayName?: string;
   listAccounts?: boolean;
   selectAccount?: string;
   removeAccount?: string;
