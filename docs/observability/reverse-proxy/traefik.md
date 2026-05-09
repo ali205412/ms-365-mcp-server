@@ -18,7 +18,7 @@ services:
       - 'traefik.enable=true'
 
       # Main MCP surface
-      - 'traefik.http.routers.mcp.rule=Host(`mcp.example.com`)'
+      - 'traefik.http.routers.mcp.rule=Host(`mcp.example.com`) && !PathPrefix(`/admin`)'
       - 'traefik.http.routers.mcp.entrypoints=websecure'
       - 'traefik.http.routers.mcp.tls.certresolver=letsencrypt'
       - 'traefik.http.services.mcp.loadbalancer.server.port=3000'

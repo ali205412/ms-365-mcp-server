@@ -36,7 +36,8 @@ describe('token cache path configuration', () => {
       vi.stubEnv('MS365_MCP_TOKEN_CACHE_PATH', '');
       const { getTokenCachePath } = await importHelpers();
       const result = getTokenCachePath();
-      expect(result).toContain('.token-cache.json');
+      expect(result).toBe(path.join(os.homedir(), '.ms-365-mcp-token-cache.json'));
+      expect(result.startsWith(process.cwd())).toBe(false);
       expect(path.isAbsolute(result)).toBe(true);
     });
 
@@ -58,7 +59,8 @@ describe('token cache path configuration', () => {
       delete process.env.MS365_MCP_TOKEN_CACHE_PATH;
       const { getTokenCachePath } = await importHelpers();
       const result = getTokenCachePath();
-      expect(result).toContain('.token-cache.json');
+      expect(result).toBe(path.join(os.homedir(), '.ms-365-mcp-token-cache.json'));
+      expect(result.startsWith(process.cwd())).toBe(false);
       expect(path.isAbsolute(result)).toBe(true);
     });
   });
@@ -68,7 +70,8 @@ describe('token cache path configuration', () => {
       vi.stubEnv('MS365_MCP_SELECTED_ACCOUNT_PATH', '');
       const { getSelectedAccountPath } = await importHelpers();
       const result = getSelectedAccountPath();
-      expect(result).toContain('.selected-account.json');
+      expect(result).toBe(path.join(os.homedir(), '.ms-365-mcp-selected-account.json'));
+      expect(result.startsWith(process.cwd())).toBe(false);
       expect(path.isAbsolute(result)).toBe(true);
     });
 
@@ -90,7 +93,8 @@ describe('token cache path configuration', () => {
       delete process.env.MS365_MCP_SELECTED_ACCOUNT_PATH;
       const { getSelectedAccountPath } = await importHelpers();
       const result = getSelectedAccountPath();
-      expect(result).toContain('.selected-account.json');
+      expect(result).toBe(path.join(os.homedir(), '.ms-365-mcp-selected-account.json'));
+      expect(result.startsWith(process.cwd())).toBe(false);
       expect(path.isAbsolute(result)).toBe(true);
     });
   });

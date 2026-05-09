@@ -31,6 +31,7 @@ import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import { decodeJwt, type JWTPayload } from 'jose';
 import type { Pool } from 'pg';
 import type { RedisClient } from '../../redis.js';
+import type { BearerTokenVerifier } from '../../microsoft-auth.js';
 import { problemUnauthorized, problemForbidden } from '../problem-json.js';
 import { verifyApiKeyHeader, type ApiKeyAdminIdentity } from './api-key.js';
 import { verifyEntraAdmin, type EntraAdminIdentity, type EntraConfig } from './entra.js';
@@ -72,6 +73,8 @@ export interface AdminAuthDeps {
   entraConfig: EntraConfig;
   /** Optional fetch impl for testing the Entra /me/memberOf probe. */
   fetchImpl?: typeof fetch;
+  /** Optional JWT verifier override for deterministic tests. */
+  verifyToken?: BearerTokenVerifier;
 }
 
 // ── createAdminAuthMiddleware ───────────────────────────────────────────────

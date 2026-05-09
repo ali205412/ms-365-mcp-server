@@ -4,7 +4,8 @@
  * Contract (bin/modules/compile-preset.mjs):
  *   - Reads src/presets/essentials-v1.json + src/generated/client.ts.
  *   - Extracts every `alias: "x"` / `alias: 'x'` occurrence into a Set.
- *   - Throws when a preset op is NOT in the registry (T-05-06 typo-resistance).
+ *   - Warns, but preserves, legacy essentials-v1 operationIds that are NOT in
+ *     the default friendly-alias registry.
  *   - Throws when preset.ops.length !== 150 (D-19 invariant).
  *   - Emits src/presets/generated-index.ts with a frozen ReadonlySet<string>.
  *
@@ -12,7 +13,7 @@
  * copy the REAL essentials-v1.json into the tmp presets/ dir so the tests
  * exercise the actual preset composition (not a synthetic fixture).
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -59,6 +60,12 @@ function makeFakeClient(aliases) {
   return lines.join('\n');
 }
 
+function expectStringLiteral(out, value) {
+  const singleQuoted = `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+  const doubleQuoted = `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  expect(out.includes(singleQuoted) || out.includes(doubleQuoted)).toBe(true);
+}
+
 describe('plan 05-03 task 1 — compileEssentialsPreset', () => {
   let tmp;
   let realPreset;
@@ -89,11 +96,11 @@ describe('plan 05-03 task 1 — compileEssentialsPreset', () => {
     expect(out).toContain('Object.freeze');
     // Every preset op must be a literal in the emitted TS file.
     for (const op of realPreset.ops) {
-      expect(out).toContain(`"${op}"`);
+      expectStringLiteral(out, op);
     }
   });
 
-  it('Test 6: throws when a preset op is NOT in the registry (T-05-06 typo-resistance)', () => {
+  it('Test 6: warns but preserves essentials-v1 ops when they are NOT in the registry', () => {
     // Drop the first real op from the synthetic registry to force a miss.
     // Post-Phase-5 the preset uses Microsoft operationIds (e.g.
     // `me.messages.ListAttachments`), so we read one off the real preset
@@ -103,9 +110,21 @@ describe('plan 05-03 task 1 — compileEssentialsPreset', () => {
     fs.writeFileSync(path.join(tmp, 'generated', 'client.ts'), makeFakeClient(registry));
     fs.writeFileSync(path.join(tmp, 'presets', 'essentials-v1.json'), JSON.stringify(realPreset));
 
-    expect(() =>
-      compileEssentialsPreset(path.join(tmp, 'generated'), path.join(tmp, 'presets'))
-    ).toThrow(/NOT in registry/);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const result = compileEssentialsPreset(
+        path.join(tmp, 'generated'),
+        path.join(tmp, 'presets')
+      );
+      expect(result.count).toBe(150);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/legacy op\(s\) NOT in registry/));
+
+      const out = fs.readFileSync(path.join(tmp, 'presets', 'generated-index.ts'), 'utf-8');
+      expectStringLiteral(out, dropped);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('throws when preset version is wrong', () => {
@@ -159,6 +178,6 @@ describe('plan 05-03 task 1 — compileEssentialsPreset', () => {
 
     // Import-check via raw source: `Object.freeze(new Set(...))` invariant.
     const out = fs.readFileSync(path.join(tmp, 'presets', 'generated-index.ts'), 'utf-8');
-    expect(out).toMatch(/Object\.freeze\(new Set<string>\(\[/);
+    expect(out).toMatch(/Object\.freeze\(\s*new Set<string>\(\[/);
   });
 });

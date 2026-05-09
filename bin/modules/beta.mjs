@@ -118,10 +118,14 @@ export async function runBetaPipeline(openapiDir, generatedDir, opts = {}) {
     // Function-style path fixup (same as generate-mcp-tools.mjs line 52).
     code = code.replace(/(path:\s*)'(\/[^']*\([^)]*=':[\w]+'\)[^']*)'/g, '$1`$2`');
 
-    // __beta__ prefix on every alias. Anchored to `[a-z]` so numerics,
-    // uppercase, or already-prefixed aliases are left alone (Threat T-05-03
-    // mitigation — no bait-and-switch possible via upstream casing tricks).
-    code = code.replace(/(alias:\s*["'])([a-z][^"']*)/g, `$1${BETA_PREFIX}$2`);
+    // __beta__ prefix on every alias that is not already beta-prefixed.
+    // Numeric, uppercase, and underscore-first upstream operationIds must not
+    // escape the beta namespace.
+    const betaPrefixEscaped = BETA_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    code = code.replace(
+      new RegExp(`(alias:\\s*["'])(?!${betaPrefixEscaped})([^"']*)`, 'g'),
+      `$1${BETA_PREFIX}$2`
+    );
     fs.writeFileSync(tempBetaClientPath, code);
 
     // 5. Extract beta aliases + enforce invariants.
@@ -138,7 +142,15 @@ export async function runBetaPipeline(openapiDir, generatedDir, opts = {}) {
     });
     fs.writeFileSync(tempBetaClientPath, code);
 
-    const betaAliases = [...code.matchAll(/alias:\s*["'](__beta__[^"']*)/g)].map((m) => m[1]);
+    const allBetaFragmentAliases = [...code.matchAll(/alias:\s*["']([^"']*)/g)].map((m) => m[1]);
+    const unprefixedBetaAliases = allBetaFragmentAliases.filter((a) => !a.startsWith(BETA_PREFIX));
+    if (unprefixedBetaAliases.length > 0) {
+      throw new Error(
+        `Beta prefix invariant failed for ${unprefixedBetaAliases.length} aliases (first: ${unprefixedBetaAliases[0]})`
+      );
+    }
+
+    const betaAliases = allBetaFragmentAliases;
     const stillOversize = betaAliases.filter((a) => a.length > MCP_TOOL_NAME_MAX);
     if (stillOversize.length > 0) {
       throw new Error(

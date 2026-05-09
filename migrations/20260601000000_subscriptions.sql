@@ -14,7 +14,7 @@
 --
 -- FK cascade carries the Phase-3 cryptoshred contract: deleting a tenant
 -- also drops every subscription row (matches audit_log, api_keys, delta_tokens).
-CREATE TABLE subscriptions (
+CREATE TABLE IF NOT EXISTS subscriptions (
   id                      uuid PRIMARY KEY,
   tenant_id               uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   graph_subscription_id   text NOT NULL,
@@ -27,14 +27,14 @@ CREATE TABLE subscriptions (
   updated_at              timestamptz NOT NULL DEFAULT NOW()
 );
 
-CREATE UNIQUE INDEX idx_subscriptions_tenant_graph_id
+CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_tenant_graph_id
   ON subscriptions (tenant_id, graph_subscription_id);
 
 -- Partial index for the renewal cron: only rows near expiration.
 -- Using a partial WHERE clause would require an immutable expression on NOW(),
 -- which Postgres rejects. The full (tenant_id, expires_at) index is the
 -- correct compromise — the cron scans with tenant JOIN anyway.
-CREATE INDEX idx_subscriptions_tenant_expires
+CREATE INDEX IF NOT EXISTS idx_subscriptions_tenant_expires
   ON subscriptions (tenant_id, expires_at);
 
 -- Down Migration

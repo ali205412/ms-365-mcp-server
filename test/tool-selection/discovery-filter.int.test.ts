@@ -21,13 +21,17 @@
  *      <100ms on the in-memory Redis facade (real-Redis RTT is comparable).
  *
  * The test uses the MemoryRedisFacade for the pub/sub channel and mounts
- * the real `registerDiscoveryTools` against the real `api.endpoints`
- * registry (no fixture injection — the registry IS the tool universe and
- * the test picks enabled-set aliases known to exist inside it).
+ * the real `registerDiscoveryTools` against a bounded generated-client
+ * fixture. The production registry is ~72 MB after generation; loading it
+ * under the integration global setup exceeds the local execution sandbox.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { requestContext } from '../../src/request-context.js';
+import {
+  DISCOVERY_META_TOOL_NAMES,
+  DISCOVERY_PRESET_VERSION,
+} from '../../src/lib/tenant-surface/surface.js';
 import {
   subscribeToToolSelectionInvalidation,
   publishToolSelectionInvalidation,
@@ -38,6 +42,53 @@ import { registerDiscoveryTools, discoveryCache } from '../../src/graph-tools.js
 
 const TENANT_A = '11111111-1111-1111-1111-111111111111';
 const TENANT_B = '22222222-2222-2222-2222-222222222222';
+
+const { bookmarkCountsByTenant } = vi.hoisted(() => ({
+  bookmarkCountsByTenant: new Map<string, Map<string, number>>(),
+}));
+
+vi.mock('../../src/generated/client.js', () => ({
+  api: {
+    endpoints: [
+      {
+        alias: 'me.sendMail',
+        method: 'post',
+        path: '/me/sendMail',
+        description: 'Send a mail message',
+      },
+      {
+        alias: 'me.ListMessages',
+        method: 'get',
+        path: '/me/messages',
+        description: 'List mail messages',
+      },
+      {
+        alias: 'users.user.ListUser',
+        method: 'get',
+        path: '/users',
+        description: 'List user directory entries',
+      },
+      {
+        alias: 'users.user.GetUserByUserPrincipalName',
+        method: 'get',
+        path: '/users/:userPrincipalName',
+        description: 'Get one user by principal name',
+      },
+      ...Array.from({ length: 13 }, (_, i) => ({
+        alias: `users.synthetic${i}`,
+        method: 'get',
+        path: `/users/synthetic${i}`,
+        description: `Synthetic user endpoint ${i}`,
+      })),
+    ],
+  },
+}));
+
+vi.mock('../../src/lib/memory/bookmarks.js', () => ({
+  getBookmarkCountsByAlias: vi.fn((tenantId: string) =>
+    Promise.resolve(bookmarkCountsByTenant.get(tenantId) ?? new Map<string, number>())
+  ),
+}));
 
 /**
  * Aliases we know exist in `api.endpoints` — the discovery registry uses the
@@ -122,10 +173,12 @@ describe('plan 05-06 Task 2 — discovery per-tenant filter + pub/sub invalidati
     );
     discoveryCache._clear();
     redis = new MemoryRedisFacade();
+    bookmarkCountsByTenant.clear();
   });
 
   afterEach(async () => {
     discoveryCache._clear();
+    bookmarkCountsByTenant.clear();
     await redis.quit();
     vi.restoreAllMocks();
   });
@@ -352,5 +405,56 @@ describe('plan 05-06 Task 2 — discovery per-tenant filter + pub/sub invalidati
       () => callDiscoveryTool(server, 'search-tools', { query: 'send mail' })
     );
     expect(discoveryCache.size()).toBe(sizeAfterWarm);
+  });
+
+  it('Test 9: discovery tenant bookmark boost ranks over discoveryCatalogSet without tenant leakage', async () => {
+    const discoveryCtxB = {
+      tenantId: TENANT_B,
+      enabledToolsSet: DISCOVERY_META_TOOL_NAMES,
+      presetVersion: DISCOVERY_PRESET_VERSION,
+    };
+
+    const baseline = await requestContext.run(discoveryCtxB, () =>
+      callDiscoveryTool(server, 'search-tools', { query: 'user', limit: 10 })
+    );
+    const baselineBody = JSON.parse(baseline.content[0].text) as {
+      tools: Array<{ name: string }>;
+      total: number;
+    };
+    const baselineNames = baselineBody.tools.map((t) => t.name);
+    expect(baselineBody.total).toBeGreaterThan(12);
+    expect(baselineNames.length).toBeGreaterThan(2);
+    expect(baselineNames.some((name) => DISCOVERY_META_TOOL_NAMES.has(name))).toBe(false);
+
+    const baselineTop = baselineNames[0];
+    const boostTarget = baselineNames[baselineNames.length - 1];
+    expect(boostTarget).not.toBe(baselineTop);
+
+    bookmarkCountsByTenant.set(TENANT_A, new Map([[boostTarget, 100]]));
+
+    const boosted = await requestContext.run(
+      {
+        tenantId: TENANT_A,
+        enabledToolsSet: DISCOVERY_META_TOOL_NAMES,
+        presetVersion: DISCOVERY_PRESET_VERSION,
+      },
+      () => callDiscoveryTool(server, 'search-tools', { query: 'user', limit: 10 })
+    );
+    const boostedNames = (
+      JSON.parse(boosted.content[0].text) as {
+        tools: Array<{ name: string }>;
+      }
+    ).tools.map((t) => t.name);
+    expect(boostedNames[0]).toBe(boostTarget);
+
+    const notLeaked = await requestContext.run(discoveryCtxB, () =>
+      callDiscoveryTool(server, 'search-tools', { query: 'user', limit: 10 })
+    );
+    const notLeakedNames = (
+      JSON.parse(notLeaked.content[0].text) as {
+        tools: Array<{ name: string }>;
+      }
+    ).tools.map((t) => t.name);
+    expect(notLeakedNames[0]).toBe(baselineTop);
   });
 });

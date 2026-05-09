@@ -77,4 +77,29 @@ describe('logger-pino: API compatibility (FOUND-03)', () => {
     // Check that it is a pino logger (has .level property) and emits parseable JSON.
     expect(typeof (logger as unknown as { level: string }).level).toBe('string');
   });
+
+  it('sanitizes sensitive adapter metadata before pino receives it', async () => {
+    const { sanitizeLogMeta } = await import('../src/logger.js');
+    const sanitized = sanitizeLogMeta({
+      audit_row: {
+        meta: {
+          plaintextKey: 'admin-key-secret',
+          clientSecret: 'app-secret',
+          cacheKeysDeleted: 2,
+        },
+      },
+    }) as {
+      audit_row: {
+        meta: {
+          plaintextKey: unknown;
+          clientSecret: unknown;
+          cacheKeysDeleted: unknown;
+        };
+      };
+    };
+
+    expect(sanitized.audit_row.meta.plaintextKey).toBe('[REDACTED]');
+    expect(sanitized.audit_row.meta.clientSecret).toBe('[REDACTED]');
+    expect(sanitized.audit_row.meta.cacheKeysDeleted).toBe(2);
+  });
 });

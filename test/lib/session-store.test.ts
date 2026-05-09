@@ -2,8 +2,8 @@
  * Plan 03-07 Task 1 — SessionStore unit tests (SECUR-02).
  *
  * Server-side opaque refresh-token store. Refresh tokens live in Redis under
- * `mcp:session:{tenantId}:{sha256(accessToken)}`, envelope-encrypted with the
- * per-tenant DEK (same shape as msal-cache-plugin from 03-05).
+ * `mcp:session:{tenantId}:{sha256(clientAccessToken)}`, envelope-encrypted
+ * with the per-tenant DEK (same shape as msal-cache-plugin from 03-05).
  *
  * Coverage:
  *   1. put + get round-trip preserves full SessionRecord

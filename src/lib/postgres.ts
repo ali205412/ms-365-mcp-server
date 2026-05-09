@@ -34,7 +34,13 @@
 import { Pool, type PoolClient } from 'pg';
 import logger from '../logger.js';
 
-let pool: Pool | null = null;
+const POSTGRES_POOL_KEY = Symbol.for('ms-365-mcp-server.postgresPool');
+
+type PostgresGlobal = typeof globalThis & { [POSTGRES_POOL_KEY]?: Pool | null };
+const postgresGlobal = globalThis as PostgresGlobal;
+
+type AfterCommitCallback = () => void | Promise<void>;
+const afterCommitCallbacks = new WeakMap<PoolClient, AfterCommitCallback[]>();
 
 const DEFAULT_MAX = 20;
 const DEFAULT_MIN = 2;
@@ -42,7 +48,7 @@ const IDLE_TIMEOUT_MS = 30_000;
 const CONNECTION_TIMEOUT_MS = 5_000;
 
 export function getPool(): Pool {
-  if (pool) return pool;
+  if (postgresGlobal[POSTGRES_POOL_KEY]) return postgresGlobal[POSTGRES_POOL_KEY];
   const connectionString = process.env.MS365_MCP_DATABASE_URL;
   if (!connectionString && !process.env.PGHOST) {
     throw new Error(
@@ -61,8 +67,8 @@ export function getPool(): Pool {
   poolInstance.on('error', (err) => {
     logger.error({ err: err.message }, 'pg pool idle-client error');
   });
-  pool = poolInstance;
-  return pool;
+  postgresGlobal[POSTGRES_POOL_KEY] = poolInstance;
+  return poolInstance;
 }
 
 /**
@@ -74,10 +80,21 @@ export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>)
   const client = await getPool().connect();
   try {
     await client.query('BEGIN');
+    afterCommitCallbacks.set(client, []);
     const result = await fn(client);
     await client.query('COMMIT');
+    const callbacks = afterCommitCallbacks.get(client) ?? [];
+    afterCommitCallbacks.delete(client);
+    for (const callback of callbacks) {
+      try {
+        await callback();
+      } catch (err) {
+        logger.warn({ err: (err as Error).message }, 'pg after-commit callback failed');
+      }
+    }
     return result;
   } catch (err) {
+    afterCommitCallbacks.delete(client);
     try {
       await client.query('ROLLBACK');
     } catch {
@@ -89,6 +106,12 @@ export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>)
   }
 }
 
+export function scheduleAfterCommit(client: PoolClient, callback: AfterCommitCallback): void {
+  const callbacks = afterCommitCallbacks.get(client);
+  if (!callbacks) return;
+  callbacks.push(callback);
+}
+
 /**
  * Graceful-shutdown hook: awaits `pool.end()` and nulls the cached pool so
  * subsequent `getPool()` calls reconstruct a fresh pool (useful for tests +
@@ -96,9 +119,9 @@ export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>)
  * call when the pool is already null is a no-op.
  */
 export async function shutdown(): Promise<void> {
-  if (!pool) return;
-  const p = pool;
-  pool = null;
+  if (!postgresGlobal[POSTGRES_POOL_KEY]) return;
+  const p = postgresGlobal[POSTGRES_POOL_KEY];
+  postgresGlobal[POSTGRES_POOL_KEY] = null;
   try {
     await p.end();
   } catch (err) {
@@ -128,5 +151,5 @@ export async function readinessCheck(): Promise<boolean> {
  * needing MS365_MCP_DATABASE_URL set in the test environment.
  */
 export function __setPoolForTesting(p: Pool | null): void {
-  pool = p;
+  postgresGlobal[POSTGRES_POOL_KEY] = p;
 }

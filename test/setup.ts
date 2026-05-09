@@ -21,6 +21,56 @@
 import { beforeEach, vi } from 'vitest';
 import { setStdioFallback } from '../src/lib/tool-selection/dispatch-guard.js';
 
+// Phase 7 memory tables use `DEFAULT gen_random_uuid()` for durable row IDs.
+// Real Postgres supports it; pg-mem needs the function registered on every
+// new in-memory database before migrations are replayed.
+vi.mock('pg-mem', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('pg-mem')>();
+  const { randomUUID } = await import('node:crypto');
+
+  return {
+    ...actual,
+    newDb: (...args: Parameters<typeof actual.newDb>) => {
+      const db = actual.newDb(...args);
+      db.public.registerFunction({
+        name: 'gen_random_uuid',
+        returns: actual.DataType.uuid,
+        implementation: () => randomUUID(),
+      });
+      db.public.registerEquivalentType({
+        name: 'tsvector',
+        equivalentTo: actual.DataType.text,
+        isValid: () => true,
+      });
+      db.public.registerEquivalentType({
+        name: 'tsquery',
+        equivalentTo: actual.DataType.text,
+        isValid: () => true,
+      });
+      db.public.registerFunction({
+        name: 'to_tsvector',
+        args: [actual.DataType.text, actual.DataType.text],
+        returns: actual.DataType.text,
+        implementation: (_language: string, content: string) => content ?? '',
+      });
+      db.public.registerFunction({
+        name: 'plainto_tsquery',
+        args: [actual.DataType.text, actual.DataType.text],
+        returns: actual.DataType.text,
+        implementation: (_language: string, query: string) => query ?? '',
+      });
+      db.public.registerFunction({
+        name: 'ts_rank_cd',
+        args: [actual.DataType.text, actual.DataType.text],
+        returns: actual.DataType.float,
+        implementation: () => 0,
+      });
+      db.registerLanguage('plpgsql', () => () => undefined);
+      return db;
+    },
+  };
+});
+
 // Global timer reset — every test starts with real timers regardless of
 // whatever a prior test file left behind. Vitest's per-file VM isolation
 // SHOULD keep fake timers bounded to the file that installed them, but the
@@ -48,6 +98,7 @@ const PERMISSIVE: ReadonlySet<string> = new PermissiveSet();
 
 setStdioFallback({
   enabledToolsSet: PERMISSIVE,
+  enabledToolsExplicit: false,
   tenantId: 'test-permissive',
   presetVersion: 'test-permissive',
 });

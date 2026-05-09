@@ -57,6 +57,10 @@ import { z } from 'zod';
 import { withTransaction } from '../postgres.js';
 import { writeAudit } from '../audit.js';
 import { publishToolSelectionInvalidation } from '../tool-selection/tool-selection-invalidation.js';
+import {
+  publishResourcesListChanged,
+  publishToolsListChanged,
+} from '../mcp-notifications/events.js';
 import { validateSelectors } from '../tool-selection/registry-validator.js';
 import { parseSelectorList } from '../tool-selection/selector-ast.js';
 import {
@@ -398,6 +402,15 @@ export function createEnabledToolsRoutes(deps: AdminRouterDeps): Router {
         'admin-enabled-tools: publishToolSelectionInvalidation failed; TTL fallback'
       );
     }
+    try {
+      await publishToolsListChanged(deps.redis, id, 'enabled-tools-change');
+      await publishResourcesListChanged(deps.redis, id, 'enabled-tools-change');
+    } catch (err) {
+      logger.warn(
+        { tenantId: id, err: (err as Error).message },
+        'admin-enabled-tools: agentic list-change publish failed; clients may refresh on next request'
+      );
+    }
 
     // Read the updated row back through the pool (fresh snapshot, not the
     // txn connection which is now released) and shape to the public wire.
@@ -405,7 +418,7 @@ export function createEnabledToolsRoutes(deps: AdminRouterDeps): Router {
       const { rows } = await deps.pgPool.query(
         `SELECT id, mode, client_id, client_secret_ref, tenant_id, cloud_type,
                 redirect_uri_allowlist, cors_origins, allowed_scopes, enabled_tools,
-                preset_version, slug, disabled_at, created_at, updated_at
+                preset_version, sharepoint_domain, rate_limits, slug, disabled_at, created_at, updated_at
          FROM tenants WHERE id = $1`,
         [id]
       );

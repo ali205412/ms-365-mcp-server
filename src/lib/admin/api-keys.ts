@@ -224,6 +224,7 @@ function serializeApiKeyRow(row: {
  *      argon2.verify (Pitfall 6 mitigation).
  *   4. DB prefilter by display_suffix (LAST 8 chars). Suffix collisions are
  *      rare (8 base64url chars = 2^48 space); cap LIMIT at 16 for worst case.
+ *      Disabled tenants are filtered out here so their keys are never cached.
  *   5. argon2.verify against each candidate — timing-safe per node-argon2
  *      library contract (RFC 9106 §9.4).
  *   6. On success, cache the identity ONLY if revokedAt is null.
@@ -260,9 +261,11 @@ export async function verifyApiKeyPlaintext(
         display_suffix: string;
         revoked_at: Date | null;
       }>(
-        `SELECT id, tenant_id, name, key_hash, display_suffix, revoked_at
-           FROM api_keys
-          WHERE display_suffix = $1
+        `SELECT k.id, k.tenant_id, k.name, k.key_hash, k.display_suffix, k.revoked_at
+           FROM api_keys k
+           JOIN tenants t ON t.id = k.tenant_id
+          WHERE k.display_suffix = $1
+            AND t.disabled_at IS NULL
           LIMIT 16`,
         [suffix]
       );
@@ -320,7 +323,7 @@ export async function verifyApiKeyPlaintext(
  * replica eviction). O(cache.size) worst case; cache is capped at 10k so
  * this is trivial.
  */
-function evictApiKeyFromCacheByKeyId(keyId: string): void {
+export function evictApiKeyFromCacheByKeyId(keyId: string): void {
   for (const [k, v] of cache.entries()) {
     if (v.keyId === keyId) cache.delete(k);
   }

@@ -2,7 +2,7 @@
  * Bearer pass-through `tid` claim mismatch (plan 06-06, T-06-05, ROADMAP SC#4).
  *
  * Mitigation for T-06-05 (bearer pass-through tenant impersonation):
- * when the JWT's `tid` claim does not match the URL `:tenantId`, the
+ * when the JWT's `tid` claim does not match the tenant row's Azure `tenant_id`, the
  * bearer middleware MUST reject with 401 and an audit entry with action
  * `auth.tid_mismatch` fires on the server side.
  *
@@ -55,18 +55,14 @@ vi.mock('../../../src/logger.js', () => ({
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, '..', '..', '..', 'migrations');
 
-// Stable UUIDs — these double as the AAD `tid` the middleware matches on
-// since the real createBearerMiddleware compares JWT `tid` to `req.params.tenantId`
-// (the URL tenant). Case-insensitive per src/lib/microsoft-auth.ts line 86.
+// Stable UUIDs — these double as the AAD `tid` the middleware matches on.
 const TENANT_A = 'ccaaaaaa-cc00-4000-8000-0000aaaaaaaa';
 const TENANT_B = 'ccbbbbbb-cc00-4000-8000-0000bbbbbbbb';
 
 /**
- * Helper — craft a minimal unsigned JWT (header.payload.signature) for
- * testing. The real bearer middleware is decode-only (jose.decodeJwt) and
- * does NOT verify signatures — per src/lib/microsoft-auth.ts lines 33-38,
- * Graph API verifies signatures at the upstream call. This helper is
- * sufficient to exercise the tid-routing path.
+ * Helper — craft a minimal JWT-shaped token (header.payload.signature) for
+ * testing. This integration test injects a verifier that decodes the token so
+ * it can exercise tenant mismatch behavior without remote Entra JWKS calls.
  */
 function makeFakeJwt(claims: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' }), 'utf8').toString(
@@ -123,11 +119,15 @@ describe('plan 06-06 — bearer pass-through tid mismatch (T-06-05, SC#4)', () =
       tenant_id: TENANT_B,
     });
 
-    // Mount the REAL createBearerMiddleware. It returns 401 on tid_mismatch
+    // Mount the real createBearerMiddleware with an injected verifier. It
+    // returns 401 on tid_mismatch
     // and missing tid claims; we wrap it with a post-middleware hook that
     // writes an audit row when the middleware short-circuited with 401.
     const { createBearerMiddleware } = await import('../../../src/lib/microsoft-auth.js');
-    const bearer = createBearerMiddleware();
+    const { decodeJwt } = await import('jose');
+    const bearer = createBearerMiddleware({
+      verifyToken: async ({ token }) => decodeJwt(token),
+    });
 
     const app = express();
     app.use(express.json());
@@ -145,7 +145,7 @@ describe('plan 06-06 — bearer pass-through tid mismatch (T-06-05, SC#4)', () =
           return originalJson(body);
         }) as typeof res.json;
 
-        bearer(req, res, async (err?: unknown) => {
+        await bearer(req, res, async (err?: unknown) => {
           if (err) return next(err);
           // bearer called next() — authorized or pass-through.
           if (!res.headersSent) return next();

@@ -6,6 +6,7 @@ const ROOT = path.resolve(__dirname, '..');
 const DOCKERFILE = path.join(ROOT, 'Dockerfile');
 const CHECK_HEALTH = path.join(ROOT, 'bin', 'check-health.cjs');
 const DOCKERIGNORE = path.join(ROOT, '.dockerignore');
+const ROOT_COMPOSE = path.join(ROOT, 'docker-compose.yml');
 
 function readDockerfile(): string {
   return fs.readFileSync(DOCKERFILE, 'utf8');
@@ -30,6 +31,8 @@ describe('Dockerfile hardening — SECUR-06 static assertions', () => {
     const entrypointLine = content.split('\n').find((line) => line.trim().startsWith('ENTRYPOINT'));
     expect(entrypointLine).toBeDefined();
     expect(entrypointLine).toContain('/sbin/tini');
+    expect(entrypointLine).toContain('/app/docker-entrypoint.sh');
+    expect(content).toContain('CMD ["node", "dist/index.js"]');
   });
 
   it('Test 4: Dockerfile creates nodejs user with UID 1001 and group 1001', () => {
@@ -71,6 +74,13 @@ describe('Dockerfile hardening — SECUR-06 static assertions', () => {
     expect(() => fs.accessSync(CHECK_HEALTH, fs.constants.X_OK)).not.toThrow();
   });
 
+  it('Test 8b: image copies migration entrypoint assets', () => {
+    const content = readDockerfile();
+    expect(content).toContain('/app/docker-entrypoint.sh');
+    expect(content).toContain('/app/bin/migrate.mjs');
+    expect(content).toContain('/app/migrations');
+  });
+
   it('Test 9: .dockerignore exists and excludes key directories/files', () => {
     expect(fs.existsSync(DOCKERIGNORE)).toBe(true);
     const content = fs.readFileSync(DOCKERIGNORE, 'utf8');
@@ -79,5 +89,13 @@ describe('Dockerfile hardening — SECUR-06 static assertions', () => {
     for (const entry of required) {
       expect(lines).toContain(entry);
     }
+  });
+
+  it('Test 10: root Compose requires public URL and CORS origins', () => {
+    const content = fs.readFileSync(ROOT_COMPOSE, 'utf8');
+    expect(content).toContain('${MS365_MCP_PUBLIC_URL:?');
+    expect(content).toContain('${MS365_MCP_CORS_ORIGINS:?');
+    expect(content).not.toContain('MS365_MCP_PUBLIC_URL:-http://localhost');
+    expect(content).not.toContain('MS365_MCP_CORS_ORIGINS:-http://localhost');
   });
 });

@@ -27,6 +27,7 @@ import { RedisPkceStore } from './lib/pkce-store/redis-store.js';
 import { MemoryPkceStore } from './lib/pkce-store/memory-store.js';
 import type { PkceStore } from './lib/pkce-store/pkce-store.js';
 import { version } from './version.js';
+import { connectorDoctor } from './lib/connector-identity/metadata.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -245,6 +246,19 @@ async function main(): Promise<void> {
     if (args.healthCheck) {
       const exitCode = await runHealthCheck(args);
       process.exit(exitCode);
+    }
+
+    if (args.connectorDoctor) {
+      const result = await connectorDoctor({
+        publicBaseUrl: args.connectorDoctor,
+        publicUrl: args.connectorDoctor,
+        tenantId: args.tenantId ?? process.env.MS365_MCP_TENANT_ID,
+        tenantDisplayName: args.tenantDisplayName,
+        observedName: args.observedName,
+        version,
+      });
+      console.log(JSON.stringify(result, null, 2));
+      process.exit(result.status === 'fail' ? 1 : 0);
     }
 
     // Fail-fast validation for production HTTP-mode config (plan 01-07 /
@@ -532,6 +546,7 @@ async function main(): Promise<void> {
             const set = computeEnabledToolsSet(rows[0].enabled_tools, rows[0].preset_version);
             setStdioFallback({
               enabledToolsSet: set,
+              enabledToolsExplicit: rows[0].enabled_tools !== null,
               tenantId: tenantIdArg,
               presetVersion: rows[0].preset_version,
             });
@@ -577,6 +592,7 @@ async function main(): Promise<void> {
         }
         setFallback({
           enabledToolsSet: Object.freeze(allAliases),
+          enabledToolsExplicit: false,
           tenantId: 'stdio-legacy',
           presetVersion: 'stdio-legacy',
         });

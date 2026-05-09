@@ -37,11 +37,39 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up QEMU (for arm64 emulation)
-        uses: docker/setup-qemu-action@v3
+      # arm64 disabled (see Build step comments below) — QEMU not needed.
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+
+      # Pre-generate src/generated/client.ts on the runner (cheap because
+      # actions/cache hits >99% of the time) and let the Dockerfile pick
+      # it up via COPY. The Dockerfile detects a non-empty client.ts and
+      # skips its own `npm run generate`, dropping ~5-7 min off the image
+      # build path on cache hit.
+      - name: Cache generated Graph client
+        id: gen-cache
+        uses: actions/cache@v4
+        with:
+          path: src/generated/client.ts
+          key: gen-${{ hashFiles('src/endpoints.json', 'bin/.last-*-snapshot.json', 'bin/generate-graph-client.mjs', 'bin/modules/**/*.mjs', 'package-lock.json') }}
+
+      - name: Install deps + generate client (cache miss only)
+        if: steps.gen-cache.outputs.cache-hit != 'true'
+        env:
+          MS365_MCP_FULL_COVERAGE: '1'
+          MS365_MCP_USE_SNAPSHOT: '1'
+          MS365_MCP_ACCEPT_BETA_CHURN: '1'
+          NODE_OPTIONS: --max-old-space-size=12288
+        run: |
+          npm ci
+          npm run generate
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'

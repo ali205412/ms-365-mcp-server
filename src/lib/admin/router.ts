@@ -36,6 +36,7 @@ import { createApiKeyRoutes, subscribeToApiKeyRevoke } from './api-keys.js';
 import { createTenantsRoutes } from './tenants.js';
 import { createEnabledToolsRoutes } from './enabled-tools.js';
 import { createAuditRoutes } from './audit.js';
+import { createMemoryRoutes } from './memory.js';
 import { createAdminAuthMiddleware } from './auth/dual-stack.js';
 import logger from '../../logger.js';
 
@@ -181,6 +182,7 @@ export function createAdminRouter(deps: AdminRouterDeps): Router {
   // createTenantsRoutes. Appending after keeps the existing tenants
   // sub-router behaviour intact.
   r.use('/tenants', createEnabledToolsRoutes(deps));
+  r.use('/tenants', createMemoryRoutes(deps));
   r.use('/api-keys', createApiKeyRoutes(deps));
   r.use('/audit', createAuditRoutes(deps));
 

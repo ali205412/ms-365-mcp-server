@@ -16,19 +16,18 @@ const INTEGRATION_PATTERNS = [
   'test/token-endpoint.test.ts',
 ];
 
-// 2026-04-24: nine test files time-out on Node 20/22 GitHub Actions runners
+// 2026-04-24: nine test files timed out on Node 20/22 GitHub Actions runners
 // while passing on Node 22 and Node 25 locally. Common thread: each test
 // calls a timer / async hook that never resolves (vitest testTimeout 45 s
 // trips). Root cause is CI-runner-specific — likely a NodeSDK global-meter
 // registration started by a prior test file interacting with
 // PeriodicExportingMetricReader.forceFlush(); timer semantics under the
 // vitest singleThread pool; or pg-mem pool teardown. The behavior cannot
-// be reproduced locally (verified Node 22.22.0 + same vitest 3.2.4 +
-// CI=true env). Quarantine active on CI only so Build/Release go green
-// while we iterate on an isolated repro; re-enable by removing from this
-// array or exporting MS365_MCP_SKIP_CI_FLAKY=0 after a fix lands.
-const CI_FLAKY_QUARANTINE =
-  process.env.MS365_MCP_SKIP_CI_FLAKY === '1' || process.env.CI === 'true'
+// be reproduced locally (verified Node 22.22.0 + same vitest 3.2.4).
+// Quarantine is now explicit only; protected CI must run the security-critical
+// isolation/auth tests unless a maintainer deliberately sets this override.
+const EXPLICIT_FLAKY_QUARANTINE =
+  process.env.MS365_MCP_SKIP_CI_FLAKY === '1'
     ? [
         // OTel instrument registry / span tests — PeriodicExportingMetricReader
         // forceFlush() hangs on CI when a prior file installed NodeSDK's
@@ -81,8 +80,6 @@ const CI_FLAKY_QUARANTINE =
 // vitest fork must be big enough to keep it in memory + run its own
 // test setup; 8 GB is the empirical floor discovered while stabilising
 // Phase 5's regenerated client.
-const HEAP_MB = 12288;
-
 export default defineConfig({
   test: {
     globals: true,
@@ -106,25 +103,20 @@ export default defineConfig({
     exclude: [
       '**/node_modules/**',
       '**/dist/**',
+      '**/.claude/**',
       ...(RUN_INTEGRATION ? [] : INTEGRATION_PATTERNS),
-      ...CI_FLAKY_QUARANTINE,
+      ...EXPLICIT_FLAKY_QUARANTINE,
     ],
-    // Threads share a single V8 isolate (one parse of the 46 MB client)
-    // across many test files, where forks + isolate:true would re-parse
-    // in each new VM context and drive RSS past the kernel OOM threshold.
-    // Tradeoff: native add-ons that can't run in workers aren't used in
-    // this codebase (keytar was removed in plan 01-08), so threads are
-    // safe. `singleThread: true` serialises files within one long-lived
-    // thread — deterministic ordering, bounded memory, cold-import paid
-    // exactly once.
+    // Run one test file at a time, but keep Vitest in isolated worker mode.
+    // `singleThread: true` sends every file to one long-lived worker; with the
+    // generated 46 MB Graph client that worker's RSS grows until CI/local OOM.
+    // `fileParallelism: false` still serializes execution while allowing Vitest
+    // to recycle the worker between isolated files.
     pool: 'threads',
     fileParallelism: false,
     poolOptions: {
       threads: {
-        singleThread: true,
-        // Worker threads inherit the parent's heap limit from NODE_OPTIONS
-        // (see npm scripts); worker_threads rejects --max-old-space-size
-        // in execArgv directly (ERR_WORKER_INVALID_EXEC_ARGV).
+        isolate: true,
       },
     },
     // Per-file isolation (fresh VM context + module registry). Required
@@ -142,15 +134,15 @@ export default defineConfig({
     // comfortably over the observed cold-import wall time.
     testTimeout: 45_000,
     hookTimeout: 45_000,
-    // Plan 06-05 D-10: coverage narrowed to src/server.ts so the post-
-    // processor (bin/check-oauth-coverage.mjs) operates on a small
-    // statement map. The post-processor filters further to the OAuth
-    // handler line ranges specifically — whole-file coverage would
-    // include the MCP transport branches and mask the OAuth surface
-    // coverage number that D-10 tracks.
+    // Plan 06-05 D-10: coverage narrowed to OAuth surface files so the post-
+    // processor (bin/check-oauth-coverage.mjs) operates on small statement maps.
     coverage: {
       provider: 'v8',
-      include: ['src/server.ts'],
+      include: [
+        'src/server.ts',
+        'src/lib/oauth/register-handler.ts',
+        'src/lib/oauth/tenant-handlers.ts',
+      ],
       reporter: ['json', 'lcov', 'text'],
     },
   },

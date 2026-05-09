@@ -14,7 +14,7 @@
 -- Partial index (tenant_id, revoked_at) WHERE revoked_at IS NULL accelerates
 -- the hot path: "look up an active key for this tenant" without scanning
 -- revoked keys.
-CREATE TABLE api_keys (
+CREATE TABLE IF NOT EXISTS api_keys (
   id              text PRIMARY KEY,
   tenant_id       uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   name            text NOT NULL,
@@ -25,7 +25,7 @@ CREATE TABLE api_keys (
   revoked_at      timestamptz
 );
 
-CREATE INDEX idx_api_keys_tenant_active ON api_keys (tenant_id, revoked_at) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_api_keys_tenant_active ON api_keys (tenant_id, revoked_at) WHERE revoked_at IS NULL;
 
 -- Down Migration
 DROP TABLE IF EXISTS api_keys;

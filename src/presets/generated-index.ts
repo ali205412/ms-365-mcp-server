@@ -2,6 +2,23 @@
 // DO NOT EDIT DIRECTLY. Regenerate with `npm run generate`.
 // Source: src/presets/*.json
 
+export const DISCOVERY_V1_OPS: ReadonlySet<string> = Object.freeze(
+  new Set<string>([
+    'bookmark-tool',
+    'execute-tool',
+    'forget-fact',
+    'get-tool-schema',
+    'list-bookmarks',
+    'list-recipes',
+    'recall-facts',
+    'record-fact',
+    'run-recipe',
+    'save-recipe',
+    'search-tools',
+    'unbookmark-tool',
+  ])
+);
+
 export const ESSENTIALS_V1_OPS: ReadonlySet<string> = Object.freeze(
   new Set<string>([
     'drives.CreateBundles',
@@ -237,6 +254,7 @@ export const SP_ADMIN_ESSENTIALS_OPS: ReadonlySet<string> = Object.freeze(
 );
 
 export const PRESET_VERSIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['discovery-v1', DISCOVERY_V1_OPS],
   ['essentials-v1', ESSENTIALS_V1_OPS],
   ['powerbi-essentials', POWERBI_ESSENTIALS_OPS],
   ['pwrapps-essentials', PWRAPPS_ESSENTIALS_OPS],

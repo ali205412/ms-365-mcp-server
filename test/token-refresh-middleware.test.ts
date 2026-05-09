@@ -18,7 +18,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // vi.mock() is hoisted to the top of the file, so any variable it references
 // must be declared inside vi.hoisted() so it is initialised before the mock
 // factory runs. Pattern from Vitest docs: https://vitest.dev/api/vi.html#vi-hoisted
-const { refreshSpy } = vi.hoisted(() => ({ refreshSpy: vi.fn() }));
+const { refreshSpy, sessionRefreshSpy, rememberDelegatedSpy, getRedisSpy, getTenantPoolSpy } =
+  vi.hoisted(() => ({
+    refreshSpy: vi.fn(),
+    sessionRefreshSpy: vi.fn(),
+    rememberDelegatedSpy: vi.fn(),
+    getRedisSpy: vi.fn(),
+    getTenantPoolSpy: vi.fn(),
+  }));
 
 vi.mock('../src/logger.js', () => ({
   default: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -26,6 +33,22 @@ vi.mock('../src/logger.js', () => ({
 
 vi.mock('../src/lib/microsoft-auth.js', () => ({
   refreshAccessToken: refreshSpy,
+}));
+
+vi.mock('../src/lib/session-refresh.js', () => ({
+  refreshSessionAndRetry: sessionRefreshSpy,
+}));
+
+vi.mock('../src/lib/delegated-access-tokens.js', () => ({
+  rememberDelegatedAccessToken: rememberDelegatedSpy,
+}));
+
+vi.mock('../src/lib/redis.js', () => ({
+  getRedis: getRedisSpy,
+}));
+
+vi.mock('../src/lib/tenant/tenant-pool.js', () => ({
+  getTenantPool: getTenantPoolSpy,
 }));
 
 import { TokenRefreshMiddleware } from '../src/lib/middleware/token-refresh.js';
@@ -50,6 +73,10 @@ const secrets = {
 describe('TokenRefreshMiddleware', () => {
   beforeEach(() => {
     refreshSpy.mockReset();
+    sessionRefreshSpy.mockReset();
+    rememberDelegatedSpy.mockReset();
+    getRedisSpy.mockReset();
+    getTenantPoolSpy.mockReset();
   });
 
   it('non-401 passes through unchanged (no refresh attempted)', async () => {
@@ -103,5 +130,61 @@ describe('TokenRefreshMiddleware', () => {
     expect(next).toHaveBeenCalledTimes(2);
     // Bearer token swapped in place before the retry.
     expect(req.headers.Authorization).toBe('Bearer new-access-token');
+  });
+
+  it('401 delegated context uses server-side session refresh and retries once', async () => {
+    const redis = { get: vi.fn(), set: vi.fn(), del: vi.fn() };
+    const tenantPool = { acquire: vi.fn(), getDekForTenant: vi.fn() };
+    getRedisSpy.mockReturnValue(redis);
+    getTenantPoolSpy.mockReturnValue(tenantPool);
+    sessionRefreshSpy.mockResolvedValueOnce({
+      accessToken: 'new-delegated-access-token',
+      expiresOn: new Date(Date.now() + 3600_000),
+    });
+    rememberDelegatedSpy.mockResolvedValueOnce(undefined);
+
+    const mw = new TokenRefreshMiddleware(
+      authManager,
+      secrets as Parameters<typeof TokenRefreshMiddleware>[1]
+    );
+
+    let callCount = 0;
+    const next = vi.fn().mockImplementation(async () => {
+      callCount++;
+      return callCount === 1
+        ? new Response(null, { status: 401 })
+        : new Response(null, { status: 200 });
+    });
+
+    const tenantRow = { id: 'tenant-id', mode: 'delegated' };
+    const { requestContext } = await import('../src/request-context.js');
+    const req = mkReq();
+    const res = await requestContext.run(
+      {
+        flow: 'delegated',
+        accessToken: 'old-delegated-access-token',
+        clientAccessToken: 'stable-client-access-token',
+        tenantRow: tenantRow as never,
+      },
+      () => mw.execute(req, next)
+    );
+
+    expect(res.status).toBe(200);
+    expect(sessionRefreshSpy).toHaveBeenCalledWith({
+      tenant: tenantRow,
+      oldAccessToken: 'stable-client-access-token',
+      tenantPool,
+      redis,
+    });
+    expect(rememberDelegatedSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        redis,
+        tenantId: 'tenant-id',
+        accessToken: 'stable-client-access-token',
+      })
+    );
+    expect(refreshSpy).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(2);
+    expect(req.headers.Authorization).toBe('Bearer new-delegated-access-token');
   });
 });

@@ -4,13 +4,15 @@
  * Always forbidden: javascript:, data:, file:, about:, vbscript: (regardless of mode)
  * Always permitted: http://localhost:* / http://127.0.0.1:* / http://[::1]:* (loopback)
  * Always permitted: https://<host> when host matches policy.publicUrlHost
+ * Always permitted: https://<host> when host matches an entry in
+ *                   policy.extraAllowedHosts (case-insensitive, exact match)
  * Dev mode only:    any https://
  * Prod mode:        everything else is rejected with { ok: false, reason }
  *
- * Phase 3 note: this validator accepts a publicUrlHost parameter so per-tenant
- * allowlists (TENANT-01) can be injected at call time without rewriting the
- * pure function. Phase 3 can grow the policy shape to include
- * `extraAllowedHosts: string[]` without breaking existing callers.
+ * `extraAllowedHosts` exists for OAuth Dynamic Client Registration (RFC
+ * 7591) callers like the Claude.ai connector, whose redirect_uri lives on
+ * the connector's domain (e.g. `claude.ai`), not on the gateway's host.
+ * Operators populate this list via `MS365_MCP_OAUTH_REDIRECT_HOSTS` (CSV).
  *
  * Pure function — no project imports, no side effects.
  */
@@ -21,6 +23,14 @@ export interface RedirectUriPolicy {
   mode: RedirectUriMode;
   /** Parsed host of MS365_MCP_PUBLIC_URL; null when PUBLIC_URL is unset. */
   publicUrlHost: string | null;
+  /**
+   * Extra hosts allowed in prod mode for HTTPS redirect_uris. Used by
+   * DCR for third-party MCP clients (Claude.ai connectors etc.) whose
+   * callbacks live on a different domain than the gateway. Comparison is
+   * case-insensitive and exact-match (no wildcards). Optional — empty /
+   * undefined = behave as before.
+   */
+  extraAllowedHosts?: readonly string[];
 }
 
 const FORBIDDEN_SCHEMES = new Set(['javascript:', 'data:', 'file:', 'about:', 'vbscript:']);
@@ -56,6 +66,18 @@ export function validateRedirectUri(
 
   // Host matches configured PUBLIC_URL — always OK regardless of mode.
   if (url.protocol === 'https:' && policy.publicUrlHost && url.hostname === policy.publicUrlHost) {
+    return { ok: true };
+  }
+
+  // Host matches one of the operator-configured extra hosts — OK regardless
+  // of mode. Exact-match, case-insensitive (URL.hostname is already
+  // lowercased by the WHATWG URL parser, but we lowercase the policy entry
+  // for symmetry against operator input).
+  if (
+    url.protocol === 'https:' &&
+    policy.extraAllowedHosts &&
+    policy.extraAllowedHosts.some((h) => h.toLowerCase() === url.hostname)
+  ) {
     return { ok: true };
   }
 

@@ -19,7 +19,7 @@
 --   - Backward compatible: no existing callers reference this column.
 
 ALTER TABLE tenants
-  ADD COLUMN rate_limits JSONB DEFAULT NULL;
+  ADD COLUMN IF NOT EXISTS rate_limits JSONB DEFAULT NULL;
 
 COMMENT ON COLUMN tenants.rate_limits IS
   'Per-tenant rate-limit overrides as JSONB. Keys: request_per_min, graph_points_per_min. NULL inherits from MS365_MCP_DEFAULT_REQ_PER_MIN / MS365_MCP_DEFAULT_GRAPH_POINTS_PER_MIN env vars.';

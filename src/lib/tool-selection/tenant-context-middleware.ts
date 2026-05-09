@@ -51,7 +51,9 @@ export function createSeedTenantContextMiddleware(): RequestHandler {
       {
         ...existing,
         tenantId: tenant.id,
+        tenantRow: tenant,
         enabledToolsSet: tenant.enabled_tools_set,
+        enabledToolsExplicit: tenant.enabled_tools !== null,
         presetVersion: tenant.preset_version,
       },
       () => next()

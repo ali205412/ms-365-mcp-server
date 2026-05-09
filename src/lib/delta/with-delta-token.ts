@@ -3,14 +3,17 @@
  *
  * Transactional envelope around the `delta_tokens` table:
  *   BEGIN
+ *     INSERT empty lock row if absent
  *     SELECT delta_link FROM delta_tokens
  *       WHERE (tenant_id, resource) FOR UPDATE
  *     call fn(stored || null)
  *     if nextDeltaLink: UPSERT
  *   COMMIT
  *
- * Row-level `FOR UPDATE` serializes overlapping calls per (tenant, resource)
- * so two concurrent callers cannot both full-sweep on first use.
+ * The insert-before-select matters: `FOR UPDATE` locks no row when the token
+ * does not exist yet. A transient empty row gives first-use callers something
+ * concrete to serialize on, then gets deleted again if the caller produces no
+ * delta link.
  *
  * Sync-reset handling (410 Gone / resyncRequired / syncStateNotFound /
  * syncStateInvalid — see Assumption A4 in 04-RESEARCH.md):
@@ -75,16 +78,27 @@ export async function withDeltaToken<T>(
   try {
     await client.query('BEGIN');
 
-    // Row-level lock. New callers for this (tenant, resource) wait here
-    // until the prior transaction COMMITs, so overlapping callers chain
-    // through the same row — no lost updates.
+    const insertedLockRow = await client.query(
+      `INSERT INTO delta_tokens (tenant_id, resource, delta_link, updated_at)
+         VALUES ($1, $2, '', NOW())
+       ON CONFLICT (tenant_id, resource) DO NOTHING
+       RETURNING true AS inserted`,
+      [tenantId, resource]
+    );
+    const insertedEmptyLockRow = insertedLockRow.rows.length > 0;
+
+    // Row-level lock. New callers for this (tenant, resource) wait here until
+    // the prior transaction COMMITs, so overlapping first-use callers cannot
+    // both run a full sweep with deltaLink=null.
     const { rows } = await client.query<{ delta_link: string }>(
       `SELECT delta_link FROM delta_tokens
          WHERE tenant_id = $1 AND resource = $2
          FOR UPDATE`,
       [tenantId, resource]
     );
-    const storedLink: string | null = rows[0]?.delta_link ?? null;
+    const selectedLink = rows[0]?.delta_link ?? null;
+    const createdLockRow = insertedEmptyLockRow && selectedLink === '';
+    const storedLink: string | null = createdLockRow ? null : selectedLink;
 
     let result: DeltaResult<T>;
     try {
@@ -138,6 +152,11 @@ export async function withDeltaToken<T>(
          DO UPDATE SET delta_link = EXCLUDED.delta_link, updated_at = NOW()`,
         [tenantId, resource, result.nextDeltaLink]
       );
+    } else if (createdLockRow) {
+      await client.query(`DELETE FROM delta_tokens WHERE tenant_id = $1 AND resource = $2`, [
+        tenantId,
+        resource,
+      ]);
     }
 
     await client.query('COMMIT');

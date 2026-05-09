@@ -1,5 +1,5 @@
 /**
- * Preset loader (plan 05-03 + 05.1-07 extension).
+ * Preset loader (plan 05-03 + 05.1-07 extension + 07-02 discovery surface).
  *
  * Re-exports the compile-time-generated preset sets plus a version-indexed
  * resolver. Runtime callers MUST go through this file rather than importing
@@ -14,6 +14,7 @@
  * to a wider surface.
  *
  * Preset catalog:
+ *   - `discovery-v1`          — Phase 7 discovery-mode meta surface (12 aliases).
  *   - `essentials-v1`         — legacy cross-product Graph default (150 ops).
  *   - `powerbi-essentials`    — Plan 05.1-07, __powerbi__* admin read-first.
  *   - `pwrapps-essentials`    — Plan 05.1-07, __pwrapps__* admin read-first.
@@ -22,6 +23,7 @@
  *   - `sp-admin-essentials`   — Plan 05.1-07, __spadmin__* tenant admin subset.
  */
 import {
+  DISCOVERY_V1_OPS,
   ESSENTIALS_V1_OPS,
   POWERBI_ESSENTIALS_OPS,
   PWRAPPS_ESSENTIALS_OPS,
@@ -32,6 +34,7 @@ import {
 } from '../../presets/generated-index.js';
 
 export {
+  DISCOVERY_V1_OPS,
   ESSENTIALS_V1_OPS,
   POWERBI_ESSENTIALS_OPS,
   PWRAPPS_ESSENTIALS_OPS,
@@ -41,25 +44,21 @@ export {
 };
 
 /**
- * Canonical default preset_version for fresh tenants. Migration
- * 20260702000000_preset_version.sql pins the DB default to the same
- * literal so a newly-inserted tenant row always resolves to this preset.
- *
- * Plan 05.1-07 does NOT change the default — cross-product `essentials-v1`
- * remains the fresh-tenant default. Operators opt into per-product
- * essentials by PATCHing a tenant's `enabled_tools` or `preset_version`
- * to one of the 5 new preset names.
+ * Canonical default preset_version for fresh tenants created through
+ * supported create paths. Phase 7 Plan 07-02 changes this to the
+ * discovery-mode meta surface; existing tenants are not migrated.
  */
-export const DEFAULT_PRESET_VERSION = 'essentials-v1';
+export const DEFAULT_PRESET_VERSION = 'discovery-v1';
 
 /**
  * All known preset version literals as a frozen readonly tuple. Consumers
  * (admin PATCH validator, registry-validator, preset-picker UI) should
  * source the canonical list from here rather than hard-coding strings —
  * ensures the single generated-index.ts stays the one place where preset
- * names are declared. Plan 05.1-07 adds 5 entries on top of the legacy one.
+ * names are declared.
  */
 export const KNOWN_PRESET_VERSIONS: readonly string[] = Object.freeze([
+  'discovery-v1',
   'essentials-v1',
   'powerbi-essentials',
   'pwrapps-essentials',

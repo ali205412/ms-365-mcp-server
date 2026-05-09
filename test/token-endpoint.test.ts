@@ -73,7 +73,7 @@ const SECRET_CLIENT_SECRET = 'CLIENT_SECRET_VALUE_SECRET_def456';
  * factory exported from src/server.ts.
  *
  * Strategy used below: the test app delegates to a factory function
- * `createTokenHandler` imported from src/server.ts. That factory is
+ * `createTokenHandler` imported from src/lib/oauth/token-handler.ts. That factory is
  * added in Task 3 (GREEN). Until then, the import throws and every
  * test in this file fails — which is the RED contract.
  */
@@ -81,7 +81,7 @@ async function startTokenServer(): Promise<{
   url: string;
   close: () => Promise<void>;
 }> {
-  const { createTokenHandler } = await import('../src/server.js');
+  const { createTokenHandler } = await import('../src/lib/oauth/token-handler.js');
   const { MemoryPkceStore } = await import('../src/lib/pkce-store/memory-store.js');
 
   const app = express();
@@ -283,5 +283,33 @@ describe('/token — SECUR-05 (no body in error logs)', () => {
         }
       }
     }
+  });
+
+  it('Test 4: legacy authorization_code response strips upstream refresh_token', async () => {
+    const auth = await import('../src/lib/microsoft-auth.js');
+    vi.mocked(auth.exchangeCodeForToken).mockResolvedValueOnce({
+      access_token: 'access-token-public',
+      token_type: 'Bearer',
+      scope: 'User.Read',
+      expires_in: 3600,
+      refresh_token: 'rt-upstream-must-not-cross-boundary',
+    });
+    server = await startTokenServer();
+
+    const res = await fetch(`${server.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'authorization_code',
+        code: 'auth-code',
+        redirect_uri: 'http://localhost:3000/cb',
+        code_verifier: 'verifier',
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.access_token).toBe('access-token-public');
+    expect(body.refresh_token).toBeUndefined();
   });
 });

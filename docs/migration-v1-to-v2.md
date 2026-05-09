@@ -15,7 +15,7 @@ Microsoft when an access token expired (HTTP 401 from Graph).
 In **v2**, this header is **never read**. The refresh-token header-read code
 path is deleted from `src/lib/microsoft-auth.ts`. Refresh tokens now live
 server-side, in a Redis-backed session store at
-`mcp:session:{tenantId}:{sha256(accessToken)}`, encrypted with a per-tenant
+`mcp:session:{tenantId}:{sha256(clientAccessToken)}`, encrypted with a per-tenant
 DEK via the envelope encryption substrate from plan 03-04.
 
 ### Why

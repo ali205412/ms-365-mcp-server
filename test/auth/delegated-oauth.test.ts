@@ -24,6 +24,7 @@ import crypto from 'node:crypto';
 import { MemoryRedisFacade } from '../../src/lib/redis-facade.js';
 import { RedisPkceStore } from '../../src/lib/pkce-store/redis-store.js';
 import { generateTenantDek } from '../../src/lib/crypto/dek.js';
+import { hasDelegatedAccessToken } from '../../src/lib/delegated-access-tokens.js';
 import type { TenantRow } from '../../src/lib/tenant/tenant-row.js';
 
 vi.mock('../../src/logger.js', () => ({
@@ -87,7 +88,8 @@ async function startApp(tenantOverrides: Partial<TenantRow> = {}): Promise<AppHa
     getDekForTenant: vi.fn(() => Buffer.alloc(32, 7)),
   };
 
-  const { createAuthorizeHandler, createTenantTokenHandler } = await import('../../src/server.js');
+  const { createAuthorizeHandler, createTenantTokenHandler } =
+    await import('../../src/lib/oauth/tenant-handlers.js');
 
   const app = express();
   app.use(express.json());
@@ -297,6 +299,13 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     expect(body.access_token).toBe('access-token-abc');
     expect(body.token_type).toBe('Bearer');
     expect(body.expires_in).toBeGreaterThan(0);
+    await expect(
+      hasDelegatedAccessToken({
+        redis: harness.redis,
+        tenantId: harness.tenant.id,
+        accessToken: body.access_token,
+      })
+    ).resolves.toBe(true);
 
     // MSAL was called with server's verifier and the auth code
     expect(harness.mockMsalAcquireByCode).toHaveBeenCalledTimes(1);

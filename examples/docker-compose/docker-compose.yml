@@ -57,9 +57,9 @@ services:
       MS365_MCP_PUBLIC_URL: ${MS365_MCP_PUBLIC_URL}
       MS365_MCP_CORS_ORIGINS: ${MS365_MCP_CORS_ORIGINS}
       # Postgres — multi-tenant state (tenant registry, audit, delta tokens,
-      # api keys). Default points at the postgres: service below; override in
-      # .env to point at a managed DB.
-      MS365_MCP_DATABASE_URL: ${MS365_MCP_DATABASE_URL:-postgresql://mcp:mcp@postgres:5432/mcp}
+      # api keys). Required so deployments do not inherit known sample
+      # credentials; set this in .env even when using the postgres: service.
+      MS365_MCP_DATABASE_URL: ${MS365_MCP_DATABASE_URL:?set MS365_MCP_DATABASE_URL}
       # Redis — hot session state (PKCE, MSAL cache, rate limits). Default
       # points at the redis: service below; override in .env for managed Redis.
       MS365_MCP_REDIS_URL: ${MS365_MCP_REDIS_URL:-redis://redis:6379}
@@ -139,11 +139,8 @@ services:
     container_name: ms-365-mcp-postgres
     restart: unless-stopped
     environment:
-      # Defaults match the MS365_MCP_DATABASE_URL default above; override
-      # all three in .env if you rotate credentials. User/password/db are
-      # read by the Postgres image init scripts.
       POSTGRES_USER: ${POSTGRES_USER:-mcp}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mcp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-mcp}
       # Tighten default to reject connections that aren't over a TLS
       # channel OR from inside the compose network. Internal bridge is

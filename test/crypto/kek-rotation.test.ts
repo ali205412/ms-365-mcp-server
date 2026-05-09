@@ -8,8 +8,8 @@
  *   - 3 tenants seeded with old-KEK-wrapped DEKs; main() rewraps all 3.
  *   - After rotate: unwrapTenantDek(row.wrapped_dek, newKek) succeeds per tenant
  *     and returns the original DEK bytes.
- *   - Idempotency: second rotate with same old/new → skipped=N (old KEK fails
- *     to unwrap because the rows now carry new-KEK envelopes).
+ *   - Idempotency: second rotate with same old/new fails closed unless
+ *     --allow-skipped is explicitly provided.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { newDb } from 'pg-mem';
@@ -106,7 +106,7 @@ describe('plan 03-04 Task 2 — bin/rotate-kek.mjs', () => {
     }
   });
 
-  it('is idempotent: running rotate twice with the same old/new skips all rows on the second run', async () => {
+  it('fails closed when old KEK cannot unwrap rows unless --allow-skipped is explicit', async () => {
     await seedTenant(pool, '44444444-4444-4444-8444-444444444444', oldKek);
     await seedTenant(pool, '55555555-5555-4555-8555-555555555555', oldKek);
 
@@ -116,12 +116,23 @@ describe('plan 03-04 Task 2 — bin/rotate-kek.mjs', () => {
     );
     expect(first).toEqual({ rewrapped: 2, skipped: 0 });
 
-    // Second run: old KEK now fails to unwrap all rows.
-    const second = await rotateKekMain(
-      [`--old=${oldKek.toString('base64')}`, `--new=${newKek.toString('base64')}`],
+    // Second run: old KEK now fails to unwrap all rows and should not look
+    // like a successful rotation by default.
+    await expect(
+      rotateKekMain([`--old=${oldKek.toString('base64')}`, `--new=${newKek.toString('base64')}`], {
+        pool,
+      })
+    ).rejects.toThrow(/skipped 2 row/);
+
+    const explicit = await rotateKekMain(
+      [
+        `--old=${oldKek.toString('base64')}`,
+        `--new=${newKek.toString('base64')}`,
+        '--allow-skipped',
+      ],
       { pool }
     );
-    expect(second).toEqual({ rewrapped: 0, skipped: 2 });
+    expect(explicit).toEqual({ rewrapped: 0, skipped: 2 });
   });
 
   it('skips rows whose wrapped_dek is NULL (03-01 placeholder tenants)', async () => {

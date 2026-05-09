@@ -12,7 +12,7 @@
 --     GUID-only per D-13.
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-CREATE TABLE tenants (
+CREATE TABLE IF NOT EXISTS tenants (
   id                        uuid PRIMARY KEY,
   mode                      text NOT NULL CHECK (mode IN ('delegated', 'app-only', 'bearer')),
   client_id                 text NOT NULL,
@@ -30,8 +30,8 @@ CREATE TABLE tenants (
   updated_at                timestamptz NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_tenants_disabled_at ON tenants (disabled_at) WHERE disabled_at IS NULL;
-CREATE INDEX idx_tenants_slug ON tenants (slug) WHERE slug IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tenants_disabled_at ON tenants (disabled_at) WHERE disabled_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_tenants_slug ON tenants (slug) WHERE slug IS NOT NULL;
 
 -- Down Migration
 DROP TABLE IF EXISTS tenants CASCADE;

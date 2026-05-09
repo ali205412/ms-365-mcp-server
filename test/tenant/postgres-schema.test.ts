@@ -17,7 +17,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { newDb, type IMemoryDb } from 'pg-mem';
+import { DataType, newDb, type IMemoryDb } from 'pg-mem';
 import type { Pool } from 'pg';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -41,18 +41,25 @@ function listMigrations(): MigrationPair[] {
       // pg-mem doesn't understand DROP/CREATE EXTENSION — filter at harness level.
       return {
         file,
-        up: stripPgcryptoExtensionStmts(up),
-        down: stripPgcryptoExtensionStmts(down),
+        up: stripPgMemUnsupportedStmts(up),
+        down: stripPgMemUnsupportedStmts(down),
       };
     });
 }
 
-function stripPgcryptoExtensionStmts(sql: string): string {
-  // Remove any line containing `EXTENSION ... pgcrypto`. Case-insensitive.
+function stripPgMemUnsupportedStmts(sql: string): string {
+  // Remove extension DDL and Phase 7 tsvector/pgvector statements that
+  // production Postgres supports but pg-mem cannot parse or execute.
   return sql
     .split('\n')
     .filter((line) => !/\bextension\b.*\bpgcrypto\b/i.test(line))
-    .join('\n');
+    .join('\n')
+    .replace(/\n\s*content_tsv\s+tsvector\s+GENERATED\s+ALWAYS\s+AS[\s\S]*?\s+STORED,?/i, '')
+    .replace(
+      /\nCREATE\s+INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?idx_tenant_facts_content_tsv\s+ON\s+tenant_facts\s+USING\s+gin\s+\(content_tsv\);/i,
+      ''
+    )
+    .replace(/\nDO\s+\$\$[\s\S]*?\$\$;/i, '');
 }
 
 function makePool(): { db: IMemoryDb; pool: Pool } {
@@ -62,6 +69,11 @@ function makePool(): { db: IMemoryDb; pool: Pool } {
   // succeed (though we strip those statements above defensively).
   db.registerExtension('pgcrypto', () => {
     // no-op — we never depend on gen_random_uuid at the app layer
+  });
+  db.public.registerFunction({
+    name: 'gen_random_uuid',
+    returns: DataType.uuid,
+    implementation: () => '00000000-0000-4000-8000-000000000001',
   });
   const { Pool } = db.adapters.createPg();
   return { db, pool: new Pool() as Pool };
@@ -128,6 +140,10 @@ describe('plan 03-01 — Postgres schema round-trip', () => {
       // per-tenant rate limit overrides (request_per_min,
       // graph_points_per_min).
       '20260901000000_tenant_rate_limits.sql',
+      // Plan 07-01: tenant memory tables for bookmarks, recipes, and facts.
+      '20261001000000_tenant_memory.sql',
+      // Plan 08-05: tenant editable skills.
+      '20261101000000_tenant_skills.sql',
     ]);
   });
 
@@ -138,6 +154,42 @@ describe('plan 03-01 — Postgres schema round-trip', () => {
     }
     const tables = await listTables(pool, ['tenants', 'audit_log', 'delta_tokens', 'api_keys']);
     expect(tables).toEqual(['api_keys', 'audit_log', 'delta_tokens', 'tenants']);
+  });
+
+  it('keeps additive Up migrations idempotent for schema-present/bookkeeping-missing recovery', () => {
+    const migrations = listMigrations();
+    const byFile = new Map(migrations.map((m) => [m.file, m.up]));
+
+    expect(byFile.get('20260501000000_tenants.sql')).toMatch(
+      /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+tenants/i
+    );
+    expect(byFile.get('20260501000100_audit_log.sql')).toMatch(
+      /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+audit_log/i
+    );
+    expect(byFile.get('20260501000200_delta_tokens.sql')).toMatch(
+      /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+delta_tokens/i
+    );
+    expect(byFile.get('20260501000300_api_keys.sql')).toMatch(
+      /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+api_keys/i
+    );
+    expect(byFile.get('20260601000000_subscriptions.sql')).toMatch(
+      /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+subscriptions/i
+    );
+    expect(byFile.get('20260702000000_preset_version.sql')).toMatch(
+      /ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+preset_version/i
+    );
+    expect(byFile.get('20260801000000_sharepoint_domain.sql')).toMatch(
+      /ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+sharepoint_domain/i
+    );
+    expect(byFile.get('20260901000000_tenant_rate_limits.sql')).toMatch(
+      /ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+rate_limits/i
+    );
+    expect(byFile.get('20261001000000_tenant_memory.sql')).toMatch(
+      /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+tenant_facts/i
+    );
+    expect(byFile.get('20261101000000_tenant_skills.sql')).toMatch(
+      /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+tenant_skills/i
+    );
   });
 
   it('creates the tenants table with the expected columns + wrapped_dek JSONB', async () => {
@@ -201,20 +253,20 @@ describe('plan 03-01 — Postgres schema round-trip', () => {
     expect(cols).toContain('last_used_at');
   });
 
-  it('round-trips all four migrations (Up then Down in reverse drops everything)', async () => {
+  it('round-trips migrations and preserves additive-only tables on Down', async () => {
     const migrations = listMigrations();
     for (const m of migrations) {
       await pool.query(m.up);
     }
-    // Sanity — all four present before rollback
-    const before = await listTables(pool, ['tenants', 'audit_log', 'delta_tokens', 'api_keys']);
-    expect(before).toHaveLength(4);
+    const trackedTables = ['tenants', 'audit_log', 'delta_tokens', 'api_keys', 'tenant_skills'];
+    const before = await listTables(pool, trackedTables);
+    expect(before).toEqual(['api_keys', 'audit_log', 'delta_tokens', 'tenant_skills', 'tenants']);
 
     for (const m of [...migrations].reverse()) {
       await pool.query(m.down);
     }
-    const after = await listTables(pool, ['tenants', 'audit_log', 'delta_tokens', 'api_keys']);
-    expect(after).toEqual([]);
+    const after = await listTables(pool, trackedTables);
+    expect(after).toEqual(['tenant_skills']);
   });
 
   it('enforces tenant_id FK cascade — deleting a tenant removes audit/delta/apikey rows', async () => {

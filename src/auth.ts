@@ -4,6 +4,7 @@ import logger from './logger.js';
 import fs, { existsSync, readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import os from 'os';
 import { getSecrets, type AppSecrets } from './secrets.js';
 import { getCloudEndpoints, getDefaultClientId } from './cloud-config.js';
 import { PRODUCT_AUDIENCES, type Product, type ProductAudienceCtx } from './lib/auth/products.js';
@@ -32,13 +33,13 @@ const endpoints = {
   default: endpointsData,
 };
 
-const FALLBACK_DIR = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_TOKEN_CACHE_PATH = path.join(FALLBACK_DIR, '..', '.token-cache.json');
-const DEFAULT_SELECTED_ACCOUNT_PATH = path.join(FALLBACK_DIR, '..', '.selected-account.json');
+const DEFAULT_TOKEN_CACHE_PATH = path.join(os.homedir(), '.ms-365-mcp-token-cache.json');
+const DEFAULT_SELECTED_ACCOUNT_PATH = path.join(os.homedir(), '.ms-365-mcp-selected-account.json');
 
 /**
  * Returns the token cache file path.
- * Uses MS365_MCP_TOKEN_CACHE_PATH env var if set, otherwise the default fallback.
+ * Uses MS365_MCP_TOKEN_CACHE_PATH env var if set, otherwise a user-owned
+ * default outside the package/repository directory.
  */
 function getTokenCachePath(): string {
   const envPath = process.env.MS365_MCP_TOKEN_CACHE_PATH?.trim();
@@ -47,7 +48,8 @@ function getTokenCachePath(): string {
 
 /**
  * Returns the selected-account file path.
- * Uses MS365_MCP_SELECTED_ACCOUNT_PATH env var if set, otherwise the default fallback.
+ * Uses MS365_MCP_SELECTED_ACCOUNT_PATH env var if set, otherwise a user-owned
+ * default outside the package/repository directory.
  */
 function getSelectedAccountPath(): string {
   const envPath = process.env.MS365_MCP_SELECTED_ACCOUNT_PATH?.trim();

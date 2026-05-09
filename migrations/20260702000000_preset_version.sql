@@ -16,7 +16,7 @@
 -- admin PATCH Zod validator prevents pathological values from landing.
 
 ALTER TABLE tenants
-  ADD COLUMN preset_version text NOT NULL DEFAULT 'essentials-v1';
+  ADD COLUMN IF NOT EXISTS preset_version text NOT NULL DEFAULT 'essentials-v1';
 
 -- Explicit backfill — redundant with the DEFAULT on ADD COLUMN, but the
 -- UPDATE keeps the intent auditable in the migration log (so ops reviewing

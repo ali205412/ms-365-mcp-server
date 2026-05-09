@@ -4,6 +4,7 @@
  *
  * Usage:
  *   node bin/rotate-kek.mjs --old=<base64-32-bytes> --new=<base64-32-bytes>
+ *   node bin/rotate-kek.mjs --old=<...> --new=<...> --allow-skipped
  *
  * Procedure (D-12 manual quarterly rotation):
  *   1. Unwrap each tenant's `wrapped_dek` with the old KEK.
@@ -11,9 +12,10 @@
  *   3. UPDATE tenants SET wrapped_dek = <new_envelope>, updated_at = NOW().
  *
  * Transactional per row. Tenants whose wrapped_dek fails to unwrap with the
- * old KEK (because they were already rotated, or the row is a disabled
- * cryptoshred placeholder) are silently skipped and counted in `skipped`.
- * Rows with wrapped_dek = NULL are skipped without even attempting unwrap.
+ * old KEK are counted in `skipped` and cause a non-zero failure by default.
+ * Use --allow-skipped only when you intentionally expect already-rotated or
+ * corrupt rows. Rows with wrapped_dek = NULL are skipped without attempting
+ * unwrap and do not count as unwrap failures.
  *
  * Run during a maintenance window. After completion, the operator updates
  * MS365_MCP_KEK and restarts the server. During the rewrap window,
@@ -69,6 +71,10 @@ function getFlag(argv, name) {
   return match ? match.slice(prefix.length) : undefined;
 }
 
+function hasSwitch(argv, name) {
+  return argv.includes(`--${name}`);
+}
+
 function parseKeyArg(b64, label) {
   if (!b64) {
     throw new Error(`--${label}=<base64-32-bytes> is required`);
@@ -90,6 +96,7 @@ function parseKeyArg(b64, label) {
 export async function main(argv = process.argv.slice(2), deps = {}) {
   const oldB64 = getFlag(argv, 'old');
   const newB64 = getFlag(argv, 'new');
+  const allowSkipped = hasSwitch(argv, 'allow-skipped');
   const oldKek = parseKeyArg(oldB64, 'old');
   const newKek = parseKeyArg(newB64, 'new');
 
@@ -148,6 +155,13 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
           meta: { batchId, partOfBatch: true },
         });
       }
+    }
+
+    if (skipped > 0 && !allowSkipped) {
+      throw new Error(
+        `KEK rotation skipped ${skipped} row(s) because they could not be unwrapped with the old KEK. ` +
+          'Refusing to report success; verify --old or rerun with --allow-skipped for known already-rotated/corrupt rows.'
+      );
     }
 
     return { rewrapped, skipped };

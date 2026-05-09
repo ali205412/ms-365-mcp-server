@@ -1,4 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import type { ClientCapabilityProfile } from './lib/mcp-capabilities/profile.js';
+import type { TenantRow } from './lib/tenant/tenant-row.js';
 
 /**
  * Phase 3 plan 03-05 addition: authentication flow carried in request
@@ -12,10 +14,12 @@ export type AuthFlow = 'delegated' | 'app-only' | 'bearer' | 'device-code';
 
 export interface RequestContext {
   accessToken?: string; // was required — now OPTIONAL (non-HTTP callers may not set it)
+  clientAccessToken?: string; // Stable MCP bearer presented by the HTTP client.
   refreshToken?: string;
   // Phase 1 additions:
   requestId?: string;
   tenantId?: string | null; // Phase 1 placeholder; set by 03-08 loadTenant middleware
+  tenantRow?: TenantRow;
   // Phase 2 additions (plan 02-01 scaffold; populated by 02-02 RetryHandler):
   retryCount?: number; // Number of retries performed by RetryHandler (02-02)
   lastStatus?: number; // HTTP status of the final response returned by the pipeline
@@ -31,6 +35,7 @@ export interface RequestContext {
   // by dispatch-guard (src/lib/tool-selection/dispatch-guard.ts) at the top
   // of executeGraphTool (src/graph-tools.ts). TENANT-08 isolation.
   enabledToolsSet?: ReadonlySet<string>;
+  enabledToolsExplicit?: boolean;
   presetVersion?: string;
   // Phase 5.1 plan 05.1-06 additions — populated by loadTenant middleware
   // (src/lib/tenant/load-tenant.ts) from the tenants row. Consumed by
@@ -68,12 +73,34 @@ export interface RequestContext {
    * attribute keeps the full alias for high-fidelity trace queries.
    */
   toolAlias?: string;
+  /**
+   * Phase 8 session/request capability profile. Ephemeral only: seeded from
+   * Streamable HTTP initialize/session data or stdio defaults and never
+   * persisted to Postgres.
+   */
+  capabilityProfile?: ClientCapabilityProfile;
+  /** Authenticated user/session owner for user-scoped editable skills. */
+  ownerSubject?: string;
 }
 
-export const requestContext = new AsyncLocalStorage<RequestContext>();
+const REQUEST_CONTEXT_KEY = Symbol.for('ms-365-mcp-server.requestContext');
+
+type RequestContextGlobal = typeof globalThis & {
+  [REQUEST_CONTEXT_KEY]?: AsyncLocalStorage<RequestContext>;
+};
+
+const requestContextGlobal = globalThis as RequestContextGlobal;
+export const requestContext =
+  requestContextGlobal[REQUEST_CONTEXT_KEY] ?? new AsyncLocalStorage<RequestContext>();
+requestContextGlobal[REQUEST_CONTEXT_KEY] = requestContext;
 
 export function getRequestTokens(): RequestContext | undefined {
   return requestContext.getStore();
+}
+
+export function getRequestOwnerSubject(): string | undefined {
+  const value = requestContext.getStore()?.ownerSubject;
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
 }
 
 export function getRequestId(): string | undefined {
@@ -101,12 +128,14 @@ export function getFlow(): AuthFlow | undefined {
 export function getRequestTenant(): {
   id?: string;
   enabledToolsSet?: ReadonlySet<string>;
+  enabledToolsExplicit?: boolean;
   presetVersion?: string;
 } {
   const ctx = requestContext.getStore();
   return {
     id: ctx?.tenantId ?? undefined,
     enabledToolsSet: ctx?.enabledToolsSet,
+    enabledToolsExplicit: ctx?.enabledToolsExplicit,
     presetVersion: ctx?.presetVersion,
   };
 }

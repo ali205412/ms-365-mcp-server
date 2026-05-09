@@ -9,7 +9,8 @@
  *     --tenant-id=<guid> \
  *     --mode=<delegated|app-only|bearer> \
  *     [--slug=<text>] \
- *     [--cloud-type=global|china]
+ *     [--cloud-type=global|china] \
+ *     [--preset-version=discovery-v1|essentials-v1|...]
  *
  * The KEK is loaded via src/lib/crypto/kek.ts (MS365_MCP_KEK env or Key Vault
  * secret `mcp-kek`). A fresh 32-byte DEK is generated and wrapped with the
@@ -30,6 +31,8 @@ import { randomUUID } from 'node:crypto';
 
 const VALID_MODES = new Set(['delegated', 'app-only', 'bearer']);
 const VALID_CLOUDS = new Set(['global', 'china']);
+const DEFAULT_PRESET_VERSION = 'discovery-v1';
+const PRESET_VERSION_REGEX = /^[a-z0-9-]{1,64}$/;
 
 /**
  * Extract a `--key=value` flag from the argv list. Returns undefined when
@@ -87,6 +90,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const mode = getFlag(argv, 'mode');
   const slug = getFlag(argv, 'slug') ?? null;
   const cloudType = getFlag(argv, 'cloud-type') ?? 'global';
+  const presetVersion = getFlag(argv, 'preset-version') ?? DEFAULT_PRESET_VERSION;
 
   if (!clientId) throw new Error('--client-id=<guid> is required');
   if (!tenantId) throw new Error('--tenant-id=<guid> is required');
@@ -97,6 +101,11 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   if (!VALID_CLOUDS.has(cloudType)) {
     throw new Error(
       `invalid --cloud-type=${cloudType}; must be one of ${[...VALID_CLOUDS].join(',')}`
+    );
+  }
+  if (!PRESET_VERSION_REGEX.test(presetVersion)) {
+    throw new Error(
+      'invalid --preset-version; must be lowercase alphanumeric + hyphen, 1-64 chars'
     );
   }
 
@@ -121,9 +130,9 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const { wrappedDek } = generateFn(kek);
 
   await pool.query(
-    `INSERT INTO tenants (id, mode, client_id, tenant_id, cloud_type, slug, wrapped_dek)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
-    [id, mode, clientId, tenantId, cloudType, slug, JSON.stringify(wrappedDek)]
+    `INSERT INTO tenants (id, mode, client_id, tenant_id, cloud_type, slug, preset_version, wrapped_dek)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
+    [id, mode, clientId, tenantId, cloudType, slug, presetVersion, JSON.stringify(wrappedDek)]
   );
 
   info(`Tenant ${id} created with wrapped_dek set (plan 03-04)`);

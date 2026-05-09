@@ -101,6 +101,46 @@ describe('withDeltaToken — concurrency / FOR UPDATE contract (plan 04-09 Task 
     vi.clearAllMocks();
   });
 
+  it('Test 0: first-use path creates a lock row before SELECT FOR UPDATE', async () => {
+    const queries: string[] = [];
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        queries.push(sql);
+        if (/INSERT INTO delta_tokens/i.test(sql)) {
+          return { rowCount: 1, rows: [{ inserted: true }] };
+        }
+        if (/SELECT delta_link FROM delta_tokens/i.test(sql)) {
+          return { rowCount: 1, rows: [{ delta_link: '' }] };
+        }
+        if (/DELETE FROM delta_tokens/i.test(sql)) return { rowCount: 1, rows: [] };
+        return { rowCount: 0, rows: [] };
+      }),
+      release: vi.fn(),
+    };
+    const pool = {
+      connect: vi.fn(async () => client),
+    } as unknown as Pool;
+
+    const observed: Array<string | null> = [];
+    const result = await withDeltaToken<string>(
+      pool,
+      TENANT_A,
+      'users/alice/messages',
+      async (stored) => {
+        observed.push(stored);
+        return { data: 'full', nextDeltaLink: null };
+      }
+    );
+
+    expect(result).toBe('full');
+    expect(observed).toEqual([null]);
+    expect(queries[0]).toBe('BEGIN');
+    expect(queries[1]).toMatch(/INSERT INTO delta_tokens/i);
+    expect(queries[2]).toMatch(/SELECT delta_link FROM delta_tokens[\s\S]*FOR UPDATE/i);
+    expect(queries.some((q) => /DELETE FROM delta_tokens/i.test(q))).toBe(true);
+    expect(queries.at(-1)).toBe('COMMIT');
+  });
+
   it("Test 1: two sequential calls chain delta links — second fn observes first fn's persisted nextDeltaLink", async () => {
     const pool = await makePool();
     await seedTenant(pool, TENANT_A);

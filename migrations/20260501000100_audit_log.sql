@@ -14,7 +14,7 @@
 --     admin API (Phase 4). request_id single-column index supports
 --     Microsoft-support cross-correlation (ODataError.requestId from
 --     02-04).
-CREATE TABLE audit_log (
+CREATE TABLE IF NOT EXISTS audit_log (
   id          text PRIMARY KEY,
   tenant_id   uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   actor       text NOT NULL,
@@ -27,9 +27,9 @@ CREATE TABLE audit_log (
   ts          timestamptz NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_audit_log_tenant_ts ON audit_log (tenant_id, ts DESC);
-CREATE INDEX idx_audit_log_action ON audit_log (tenant_id, action, ts DESC);
-CREATE INDEX idx_audit_log_request_id ON audit_log (request_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_tenant_ts ON audit_log (tenant_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log (tenant_id, action, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_log_request_id ON audit_log (request_id);
 
 -- Down Migration
 DROP TABLE IF EXISTS audit_log;

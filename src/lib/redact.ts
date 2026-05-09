@@ -36,6 +36,7 @@ const SENSITIVE_HEADERS = new Set([
   // ('req.headers["x-admin-api-key"]') for log records; this helper covers
   // ad-hoc `scrubHeaders(headers)` call-sites (e.g., audit meta building).
   'x-admin-api-key',
+  'x-mcp-app-key',
 ]);
 
 /**

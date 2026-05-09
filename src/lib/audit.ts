@@ -35,6 +35,7 @@
 import type { Pool, PoolClient } from 'pg';
 import { randomUUID } from 'node:crypto';
 import logger from '../logger.js';
+import { scheduleAfterCommit } from './postgres.js';
 
 /**
  * Closed set of audit actions the codebase emits.
@@ -53,8 +54,8 @@ import logger from '../logger.js';
  *   Phase 4 admin.* (ADMIN-01..06):
  *   admin.tenant.create            { tenantId, clientId, mode, cloudType }
  *   admin.tenant.update            { tenantId, fieldsChanged: string[] }
- *   admin.tenant.disable           { tenantId, cacheKeysDeleted, pkceKeysDeleted, apiKeysRevoked }
- *   admin.tenant.delete            { tenantId, apiKeysRevoked }
+ *   admin.tenant.disable           { tenantId, cacheKeysDeleted, pkceKeysDeleted, revokedCredentialCount }
+ *   admin.tenant.delete            { tenantId, revokedCredentialCount }
  *   admin.tenant.rotate-secret     { tenantId, oldWrappedDekHash, newWrappedDekHash }
  *   admin.api-key.mint             { keyId, displaySuffix, tenantId }
  *   admin.api-key.revoke           { keyId, tenantId }
@@ -148,6 +149,16 @@ const INSERT_SQL = `
   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
 `;
 
+export type AuditResourcePublisher = (tenantId: string) => void | Promise<void>;
+
+let auditResourcePublisher: AuditResourcePublisher | undefined;
+
+export function registerAuditResourcePublisher(
+  publisher: AuditResourcePublisher | undefined
+): void {
+  auditResourcePublisher = publisher;
+}
+
 function rowToParams(row: AuditRow): unknown[] {
   return [
     randomUUID(),
@@ -170,6 +181,9 @@ function rowToParams(row: AuditRow): unknown[] {
  */
 export async function writeAudit(client: PoolClient, row: AuditRow): Promise<void> {
   await client.query(INSERT_SQL, rowToParams(row));
+  if (typeof scheduleAfterCommit === 'function') {
+    scheduleAfterCommit(client, () => publishAuditResourceUpdate(row.tenantId));
+  }
 }
 
 /**
@@ -191,5 +205,20 @@ export async function writeAuditStandalone(pool: Pool, row: AuditRow): Promise<v
       },
       'audit INSERT failed; writing shadow log'
     );
+    return;
   }
+
+  try {
+    await publishAuditResourceUpdate(row.tenantId);
+  } catch (err) {
+    logger.warn(
+      { tenantId: row.tenantId, err: (err as Error).message },
+      'audit resource notification publish failed'
+    );
+  }
+}
+
+async function publishAuditResourceUpdate(tenantId: string): Promise<void> {
+  if (!auditResourcePublisher) return;
+  await auditResourcePublisher(tenantId);
 }

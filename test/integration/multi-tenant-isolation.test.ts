@@ -144,7 +144,7 @@ describe('plan 03-08 — multi-tenant isolation (SC#2)', () => {
     };
 
     const { createAuthorizeHandler, createTenantTokenHandler } =
-      await import('../../src/server.js');
+      await import('../../src/lib/oauth/tenant-handlers.js');
     const { createLoadTenantMiddleware } = await import('../../src/lib/tenant/load-tenant.js');
     const { createPerTenantCorsMiddleware } = await import('../../src/lib/cors.js');
 

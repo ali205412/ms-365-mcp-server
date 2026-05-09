@@ -32,6 +32,7 @@ import { createServer, type Server } from 'node:http';
 import type { PrometheusExporter } from '@opentelemetry/exporter-prometheus';
 
 import { createBearerAuthMiddleware } from './bearer-auth.js';
+import { resolveTrustProxySetting } from '../trust-proxy.js';
 import logger, { rawPinoLogger } from '../../logger.js';
 
 export interface MetricsServerConfig {
@@ -61,7 +62,7 @@ export function createMetricsServer(
   config: MetricsServerConfig
 ): Server {
   const app = express();
-  app.set('trust proxy', true);
+  app.set('trust proxy', resolveTrustProxySetting());
 
   // pino-http with autoLogging.ignore on /metrics — Prometheus scrapes every
   // 15s would otherwise flood the log (T-06-03-c "log flood"). Health probe

@@ -29,6 +29,7 @@ import { createHash } from 'node:crypto';
 import { LRUCache } from 'lru-cache';
 import type { RedisClient } from '../redis.js';
 import { unwrapTenantDek } from '../crypto/dek.js';
+import { unwrapWithDek } from '../crypto/envelope.js';
 import { getCloudEndpoints } from '../../cloud-config.js';
 import { createRedisCachePlugin, type CachePluginConfig } from '../msal-cache-plugin.js';
 import logger from '../../logger.js';
@@ -115,6 +116,27 @@ export class TenantPool {
     const dek = unwrapTenantDek(tenant.wrapped_dek, this.kek);
     const cloudEndpoints = getCloudEndpoints(tenant.cloud_type);
     const authority = `${cloudEndpoints.authority}/${tenant.tenant_id || 'common'}`;
+
+    // Resolve client_secret_ref → client_secret_resolved (lazy, in-memory).
+    // tenant-row.ts documents this as "Done lazily at tenant-pool.acquire()
+    // time so plain SELECTs never materialize a plaintext secret." but the
+    // resolver was never wired. This block parses the ref:
+    //   - JSON envelope `{v,iv,tag,ct}` → AES-GCM-decrypt with the tenant DEK
+    //   - anything else (plain string / future `env:` / `kv:` schemes) is
+    //     left for callers / future plans to handle (logged at debug only).
+    if (tenant.client_secret_ref && !tenant.client_secret_resolved) {
+      const ref = tenant.client_secret_ref.trim();
+      if (ref.startsWith('{')) {
+        try {
+          const envelope = JSON.parse(ref);
+          tenant.client_secret_resolved = unwrapWithDek(envelope, dek).toString('utf8');
+        } catch (err) {
+          throw new Error(
+            `Tenant ${tenant.id}: failed to unwrap client_secret_ref envelope: ${(err as Error).message}`
+          );
+        }
+      }
+    }
 
     const client = this.buildMsalClient(tenant, authority);
     this.pool.set(tenant.id, {

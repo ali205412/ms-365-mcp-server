@@ -13,7 +13,7 @@
  * inside MicrosoftGraphServer.start(). Exposing a factory would ripple
  * the secrets / publicBase wiring through the whole server class. This
  * test mounts an inline simulator that replicates the exact contract
- * (issuer = publicBase ?? requestOrigin, required fields) so the .well-
+ * (externalBase = publicBase ?? requestOrigin, required fields) so the .well-
  * known contract is regression-guarded even if the inline handlers get
  * refactored. The D-10 coverage number is driven mainly by createRegister
  * + createToken + createAuthorize + createTenantToken tests; .well-known
@@ -59,11 +59,11 @@ function mountWellKnown(
   app.get('/.well-known/oauth-authorization-server', (req, res) => {
     const protocol = req.secure ? 'https' : 'http';
     const requestOrigin = `${protocol}://${req.get('host')}`;
-    const browserBase = config.publicBase ?? requestOrigin;
+    const externalBase = config.publicBase ?? requestOrigin;
     const metadata: Record<string, unknown> = {
-      issuer: browserBase,
-      authorization_endpoint: `${browserBase}/authorize`,
-      token_endpoint: `${requestOrigin}/token`,
+      issuer: externalBase,
+      authorization_endpoint: `${externalBase}/authorize`,
+      token_endpoint: `${externalBase}/token`,
       response_types_supported: ['code'],
       response_modes_supported: ['query'],
       grant_types_supported: ['authorization_code', 'refresh_token'],
@@ -72,7 +72,7 @@ function mountWellKnown(
       scopes_supported: config.supportedScopes,
     };
     if (config.enableDynamicRegistration) {
-      metadata.registration_endpoint = `${requestOrigin}/register`;
+      metadata.registration_endpoint = `${externalBase}/register`;
     }
     res.json(metadata);
   });
@@ -80,22 +80,22 @@ function mountWellKnown(
   app.get('/.well-known/oauth-protected-resource', (req, res) => {
     const protocol = req.secure ? 'https' : 'http';
     const requestOrigin = `${protocol}://${req.get('host')}`;
-    const browserBase = config.publicBase ?? requestOrigin;
+    const externalBase = config.publicBase ?? requestOrigin;
     res.json({
-      resource: `${requestOrigin}/mcp`,
-      authorization_servers: [browserBase],
+      resource: `${externalBase}/mcp`,
+      authorization_servers: [externalBase],
       scopes_supported: config.supportedScopes,
       bearer_methods_supported: ['header'],
-      resource_documentation: browserBase,
+      resource_documentation: externalBase,
     });
   });
 
   app.get('/t/:tenantId/.well-known/oauth-authorization-server', (req, res) => {
     const protocol = req.secure ? 'https' : 'http';
     const requestOrigin = `${protocol}://${req.get('host')}`;
-    const browserBase = config.publicBase ?? requestOrigin;
-    const tenantBase = `${browserBase}/t/${req.params.tenantId}`;
-    const tokenBase = `${requestOrigin}/t/${req.params.tenantId}`;
+    const externalBase = config.publicBase ?? requestOrigin;
+    const tenantBase = `${externalBase}/t/${req.params.tenantId}`;
+    const tokenBase = `${externalBase}/t/${req.params.tenantId}`;
     res.json({
       issuer: tenantBase,
       authorization_endpoint: `${tenantBase}/authorize`,
@@ -112,10 +112,10 @@ function mountWellKnown(
   app.get('/t/:tenantId/.well-known/oauth-protected-resource', (req, res) => {
     const protocol = req.secure ? 'https' : 'http';
     const requestOrigin = `${protocol}://${req.get('host')}`;
-    const browserBase = config.publicBase ?? requestOrigin;
-    const tenantBase = `${browserBase}/t/${req.params.tenantId}`;
+    const externalBase = config.publicBase ?? requestOrigin;
+    const tenantBase = `${externalBase}/t/${req.params.tenantId}`;
     res.json({
-      resource: `${requestOrigin}/t/${req.params.tenantId}/mcp`,
+      resource: `${externalBase}/t/${req.params.tenantId}/mcp`,
       authorization_servers: [tenantBase],
       scopes_supported: config.supportedScopes,
       bearer_methods_supported: ['header'],
@@ -160,10 +160,8 @@ describe('plan 06-05 — /.well-known metadata', () => {
       };
       expect(meta.issuer).toBe('https://mcp.example.com');
       expect(meta.authorization_endpoint).toBe('https://mcp.example.com/authorize');
-      // token_endpoint is on the request origin (not publicBase) to preserve
-      // s2s semantics where the caller already owns the correct address.
-      expect(meta.token_endpoint).toContain('/token');
-      expect(meta.registration_endpoint).toContain('/register');
+      expect(meta.token_endpoint).toBe('https://mcp.example.com/token');
+      expect(meta.registration_endpoint).toBe('https://mcp.example.com/register');
     });
 
     it('without MS365_MCP_PUBLIC_URL: issuer uses request host', async () => {
@@ -218,9 +216,7 @@ describe('plan 06-05 — /.well-known metadata', () => {
         resource: string;
         authorization_servers: string[];
       };
-      // resource is on the request origin (transport addressability); the
-      // authorization server URL uses the browser-facing publicBase.
-      expect(meta.resource).toContain('/t/tenant-a/mcp');
+      expect(meta.resource).toBe('https://mcp.example.com/t/tenant-a/mcp');
       expect(meta.authorization_servers[0]).toBe('https://mcp.example.com/t/tenant-a');
     });
   });

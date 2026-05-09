@@ -46,7 +46,7 @@ describe('plan 06-05 — /token error paths + log scrub (SECUR-05)', () => {
     loggerMock.error.mockClear();
     loggerMock.debug.mockClear();
 
-    const { createTokenHandler } = await import('../../../src/server.js');
+    const { createTokenHandler } = await import('../../../src/lib/oauth/token-handler.js');
     const { MemoryPkceStore } = await import('../../../src/lib/pkce-store/memory-store.js');
 
     const app = express();
