@@ -419,7 +419,6 @@ function createTranscriptStructuredResult(
     meta: { toolAlias: toolName },
   });
 }
-
 function parameterValidationError(
   toolAlias: string,
   parameter: string,
