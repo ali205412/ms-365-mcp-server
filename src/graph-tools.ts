@@ -158,6 +158,14 @@ type ResourceContent = ResourceTextContent | ResourceBlobContent;
 
 type ContentItem = TextContent | ImageContent | AudioContent | ResourceContent;
 
+type TextToolResult = {
+  content: TextContent[];
+  _meta?: Record<string, unknown>;
+  isError?: boolean;
+
+  [key: string]: unknown;
+};
+
 export interface CallToolResult {
   content: ContentItem[];
   _meta?: Record<string, unknown>;
@@ -336,8 +344,8 @@ function isTranscriptContentTool(
   return /\/transcripts\/:[^/]+\/(metadata)?content$/.test(requestPath);
 }
 
-function extractRawResponseText(result: CallToolResult): string | undefined {
-  const text = result.content.find((item): item is TextContent => item.type === 'text')?.text;
+function extractRawResponseText(result: TextToolResult): string | undefined {
+  const text = result.content.find((item) => item.type === 'text')?.text;
   if (!text) return undefined;
   try {
     const parsed = JSON.parse(text) as { rawResponse?: unknown };
@@ -347,7 +355,7 @@ function extractRawResponseText(result: CallToolResult): string | undefined {
   }
 }
 
-function preserveRawTranscriptText(result: CallToolResult): CallToolResult {
+function preserveRawTranscriptText(result: TextToolResult): TextToolResult {
   if (result.isError) return result;
   const raw = extractRawResponseText(result);
   if (raw === undefined) return result;
