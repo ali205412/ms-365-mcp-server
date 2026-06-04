@@ -395,8 +395,16 @@ function isTruthyGraphBoolean(value: string | undefined): boolean {
   return normalized === 'true' || normalized === '1';
 }
 
-function usesAdvancedDirectoryQuery(queryParams: Record<string, string>): boolean {
+function hasCountSegmentPath(requestPath: string): boolean {
+  return /\/\$count$/i.test(pathWithoutQuery(requestPath).replace(/\/+$/, ''));
+}
+
+function usesAdvancedDirectoryQuery(
+  requestPath: string,
+  queryParams: Record<string, string>
+): boolean {
   return (
+    hasCountSegmentPath(requestPath) ||
     (queryParams['$search']?.trim().length ?? 0) > 0 ||
     isTruthyGraphBoolean(queryParams['$count']) ||
     isTruthyGraphBoolean(queryParams.count)
@@ -405,11 +413,12 @@ function usesAdvancedDirectoryQuery(queryParams: Record<string, string>): boolea
 
 function applyAdvancedDirectoryQueryHeaders(
   tool: Pick<(typeof api.endpoints)[0], 'parameters'>,
+  requestPath: string,
   queryParams: Record<string, string>,
   headers: Record<string, string>
 ): void {
   if (!supportsConsistencyLevelHeader(tool)) return;
-  if (!usesAdvancedDirectoryQuery(queryParams)) return;
+  if (!usesAdvancedDirectoryQuery(requestPath, queryParams)) return;
   if (hasHeaderCaseInsensitive(headers, CONSISTENCY_LEVEL_HEADER)) return;
   headers[CONSISTENCY_LEVEL_HEADER] = CONSISTENCY_LEVEL_EVENTUAL;
 }
@@ -886,7 +895,7 @@ async function executeGraphToolInner(
     }
 
     clampTopQueryParam(queryParams);
-    applyAdvancedDirectoryQueryHeaders(tool, queryParams, headers);
+    applyAdvancedDirectoryQueryHeaders(tool, path, queryParams, headers);
 
     const preferValues: string[] = [];
 
@@ -1050,15 +1059,20 @@ async function executeGraphToolInner(
           ? (params._sendNotification as ProgressNotificationSender)
           : undefined;
       if (token !== undefined) registerOperation(operationKey);
-      const combined = await fetchAllPages(path, options, graphClient, {
-        seedFirstPage: firstPage,
-        progressToken: token,
-        sendNotification,
-        capabilityProfile: ctx?.capabilityProfile,
-        operationKey,
-        signal: requestSignal,
-      });
-      unregisterOperation(operationKey);
+      const combined = await (async () => {
+        try {
+          return await fetchAllPages(path, options, graphClient, {
+            seedFirstPage: firstPage,
+            progressToken: token,
+            sendNotification,
+            capabilityProfile: ctx?.capabilityProfile,
+            operationKey,
+            signal: requestSignal,
+          });
+        } finally {
+          unregisterOperation(operationKey);
+        }
+      })();
       firstPage.value = combined.value;
       if (combined._cancelled) {
         const payload = {

@@ -153,13 +153,49 @@ function normalizeHttpProtocol(value: string | undefined): 'http' | 'https' | un
   return undefined;
 }
 
+const SET_COOKIE_HEADER = 'set-cookie';
+
+function setResponseHeaders(headers: Headers, res: ServerResponse): void {
+  const setCookieHeaders = getSetCookieHeaders(headers);
+  headers.forEach((value, name) => {
+    if (name.toLowerCase() === SET_COOKIE_HEADER && setCookieHeaders.length > 0) return;
+    res.setHeader(name, value);
+  });
+  if (setCookieHeaders.length > 0) {
+    res.setHeader(SET_COOKIE_HEADER, setCookieHeaders);
+  }
+}
+
+function getSetCookieHeaders(headers: Headers): string[] {
+  const headersWithCookies = headers as Headers & { getSetCookie?: () => string[] };
+  if (typeof headersWithCookies.getSetCookie === 'function') {
+    return headersWithCookies.getSetCookie();
+  }
+
+  const value = headers.get(SET_COOKIE_HEADER);
+  return value ? splitCombinedSetCookieHeader(value) : [];
+}
+
+function splitCombinedSetCookieHeader(value: string): string[] {
+  const cookies: string[] = [];
+  let start = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] !== ',') continue;
+    if (!/^\s*[^=;,]+\s*=/.test(value.slice(index + 1))) continue;
+    cookies.push(value.slice(start, index).trim());
+    start = index + 1;
+  }
+
+  cookies.push(value.slice(start).trim());
+  return cookies.filter((cookie) => cookie.length > 0);
+}
+
 async function writeWebResponse(response: Response, res: ServerResponse): Promise<void> {
   if (!res.headersSent) {
     res.statusCode = response.status;
     res.statusMessage = response.statusText;
-    response.headers.forEach((value, name) => {
-      res.setHeader(name, value);
-    });
+    setResponseHeaders(response.headers, res);
   }
 
   const isEventStream =

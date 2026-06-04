@@ -15,7 +15,7 @@ export interface RequestLogProps {
 
 export function requestLogProps(req: Request): RequestLogProps {
   const request = req as RequestWithTenant;
-  const requestId = typeof request.id === 'string' ? request.id : null;
+  const requestId = typeof request.id === 'string' && request.id.length > 0 ? request.id : null;
   const tenantId = tenantIdFromRequest(request) ?? tenantIdFromContext() ?? null;
 
   return { requestId, tenantId };

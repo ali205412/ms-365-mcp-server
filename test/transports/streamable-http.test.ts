@@ -14,6 +14,7 @@ import type { AddressInfo } from 'node:net';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createStreamableHttpHandler } from '../../src/lib/transports/streamable-http.js';
 import { McpSessionRegistry } from '../../src/lib/mcp-notifications/session-registry.js';
+import logger from '../../src/logger.js';
 import type { TenantRow } from '../../src/lib/tenant/tenant-row.js';
 
 vi.mock('../../src/logger.js', () => ({
@@ -64,6 +65,7 @@ describe('Streamable HTTP transport (TRANS-01)', () => {
     });
     app.post('/t/:tenantId/mcp', handler);
     app.get('/t/:tenantId/mcp', handler);
+    app.delete('/t/:tenantId/mcp', handler);
 
     await new Promise<void>((resolve) => {
       server = http.createServer(app).listen(0, () => {
@@ -309,6 +311,183 @@ describe('Streamable HTTP transport (TRANS-01)', () => {
       expect(closeTransport).toHaveBeenCalledTimes(1);
       expect(closeServer).toHaveBeenCalledTimes(1);
       expect(registry.getSession('expired-session')).toBeUndefined();
+    } finally {
+      await new Promise<void>((r) => cleanupServer.close(() => r()));
+    }
+  });
+
+  it('keeps in-flight POST session responses alive during TTL cleanup', async () => {
+    let now = 2_500;
+    let markPostEntered!: () => void;
+    let releasePost!: () => void;
+    const postEntered = new Promise<void>((resolve) => {
+      markPostEntered = resolve;
+    });
+    const releasePromise = new Promise<void>((resolve) => {
+      releasePost = resolve;
+    });
+    const handleRequest = vi.fn(async (_req: unknown, res: express.Response): Promise<void> => {
+      markPostEntered();
+      await releasePromise;
+      res.status(202).end();
+    });
+    const registry = new McpSessionRegistry({ sessionTtlMs: 5_000, now: () => now });
+    registry.registerSession({
+      tenantId: FAKE_TENANT.id,
+      sessionId: 'active-post',
+      surface: 'discovery',
+      capabilityProfile: undefined,
+      lastSeenAt: 2_000,
+      server: {
+        sendToolListChanged: vi.fn(),
+        sendResourceListChanged: vi.fn(),
+        sendResourceUpdated: vi.fn(),
+        sendPromptListChanged: vi.fn(),
+        sendLoggingMessage: vi.fn(),
+        close: vi.fn(),
+      },
+      transport: { handleRequest, close: vi.fn() } as never,
+    });
+
+    const postApp = express();
+    postApp.use(express.json());
+    postApp.use('/t/:tenantId', (req, _res, next) => {
+      (req as express.Request & { tenant?: TenantRow }).tenant = {
+        ...FAKE_TENANT,
+        id: req.params.tenantId,
+      };
+      next();
+    });
+    const handler = createStreamableHttpHandler({
+      buildMcpServer,
+      sessionRegistry: registry,
+      surface: 'discovery',
+    });
+    postApp.post('/t/:tenantId/mcp', handler);
+    postApp.get('/t/:tenantId/mcp', handler);
+
+    const postServer = await new Promise<http.Server>((resolve) => {
+      const s = http.createServer(postApp).listen(0, () => resolve(s));
+    });
+
+    try {
+      const addr = postServer.address() as AddressInfo;
+      const pendingPost = fetch(`http://127.0.0.1:${addr.port}/t/${FAKE_TENANT.id}/mcp`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+          'Mcp-Session-Id': 'active-post',
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', id: 21 }),
+      });
+
+      await postEntered;
+      expect(registry.getSession('active-post')?.activeSseStreams).toBe(1);
+
+      now = 10_000;
+      const cleanupProbe = await fetch(`http://127.0.0.1:${addr.port}/t/${FAKE_TENANT.id}/mcp`, {
+        method: 'GET',
+        headers: { 'Mcp-Session-Id': 'missing-session' },
+      });
+      await cleanupProbe.text();
+
+      expect(cleanupProbe.status).toBe(404);
+      expect(registry.getSession('active-post')).toBeDefined();
+
+      releasePost();
+      const postResponse = await pendingPost;
+      expect(postResponse.status).toBe(202);
+      await postResponse.text();
+      expect(registry.getSession('active-post')?.activeSseStreams).toBe(0);
+    } finally {
+      releasePost();
+      await new Promise<void>((r) => postServer.close(() => r()));
+    }
+  });
+
+  it('contains synchronous cleanup throws and labels failed cleanup steps', async () => {
+    const cleanupError = new Error('transport close unavailable');
+    const closeTransport = vi.fn(() => {
+      throw cleanupError;
+    });
+    const closeServer = vi.fn();
+    const deleteSession = vi.fn();
+    const registry = new McpSessionRegistry({ sessionTtlMs: 1, now: () => 10_000 });
+    registry.registerSession({
+      tenantId: FAKE_TENANT.id,
+      sessionId: 'sync-throw-session',
+      surface: 'discovery',
+      capabilityProfile: undefined,
+      lastSeenAt: 1_000,
+      server: {
+        sendToolListChanged: vi.fn(),
+        sendResourceListChanged: vi.fn(),
+        sendResourceUpdated: vi.fn(),
+        sendPromptListChanged: vi.fn(),
+        sendLoggingMessage: vi.fn(),
+        close: closeServer,
+      },
+      transport: { close: closeTransport } as never,
+    });
+
+    const cleanupApp = express();
+    cleanupApp.use(express.json());
+    cleanupApp.use('/t/:tenantId', (req, _res, next) => {
+      (req as express.Request & { tenant?: TenantRow }).tenant = {
+        ...FAKE_TENANT,
+        id: req.params.tenantId,
+      };
+      next();
+    });
+    cleanupApp.post(
+      '/t/:tenantId/mcp',
+      createStreamableHttpHandler({
+        buildMcpServer,
+        sessionRegistry: registry,
+        resourceSubscriptions: { deleteSession } as never,
+        surface: 'static',
+      })
+    );
+
+    const cleanupServer = await new Promise<http.Server>((resolve) => {
+      const s = http.createServer(cleanupApp).listen(0, () => resolve(s));
+    });
+
+    try {
+      const addr = cleanupServer.address() as AddressInfo;
+      const res = await fetch(`http://127.0.0.1:${addr.port}/t/${FAKE_TENANT.id}/mcp`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'initialize',
+          id: 22,
+          params: {
+            protocolVersion: '2024-11-05',
+            capabilities: {},
+            clientInfo: { name: 'sync-cleanup-test-client', version: '1.0.0' },
+          },
+        }),
+      });
+      await res.text();
+
+      expect(res.status).toBe(200);
+      expect(deleteSession).toHaveBeenCalledWith(FAKE_TENANT.id, 'sync-throw-session');
+      expect(closeTransport).toHaveBeenCalledTimes(1);
+      expect(closeServer).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenantId: FAKE_TENANT.id,
+          sessionId: 'sync-throw-session',
+          cleanupStep: 'transport.close',
+          err: cleanupError,
+        }),
+        'Streamable HTTP session cleanup step failed'
+      );
     } finally {
       await new Promise<void>((r) => cleanupServer.close(() => r()));
     }

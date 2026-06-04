@@ -1,5 +1,6 @@
 import { WORKLOAD_GUIDE_SLUGS, type WorkloadGuideSlug } from './catalog.js';
 
+import { APP_DEFINITIONS, type DashboardSlug } from '../mcp-apps/assets.js';
 import type { SkillResourceDescriptor } from '../mcp-skills/resources.js';
 
 export type TenantResourceView =
@@ -75,6 +76,14 @@ export interface SkillMcpResourceUri {
   descriptor: SkillResourceDescriptor;
 }
 
+export interface DashboardMcpResourceUri {
+  ok: true;
+  kind: 'dashboard';
+  tenantId: string;
+  slug: DashboardSlug;
+  path: `dashboards/${DashboardSlug}.json`;
+}
+
 export interface GraphBackedMcpResourceUri {
   ok: true;
   kind: 'graph';
@@ -98,11 +107,15 @@ export type ValidMcpResourceUri =
   | TenantMcpResourceUri
   | ConnectorMcpResourceUri
   | SkillMcpResourceUri
+  | DashboardMcpResourceUri
   | GraphBackedMcpResourceUri;
 
 export type ParsedMcpResourceUri = ValidMcpResourceUri | InvalidMcpResourceUri;
 
 const WORKLOAD_GUIDE_SET: ReadonlySet<string> = Object.freeze(new Set(WORKLOAD_GUIDE_SLUGS));
+const DASHBOARD_SLUG_SET: ReadonlySet<string> = Object.freeze(
+  new Set(APP_DEFINITIONS.map((app) => app.slug))
+);
 
 const TENANT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -288,6 +301,27 @@ function parseSkillTenantResource(
   return null;
 }
 
+function parseDashboardTenantResource(
+  tenantId: string,
+  resourcePath: string
+): DashboardMcpResourceUri | InvalidMcpResourceUri | null {
+  const match = /^dashboards\/([a-z0-9-]+)\.json$/.exec(resourcePath);
+  if (!match) return null;
+
+  const slug = match[1];
+  if (!DASHBOARD_SLUG_SET.has(slug)) {
+    return invalid('invalid_resource_uri', 'Unsupported dashboard resource slug.');
+  }
+
+  return {
+    ok: true,
+    kind: 'dashboard',
+    tenantId,
+    slug: slug as DashboardSlug,
+    path: resourcePath as DashboardMcpResourceUri['path'],
+  };
+}
+
 function parseGraphTenantResource(
   tenantId: string,
   resourcePath: string
@@ -323,6 +357,11 @@ function parseTenantResource(pathname: string): ParsedMcpResourceUri {
   const connectorResource = parseConnectorTenantResource(tenantId, resourcePath);
   if (connectorResource) {
     return connectorResource;
+  }
+
+  const dashboardResource = parseDashboardTenantResource(tenantId, resourcePath);
+  if (dashboardResource) {
+    return dashboardResource;
   }
 
   const graphResource = parseGraphTenantResource(tenantId, resourcePath);
@@ -390,6 +429,7 @@ export function assertTenantResourceOwner(
     (parsed.kind !== 'tenant' &&
       parsed.kind !== 'skill' &&
       parsed.kind !== 'connector' &&
+      parsed.kind !== 'dashboard' &&
       parsed.kind !== 'graph')
   ) {
     return parsed;

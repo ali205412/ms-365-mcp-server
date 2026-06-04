@@ -78,6 +78,10 @@ docker run -p 3000:3000 \
      --max-replicas 3 \
      --cpu 0.5 --memory 1Gi \
      --system-assigned \
+     --secrets \
+       "database-url=postgres://mcp:password@postgres:5432/mcp" \
+       "redis-url=redis://redis:6379" \
+       "kek=<base64-32-byte-key>" \
      --env-vars \
        "MS365_MCP_KEYVAULT_URL=https://your-keyvault.vault.azure.net" \
        "MS365_MCP_DATABASE_URL=secretref:database-url" \
@@ -87,6 +91,8 @@ docker run -p 3000:3000 \
        "MS365_MCP_CORS_ORIGINS=https://claude.ai,https://chatgpt.com,https://mcp.example.com" \
      --command "node" "dist/index.js" "--http" "0.0.0.0:3000"
    ```
+
+   The `--secrets` names must match the `secretref:*` values in `--env-vars`. For production, replace the inline sample values with Container Apps secrets backed by Key Vault or another secret-management process.
 
 3. **Grant Key Vault access** to the managed identity:
 
@@ -145,7 +151,7 @@ When deploying for an organization, create a dedicated app registration instead 
 
 ## Reverse Proxy / Custom Domain
 
-When running behind a reverse proxy, set `MS365_MCP_PUBLIC_URL` so that the OAuth authorize URL handed back to the user's browser is resolvable from outside the server's network:
+When running behind a reverse proxy, set `MS365_MCP_PUBLIC_URL` to the externally reachable origin (scheme, host, and optional port; no tenant path) so that the OAuth authorize URL handed back to the user's browser is resolvable from outside the server's network:
 
 ```bash
 # Via environment variable
@@ -155,7 +161,7 @@ MS365_MCP_PUBLIC_URL=https://mcp.example.com
 --public-url https://mcp.example.com
 ```
 
-Only browser-facing fields (`issuer`, `authorization_endpoint`, `authorization_servers`) are pinned to this URL. Server-to-server endpoints (`token_endpoint`, `registration_endpoint`, `resource`) stay on the request origin, so clients that reach the server over an internal network (e.g. another container on the same Docker network) don't have to round-trip back through the public URL.
+Only browser-facing fields (`issuer`, `authorization_endpoint`, `authorization_servers`) are pinned to this URL. Server-to-server endpoints (`token_endpoint`, `registration_endpoint`, `resource`) stay on the request origin, so clients that reach the server over an internal network (e.g. another container on the same Docker network) don't have to round-trip back through the public URL. Client MCP URLs should still use the origin and tenant route that the client can actually reach, for example `https://mcp.example.com/t/<tenant-route-id>/mcp` for internet-facing clients.
 
 ## Client Configuration
 
@@ -194,15 +200,15 @@ The client automatically discovers OAuth endpoints and opens a browser for authe
 
 ## Exposed Endpoints
 
-| Path                                      | Method   | Description                              | Auth Required |
-| ----------------------------------------- | -------- | ---------------------------------------- | ------------- |
-| `/`                                       | GET      | Health check                             | No            |
-| `/healthz` / `/readyz`                    | GET      | Liveness / readiness probes              | No            |
-| `/t/:tenantId/mcp`                        | GET/POST | Tenant Streamable HTTP MCP endpoint      | Bearer token  |
-| `/t/:tenantId/authorize`                  | GET      | Tenant OAuth redirect to Microsoft       | No            |
-| `/t/:tenantId/token`                      | POST     | Tenant OAuth code/refresh exchange       | No            |
-| `/register`                               | POST     | OAuth dynamic registration               | No            |
-| `/.well-known/oauth-authorization-server` | GET      | Root OAuth server metadata               | No            |
-| `/.well-known/oauth-protected-resource`   | GET      | Root protected-resource metadata         | No            |
-| `/.well-known/*/t/:tenantId`              | GET      | Tenant OAuth/protected-resource metadata | No            |
-| `/admin/*`                                | Various  | Tenant/admin API when configured         | Admin auth    |
+| Path                                      | Method          | Description                              | Auth Required |
+| ----------------------------------------- | --------------- | ---------------------------------------- | ------------- |
+| `/`                                       | GET             | Health check                             | No            |
+| `/healthz` / `/readyz`                    | GET             | Liveness / readiness probes              | No            |
+| `/t/:tenantId/mcp`                        | GET/POST/DELETE | Tenant Streamable HTTP MCP endpoint      | Bearer token  |
+| `/t/:tenantId/authorize`                  | GET             | Tenant OAuth redirect to Microsoft       | No            |
+| `/t/:tenantId/token`                      | POST            | Tenant OAuth code/refresh exchange       | No            |
+| `/register`                               | POST            | OAuth dynamic registration               | No            |
+| `/.well-known/oauth-authorization-server` | GET             | Root OAuth server metadata               | No            |
+| `/.well-known/oauth-protected-resource`   | GET             | Root protected-resource metadata         | No            |
+| `/.well-known/*/t/:tenantId`              | GET             | Tenant OAuth/protected-resource metadata | No            |
+| `/admin/*`                                | Various         | Tenant/admin API when configured         | Admin auth    |

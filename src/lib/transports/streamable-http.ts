@@ -2,7 +2,7 @@
  * Streamable HTTP transport handler (plan 03-09, TRANS-01; stateful
  * discovery sessions added in plan 07-08).
  *
- * Mounted at /t/:tenantId/mcp (GET + POST). Wraps the v1 stateless Streamable
+ * Mounted at /t/:tenantId/mcp (GET + POST + DELETE). Wraps the v1 stateless Streamable
  * HTTP code path from src/server.ts but per-tenant: every request builds a
  * fresh McpServer scoped to req.tenant + the per-request token in
  * requestContext.
@@ -97,8 +97,8 @@ export function createStreamableHttpHandler(deps: StreamableHttpDeps): RequestHa
         return;
       }
 
-      const tracksSseStream = req.method === 'GET';
-      if (tracksSseStream) {
+      const tracksActiveResponse = req.method === 'GET' || req.method === 'POST';
+      if (tracksActiveResponse) {
         registry.openSseStream(requestedSessionId);
       } else {
         registry.touchSession(requestedSessionId);
@@ -113,7 +113,7 @@ export function createStreamableHttpHandler(deps: StreamableHttpDeps): RequestHa
       } catch (err) {
         handleTransportError(res, err, tenant.id);
       } finally {
-        if (tracksSseStream) registry.closeSseStream(requestedSessionId);
+        if (tracksActiveResponse) registry.closeSseStream(requestedSessionId);
       }
       return;
     }
@@ -213,16 +213,27 @@ async function closeRegisteredSession(
   session: RegisteredMcpSession,
   deps: StreamableHttpDeps
 ): Promise<void> {
-  const cleanupResults = await Promise.allSettled([
-    deps.resourceSubscriptions?.deleteSession(session.tenantId, session.sessionId),
-    session.transport.close(),
-    session.server.close?.(),
-  ]);
+  const cleanupSteps: Array<{ cleanupStep: string; run: () => void | Promise<void> }> = [
+    {
+      cleanupStep: 'resourceSubscriptions.deleteSession',
+      run: () => deps.resourceSubscriptions?.deleteSession(session.tenantId, session.sessionId),
+    },
+    { cleanupStep: 'transport.close', run: () => session.transport.close() },
+    { cleanupStep: 'server.close', run: () => session.server.close?.() },
+  ];
+  const cleanupResults = await Promise.allSettled(
+    cleanupSteps.map((step) => Promise.resolve().then(step.run))
+  );
 
-  for (const result of cleanupResults) {
+  for (const [index, result] of cleanupResults.entries()) {
     if (result.status === 'rejected') {
       logger.warn(
-        { tenantId: session.tenantId, sessionId: session.sessionId, err: result.reason },
+        {
+          tenantId: session.tenantId,
+          sessionId: session.sessionId,
+          cleanupStep: cleanupSteps[index]?.cleanupStep,
+          err: result.reason,
+        },
         'Streamable HTTP session cleanup step failed'
       );
     }

@@ -745,7 +745,7 @@ class MicrosoftGraphServer {
     // Pitfall 3):
     //   /t/:tenantId/sse          — legacy SSE GET stream (2024-11-05 spec)
     //   /t/:tenantId/messages     — legacy SSE POST channel (shim: initialize only)
-    //   /t/:tenantId/mcp          — Streamable HTTP (current MCP spec; GET+POST)
+    //   /t/:tenantId/mcp          — Streamable HTTP (current MCP spec; GET+POST+DELETE)
     //
     // All three share the SAME createMcpServer(tenant) factory (TRANS-05)
     // so tool registration is identical across transports. The closure
@@ -828,6 +828,16 @@ class MicrosoftGraphServer {
 
     // codeql[js/missing-rate-limiting]: createRateLimitMiddleware gates this route before the transport handler.
     app.get(
+      '/t/:tenantId/mcp',
+      seedTenantContext,
+      routeRateLimit,
+      authSelector,
+      rateLimit,
+      streamableHttp
+    );
+
+    // codeql[js/missing-rate-limiting]: createRateLimitMiddleware gates this route before the transport handler.
+    app.delete(
       '/t/:tenantId/mcp',
       seedTenantContext,
       routeRateLimit,

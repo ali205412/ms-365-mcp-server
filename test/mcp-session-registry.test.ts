@@ -68,6 +68,36 @@ describe('McpSessionRegistry session lifecycle bounds', () => {
     });
   });
 
+  it('prunes expired sessions before notification delivery', async () => {
+    const expiredServer = {
+      sendToolListChanged: vi.fn(),
+      sendResourceListChanged: vi.fn(),
+      sendResourceUpdated: vi.fn(),
+      sendPromptListChanged: vi.fn(),
+      sendLoggingMessage: vi.fn(),
+    };
+    const activeServer = {
+      sendToolListChanged: vi.fn(),
+      sendResourceListChanged: vi.fn(),
+      sendResourceUpdated: vi.fn(),
+      sendPromptListChanged: vi.fn(),
+      sendLoggingMessage: vi.fn(),
+    };
+    const registry = new McpSessionRegistry({ sessionTtlMs: 5_000, now: () => 10_000 });
+    registry.registerSession(
+      makeSession({ sessionId: 'expired-notify', lastSeenAt: 1_000, server: expiredServer })
+    );
+    registry.registerSession(
+      makeSession({ sessionId: 'active-notify', lastSeenAt: 8_000, server: activeServer })
+    );
+
+    await registry.deliverToolsListChanged('tenant-a');
+
+    expect(expiredServer.sendToolListChanged).not.toHaveBeenCalled();
+    expect(activeServer.sendToolListChanged).toHaveBeenCalledTimes(1);
+    expect(registry.getSession('expired-notify')).toBeUndefined();
+  });
+
   it('tracks active SSE stream counts and touches activity on open and close', () => {
     let now = 10_000;
     const registry = new McpSessionRegistry({ now: () => now });

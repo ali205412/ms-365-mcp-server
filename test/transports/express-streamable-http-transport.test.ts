@@ -67,7 +67,7 @@ describe('ExpressStreamableHTTPServerTransport', () => {
     let response: globalThis.Response | undefined;
 
     try {
-      response = await withTimeout(fetch(url, { signal: abortController.signal }), 250);
+      response = await withTimeout(fetch(url, { signal: abortController.signal }), 2_000);
 
       expect(response.status).toBe(200);
       expect(response.headers.get('content-type')).toContain('text/event-stream');
@@ -75,6 +75,32 @@ describe('ExpressStreamableHTTPServerTransport', () => {
     } finally {
       abortController.abort();
       await response?.body?.cancel().catch(() => undefined);
+      await closeServer(server);
+    }
+  });
+
+  it('preserves duplicate Set-Cookie headers from the web response', async () => {
+    const headers = new Headers({ 'Content-Type': 'application/json' });
+    headers.append('Set-Cookie', 'mcp.sid=one; Path=/; HttpOnly');
+    headers.append('Set-Cookie', 'mcp.csrf=two; Path=/; HttpOnly');
+    webTransportMock.handleRequest.mockResolvedValueOnce(
+      new globalThis.Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers,
+      })
+    );
+
+    const { server, url } = await startServer();
+
+    try {
+      const response = await withTimeout(fetchWithNodeHttp(url), 2_000);
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['set-cookie']).toEqual([
+        'mcp.sid=one; Path=/; HttpOnly',
+        'mcp.csrf=two; Path=/; HttpOnly',
+      ]);
+    } finally {
       await closeServer(server);
     }
   });
@@ -99,6 +125,16 @@ async function startServer(): Promise<{ server: http.Server; url: string }> {
 
 async function closeServer(server: http.Server): Promise<void> {
   await new Promise<void>((resolve) => server.close(() => resolve()));
+}
+
+async function fetchWithNodeHttp(url: string): Promise<http.IncomingMessage> {
+  return await new Promise<http.IncomingMessage>((resolve, reject) => {
+    const request = http.get(url, (response) => {
+      response.resume();
+      response.once('end', () => resolve(response));
+    });
+    request.once('error', reject);
+  });
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {

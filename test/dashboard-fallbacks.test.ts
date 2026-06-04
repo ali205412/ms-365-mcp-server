@@ -228,6 +228,41 @@ describe('dashboard fallback behavior', () => {
     );
   });
 
+  it('treats visible discovery helper tools as satisfying helper dashboard prerequisites', async () => {
+    const checks = [
+      { toolName: 'connector-diagnostics', expectedTools: ['connector-diagnostics'] },
+      {
+        toolName: 'skill-editor-view',
+        expectedTools: ['list-skills', 'validate-skill', 'save-skill'],
+      },
+    ];
+
+    for (const check of checks) {
+      const result = (await callTool(
+        dashboardServer({
+          enabledTools: DISCOVERY_META_TOOL_NAMES,
+          enabledToolsExplicit: false,
+        }),
+        check.toolName
+      )) as {
+        structuredContent?: {
+          data?: { unavailableTools?: string[] };
+          warnings: string[];
+        };
+        isError?: boolean;
+      };
+
+      expect(result.isError).toBeUndefined();
+      expect(result.structuredContent?.data?.unavailableTools).toEqual([]);
+      for (const toolName of check.expectedTools) {
+        expect(result.structuredContent?.warnings.join('\n')).not.toContain(toolName);
+      }
+      expect(result.structuredContent?.warnings.join('\n')).not.toContain(
+        'Required enabled tools unavailable'
+      );
+    }
+  });
+
   it('keeps dashboard generated prerequisites on canonical endpoint aliases', () => {
     const requiredTools = DASHBOARD_SLUGS.flatMap((slug) => [
       ...dashboardDefinition(slug).requiredTools,

@@ -230,6 +230,7 @@ export class McpSessionRegistry {
   }
 
   private matchingDiscoverySessions(tenantId: string): RegisteredMcpSession[] {
+    this.takeExpiredSessions();
     return [...this.sessions.values()].filter(
       (session) => session.tenantId === tenantId && session.surface === 'discovery'
     );

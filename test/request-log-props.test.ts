@@ -31,8 +31,13 @@ describe('requestLogProps', () => {
   });
 
   it('uses null for non-string or empty identifiers', () => {
-    const props = requestLogProps({ id: 123, tenant: { id: '' } } as unknown as Request);
-
-    expect(props).toEqual({ requestId: null, tenantId: null });
+    expect(requestLogProps({ id: 123, tenant: { id: '' } } as unknown as Request)).toEqual({
+      requestId: null,
+      tenantId: null,
+    });
+    expect(requestLogProps({ id: '', tenant: { id: '' } } as unknown as Request)).toEqual({
+      requestId: null,
+      tenantId: null,
+    });
   });
 });

@@ -247,12 +247,15 @@ function missingTools(requiredTools: readonly string[], tenant: DashboardTenantC
   if (!tenant.enabledToolsSet && !tenant.presetVersion) return [];
   const registryAliases = registryAliasesForRequiredTools(requiredTools);
   const effectiveTools = tenant.presetVersion
-    ? resolveDiscoveryCatalog({
-        presetVersion: tenant.presetVersion,
-        enabledToolsSet: tenant.enabledToolsSet,
-        enabledToolsExplicit: tenant.enabledToolsExplicit,
-        registryAliases,
-      }).discoveryCatalogSet
+    ? (() => {
+        const catalog = resolveDiscoveryCatalog({
+          presetVersion: tenant.presetVersion,
+          enabledToolsSet: tenant.enabledToolsSet,
+          enabledToolsExplicit: tenant.enabledToolsExplicit,
+          registryAliases,
+        });
+        return new Set([...catalog.discoveryCatalogSet, ...catalog.visibleToolsSet]);
+      })()
     : tenant.enabledToolsSet;
   if (!effectiveTools) return [];
   return requiredTools.filter((tool) => !hasRequiredTool(effectiveTools, tool));

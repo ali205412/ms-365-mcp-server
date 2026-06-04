@@ -13,6 +13,7 @@ import {
   type McpTransportKind,
 } from '../mcp-capabilities/profile.js';
 import { resolveDiscoveryCatalog } from '../discovery-catalog/catalog.js';
+import { buildDashboardData, type DashboardTenantContext } from '../mcp-dashboards/data.js';
 import { listBookmarks } from '../memory/bookmarks.js';
 import { recallFacts } from '../memory/facts.js';
 import { listRecipes } from '../memory/recipes.js';
@@ -29,6 +30,7 @@ import {
   assertTenantResourceOwner,
   parseMcpResourceUri,
   type ConnectorMcpResourceUri,
+  type DashboardMcpResourceUri,
   type InvalidMcpResourceUri,
   type ParsedMcpResourceUri,
   type SkillMcpResourceUri,
@@ -205,6 +207,7 @@ function tenantContextFromDeps(deps: ReadMcpResourceDeps): {
   id?: string;
   enabledToolsSet?: ReadonlySet<string>;
   enabledToolsExplicit?: boolean;
+  allowedScopes?: readonly string[];
   presetVersion?: string;
 } {
   const requestTenant = getRequestTenant();
@@ -214,6 +217,7 @@ function tenantContextFromDeps(deps: ReadMcpResourceDeps): {
     enabledToolsExplicit:
       requestTenant.enabledToolsExplicit ??
       (deps.tenant ? deps.tenant.enabled_tools !== null : undefined),
+    allowedScopes: deps.tenant?.allowed_scopes,
     presetVersion: requestTenant.presetVersion ?? deps.tenant?.preset_version,
   };
 }
@@ -329,6 +333,21 @@ function connectorProfile(deps: ReadMcpResourceDeps): ClientCapabilityProfile {
   });
 }
 
+function connectorDiagnosticsPayload(
+  deps: ReadMcpResourceDeps,
+  tenantId: string,
+  profile: ClientCapabilityProfile
+) {
+  return buildConnectorDiagnostics({
+    server: deps.connector?.server ?? { name: 'Microsoft365MCP', version: '0.0.0' },
+    tenant: { id: tenantId, label: deps.tenant?.id },
+    surface: deps.connector?.surface ?? 'discovery',
+    profile,
+    metadataUrls: deps.connector?.metadataUrls,
+    expectedDisplayName: deps.connector?.expectedDisplayName,
+  }).structured;
+}
+
 async function readConnectorTenantResource(
   uri: string,
   parsed: ConnectorMcpResourceUri,
@@ -356,17 +375,54 @@ async function readConnectorTenantResource(
     });
   }
 
-  const diagnostics = buildConnectorDiagnostics({
-    server: deps.connector?.server ?? { name: 'Microsoft365MCP', version: '0.0.0' },
-    tenant: { id: owned.tenantId, label: deps.tenant?.id },
-    surface: deps.connector?.surface ?? 'discovery',
-    profile,
-    metadataUrls: deps.connector?.metadataUrls,
-    expectedDisplayName: deps.connector?.expectedDisplayName,
-  });
   return jsonResult(canonical, {
     uri: canonical,
-    ...diagnostics.structured,
+    ...connectorDiagnosticsPayload(deps, owned.tenantId, profile),
+  });
+}
+
+function dashboardTenantContext(
+  tenantId: string,
+  deps: ReadMcpResourceDeps
+): DashboardTenantContext {
+  const tenant = tenantContextFromDeps(deps);
+  return {
+    id: tenantId,
+    enabledToolsSet: tenant.enabledToolsSet,
+    enabledToolsExplicit: tenant.enabledToolsExplicit,
+    allowedScopes: tenant.allowedScopes,
+    presetVersion: tenant.presetVersion,
+  };
+}
+
+function readDashboardTenantResource(
+  uri: string,
+  parsed: DashboardMcpResourceUri,
+  deps: ReadMcpResourceDeps
+): ReadResourceResult {
+  const owned = assertTenantResourceOwner(parsed, getRequestTenant().id ?? deps.tenant?.id);
+  assertParsed(owned);
+  if (owned.kind !== 'dashboard') {
+    throw new McpError(ErrorCode.InvalidParams, 'Resource is not a dashboard URI.', {
+      code: 'invalid_resource_uri',
+    });
+  }
+
+  const canonical = canonicalM365Uri(uri);
+  const profile = connectorProfile(deps);
+  const tenant = dashboardTenantContext(owned.tenantId, deps);
+  const data = buildDashboardData(owned.slug, {
+    tenant,
+    profile,
+    connectorDiagnostics:
+      owned.slug === 'connector-diagnostics'
+        ? connectorDiagnosticsPayload(deps, owned.tenantId, profile)
+        : undefined,
+  });
+
+  return jsonResult(canonical, {
+    uri: canonical,
+    ...data,
   });
 }
 
@@ -427,6 +483,8 @@ export async function readMcpResource(
       return readConnectorTenantResource(uri, parsed, deps);
     case 'skill':
       return readSkillTenantResource(parsed, deps);
+    case 'dashboard':
+      return readDashboardTenantResource(uri, parsed, deps);
     case 'graph': {
       const owned = assertTenantResourceOwner(parsed, getRequestTenant().id ?? deps.tenant?.id);
       assertParsed(owned);

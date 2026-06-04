@@ -2,6 +2,7 @@ import { ResourceTemplate, type McpServer } from '@modelcontextprotocol/sdk/serv
 import { MARKDOWN_MIME_TYPE, STATIC_CATALOG_RESOURCES, WORKLOAD_GUIDE_SLUGS } from './catalog.js';
 import { JSON_MIME_TYPE, readMcpResource, type ReadMcpResourceDeps } from './read.js';
 import { GRAPH_BACKED_RESOURCE_TEMPLATES } from './graph-backed.js';
+import { APP_DEFINITIONS } from '../mcp-apps/assets.js';
 import { registerResourceSubscriptionHandlers } from '../mcp-notifications/register-handlers.js';
 import type { RedisResourceSubscriptionStore } from '../mcp-notifications/resource-subscriptions.js';
 import {
@@ -135,6 +136,21 @@ const SKILL_RESOURCE_TEMPLATES = [
   },
 ] as const satisfies readonly TemplateDefinition[];
 
+const DASHBOARD_RESOURCE_TEMPLATES = [
+  {
+    name: 'tenant-dashboard-template',
+    uriTemplate: 'm365://tenant/{tenantId}/dashboards/{slug}.json',
+    title: 'Tenant Dashboard Resource Template',
+    description: 'Parameterized JSON dashboard data resource for the caller tenant.',
+    mimeType: JSON_MIME_TYPE,
+    complete: {
+      tenantId: completeTenantId,
+      slug: (value: string) =>
+        APP_DEFINITIONS.map((app) => app.slug).filter((slug) => slug.startsWith(value)),
+    },
+  },
+] as const satisfies readonly TemplateDefinition[];
+
 const TENANT_RESOURCE_TEMPLATES: readonly TemplateDefinition[] = Object.freeze([
   ...TENANT_RESOURCE_PATHS.map((pathName) => ({
     name: `tenant-${pathName.replace(/[/_.]/g, '-')}-template`,
@@ -204,6 +220,18 @@ function connectorResourceDefinitions(tenantId: string): ResourceDefinition[] {
   );
 }
 
+function dashboardResourceDefinitions(tenantId: string): ResourceDefinition[] {
+  return APP_DEFINITIONS.flatMap((app) =>
+    withLegacyAlias({
+      uri: `m365://tenant/${tenantId}/dashboards/${app.slug}.json`,
+      name: `tenant-dashboard-${app.slug}`,
+      title: `${app.title} Data`,
+      description: `Read-only JSON backing data for the ${app.title}.`,
+      mimeType: JSON_MIME_TYPE,
+    })
+  );
+}
+
 function skillResourceDefinitions(tenantId: string): ResourceDefinition[] {
   return [
     {
@@ -255,6 +283,12 @@ function registerTemplate(
 
 function registerSkillTemplates(server: McpServer, deps: RegisterMcpResourcesDeps): void {
   for (const template of SKILL_RESOURCE_TEMPLATES) {
+    registerTemplate(server, template, deps);
+  }
+}
+
+function registerDashboardTemplates(server: McpServer, deps: RegisterMcpResourcesDeps): void {
+  for (const template of DASHBOARD_RESOURCE_TEMPLATES) {
     registerTemplate(server, template, deps);
   }
 }
@@ -363,6 +397,9 @@ export function registerMcpResources(server: McpServer, deps: RegisterMcpResourc
     for (const resource of connectorResourceDefinitions(tenantId)) {
       registerStaticResource(server, resource, deps);
     }
+    for (const resource of dashboardResourceDefinitions(tenantId)) {
+      registerStaticResource(server, resource, deps);
+    }
     for (const resource of skillResourceDefinitions(tenantId)) {
       registerStaticResource(server, resource, deps);
     }
@@ -370,6 +407,7 @@ export function registerMcpResources(server: McpServer, deps: RegisterMcpResourc
 
   registerTemplates(server, deps);
   if (isDiscoverySurface(deps.tenant?.preset_version)) {
+    registerDashboardTemplates(server, deps);
     registerSkillTemplates(server, deps);
   }
 }

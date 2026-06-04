@@ -228,6 +228,37 @@ describe('graph-tools', () => {
       expect(options.headers).toMatchObject({ ConsistencyLevel: 'eventual' });
     });
 
+    it('sets ConsistencyLevel: eventual for directory /$count segment requests', async () => {
+      const endpoint = makeEndpoint({
+        path: '/users/$count',
+        parameters: [
+          ...makeEndpoint().parameters,
+          { name: 'ConsistencyLevel', type: 'Header', schema: z.string().optional() },
+        ],
+      });
+      const config = makeConfig({ pathPattern: '/users/$count', scopes: ['User.Read.All'] });
+      mockEndpoints.push(endpoint);
+      mockEndpointsJson = [config];
+
+      const graphClient = createMockGraphClient([
+        { content: [{ type: 'text', text: JSON.stringify({ value: 0 }) }] },
+      ]);
+
+      const server = createMockServer();
+      const { registerGraphTools } = await loadModule();
+      registerGraphTools(server as any, graphClient as any);
+
+      const tool = server.tools.get('test-tool');
+      expect(tool).toBeDefined();
+      await tool!.handler({ filter: 'accountEnabled eq true' });
+
+      expect(graphClient.graphRequest).toHaveBeenCalledTimes(1);
+      const [url, options] = graphClient.graphRequest.mock.calls[0];
+      expect(url).toContain('/users/$count');
+      expect(url).toContain('$filter=accountEnabled%20eq%20true');
+      expect(options.headers).toMatchObject({ ConsistencyLevel: 'eventual' });
+    });
+
     it('sets ConsistencyLevel: eventual for directory $search when endpoint supports it', async () => {
       const endpoint = makeEndpoint({
         path: '/groups',
@@ -397,6 +428,55 @@ describe('graph-tools', () => {
       expect(parsed.value).toHaveLength(20);
       expect(parsed._truncated).toBe(true);
       expect(typeof parsed._nextLink).toBe('string');
+    });
+
+    it('unregisters progress cancellation operations when pagination throws', async () => {
+      const endpoint = makeEndpoint();
+      const config = makeConfig();
+      mockEndpoints.push(endpoint);
+      mockEndpointsJson = [config];
+
+      const graphClient = {
+        graphRequest: vi
+          .fn()
+          .mockResolvedValueOnce({
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  value: [{ id: '1' }],
+                  '@odata.nextLink': 'https://graph.microsoft.com/v1.0/me/messages?$skip=2',
+                }),
+              },
+            ],
+          })
+          .mockRejectedValueOnce(new Error('page two failed')),
+      };
+      const server = createMockServer();
+      const { registerGraphTools } = await loadModule();
+      const { requestContext } = await import('../request-context.js');
+      const { cancelOperation, resetOperationsForTesting } =
+        await import('../lib/mcp-progress/cancellation.js');
+      resetOperationsForTesting();
+      registerGraphTools(server as any, graphClient as any);
+
+      const operationKey = {
+        tenantId: 'tenant-a',
+        requestId: 'request-a',
+        progressToken: 'progress-a',
+      };
+      const tool = server.tools.get('test-tool');
+      const result = await requestContext.run(
+        { tenantId: operationKey.tenantId, requestId: operationKey.requestId },
+        () =>
+          tool!.handler({
+            fetchAllPages: true,
+            _meta: { progressToken: operationKey.progressToken },
+          })
+      );
+
+      expect(result.isError).toBe(true);
+      expect(cancelOperation(operationKey)).toBe(false);
     });
   });
 
