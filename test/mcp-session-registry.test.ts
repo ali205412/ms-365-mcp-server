@@ -52,6 +52,60 @@ describe('McpSessionRegistry session lifecycle bounds', () => {
     expect(registry.getSession('active')).toBeDefined();
   });
 
+  it('keeps open SSE sessions alive during TTL cleanup', () => {
+    const registry = new McpSessionRegistry({ sessionTtlMs: 5_000, now: () => 10_000 });
+
+    registry.registerSession(
+      makeSession({ sessionId: 'open-sse', activeSseStreams: 1, lastSeenAt: 1_000 })
+    );
+
+    const expired = registry.takeExpiredSessions();
+
+    expect(expired).toEqual([]);
+    expect(registry.getSession('open-sse')).toMatchObject({
+      activeSseStreams: 1,
+      lastSeenAt: 10_000,
+    });
+  });
+
+  it('tracks active SSE stream counts and touches activity on open and close', () => {
+    let now = 10_000;
+    const registry = new McpSessionRegistry({ now: () => now });
+    registry.registerSession(makeSession({ sessionId: 'sse-session' }));
+
+    registry.openSseStream('sse-session');
+    registry.openSseStream('sse-session');
+    expect(registry.getSession('sse-session')).toMatchObject({
+      activeSseStreams: 2,
+      lastSeenAt: 10_000,
+    });
+
+    now = 12_000;
+    registry.closeSseStream('sse-session');
+    registry.closeSseStream('sse-session');
+    registry.closeSseStream('sse-session');
+
+    expect(registry.getSession('sse-session')).toMatchObject({
+      activeSseStreams: 0,
+      lastSeenAt: 12_000,
+    });
+  });
+
+  it('prefers inactive sessions when evicting overflow sessions', () => {
+    const registry = new McpSessionRegistry({ maxSessions: 2, now: () => 10_000 });
+
+    registry.registerSession(
+      makeSession({ sessionId: 'open-old', activeSseStreams: 1, lastSeenAt: 1_000 })
+    );
+    registry.registerSession(makeSession({ sessionId: 'inactive-new', lastSeenAt: 9_000 }));
+    registry.registerSession(makeSession({ sessionId: 'inactive-old', lastSeenAt: 5_000 }));
+
+    const overflow = registry.takeOverflowSessions();
+
+    expect(overflow.map((session) => session.sessionId)).toEqual(['inactive-old']);
+    expect(registry.getSession('open-old')).toBeDefined();
+  });
+
   it('takes overflow sessions from oldest lastSeenAt first', () => {
     const registry = new McpSessionRegistry({ maxSessions: 2, now: () => 10_000 });
 

@@ -216,10 +216,7 @@ function tenantResourceUri(tenantId: string, path: string): string {
 const DASHBOARD_ALIAS_EQUIVALENTS = Object.freeze({
   'list-mail-messages': ['me.ListMessages', '__beta__me.ListMessages'],
   'get-calendar-view': ['me.ListCalendarView', '__beta__me.ListCalendarView'],
-  'list-channel-messages': [
-    'teams.channels.ListMessages',
-    '__beta__teams.channels.ListMessages',
-  ],
+  'list-channel-messages': ['teams.channels.ListMessages', '__beta__teams.channels.ListMessages'],
   'search-query': ['search.query', '__beta__search.query'],
   'list-users': ['users.user.ListUser', '__beta__users.user.ListUser'],
   'search-sharepoint-sites': ['sites.site.ListSite', '__beta__sites.site.ListSite'],

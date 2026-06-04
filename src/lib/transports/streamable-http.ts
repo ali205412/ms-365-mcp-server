@@ -97,7 +97,12 @@ export function createStreamableHttpHandler(deps: StreamableHttpDeps): RequestHa
         return;
       }
 
-      registry.touchSession(requestedSessionId);
+      const tracksSseStream = req.method === 'GET';
+      if (tracksSseStream) {
+        registry.openSseStream(requestedSessionId);
+      } else {
+        registry.touchSession(requestedSessionId);
+      }
 
       try {
         await session.transport.handleRequest(
@@ -107,6 +112,8 @@ export function createStreamableHttpHandler(deps: StreamableHttpDeps): RequestHa
         );
       } catch (err) {
         handleTransportError(res, err, tenant.id);
+      } finally {
+        if (tracksSseStream) registry.closeSseStream(requestedSessionId);
       }
       return;
     }
@@ -206,8 +213,20 @@ async function closeRegisteredSession(
   session: RegisteredMcpSession,
   deps: StreamableHttpDeps
 ): Promise<void> {
-  await deps.resourceSubscriptions?.deleteSession(session.tenantId, session.sessionId);
-  await Promise.allSettled([session.transport.close(), session.server.close?.()]);
+  const cleanupResults = await Promise.allSettled([
+    deps.resourceSubscriptions?.deleteSession(session.tenantId, session.sessionId),
+    session.transport.close(),
+    session.server.close?.(),
+  ]);
+
+  for (const result of cleanupResults) {
+    if (result.status === 'rejected') {
+      logger.warn(
+        { tenantId: session.tenantId, sessionId: session.sessionId, err: result.reason },
+        'Streamable HTTP session cleanup step failed'
+      );
+    }
+  }
 }
 
 function onceAsync<T extends unknown[]>(

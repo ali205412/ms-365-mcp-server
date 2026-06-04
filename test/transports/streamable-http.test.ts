@@ -13,6 +13,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createStreamableHttpHandler } from '../../src/lib/transports/streamable-http.js';
+import { McpSessionRegistry } from '../../src/lib/mcp-notifications/session-registry.js';
 import type { TenantRow } from '../../src/lib/tenant/tenant-row.js';
 
 vi.mock('../../src/logger.js', () => ({
@@ -122,6 +123,30 @@ describe('Streamable HTTP transport (TRANS-01)', () => {
     expect(body.result!.protocolVersion).toBeDefined();
   });
 
+  it('accepts comma-separated X-Forwarded-Proto values from proxy chains', async () => {
+    const res = await fetch(`${baseUrl}/t/${FAKE_TENANT.id}/mcp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        'X-Forwarded-Proto': 'https,http',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'initialize',
+        id: 10,
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: 'proxy-chain-client', version: '1.0.0' },
+        },
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    await res.text();
+  });
+
   it('buildMcpServer is invoked with the tenant populated by loadTenant', async () => {
     await fetch(`${baseUrl}/t/${FAKE_TENANT.id}/mcp`, {
       method: 'POST',
@@ -211,6 +236,82 @@ describe('Streamable HTTP transport (TRANS-01)', () => {
     expect(firstTenantArg.id).toBe(tenant1);
     expect(secondTenantArg.id).toBe(tenant2);
     expect(firstTenantArg).not.toBe(secondTenantArg);
+  });
+
+  it('closes stale sessions even when Redis subscription cleanup fails', async () => {
+    const closeTransport = vi.fn();
+    const closeServer = vi.fn();
+    const deleteSession = vi.fn().mockRejectedValue(new Error('redis unavailable'));
+    const registry = new McpSessionRegistry({ sessionTtlMs: 1, now: () => 10_000 });
+    registry.registerSession({
+      tenantId: FAKE_TENANT.id,
+      sessionId: 'expired-session',
+      surface: 'discovery',
+      capabilityProfile: undefined,
+      lastSeenAt: 1_000,
+      server: {
+        sendToolListChanged: vi.fn(),
+        sendResourceListChanged: vi.fn(),
+        sendResourceUpdated: vi.fn(),
+        sendPromptListChanged: vi.fn(),
+        sendLoggingMessage: vi.fn(),
+        close: closeServer,
+      },
+      transport: { close: closeTransport } as never,
+    });
+
+    const cleanupApp = express();
+    cleanupApp.use(express.json());
+    cleanupApp.use('/t/:tenantId', (req, _res, next) => {
+      (req as express.Request & { tenant?: TenantRow }).tenant = {
+        ...FAKE_TENANT,
+        id: req.params.tenantId,
+      };
+      next();
+    });
+    cleanupApp.post(
+      '/t/:tenantId/mcp',
+      createStreamableHttpHandler({
+        buildMcpServer,
+        sessionRegistry: registry,
+        resourceSubscriptions: { deleteSession } as never,
+        surface: 'static',
+      })
+    );
+
+    const cleanupServer = await new Promise<http.Server>((resolve) => {
+      const s = http.createServer(cleanupApp).listen(0, () => resolve(s));
+    });
+
+    try {
+      const addr = cleanupServer.address() as AddressInfo;
+      const res = await fetch(`http://127.0.0.1:${addr.port}/t/${FAKE_TENANT.id}/mcp`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'initialize',
+          id: 11,
+          params: {
+            protocolVersion: '2024-11-05',
+            capabilities: {},
+            clientInfo: { name: 'cleanup-test-client', version: '1.0.0' },
+          },
+        }),
+      });
+      await res.text();
+
+      expect(res.status).toBe(200);
+      expect(deleteSession).toHaveBeenCalledWith(FAKE_TENANT.id, 'expired-session');
+      expect(closeTransport).toHaveBeenCalledTimes(1);
+      expect(closeServer).toHaveBeenCalledTimes(1);
+      expect(registry.getSession('expired-session')).toBeUndefined();
+    } finally {
+      await new Promise<void>((r) => cleanupServer.close(() => r()));
+    }
   });
 
   it('handles repeated stateless POSTs without ServerResponse MaxListeners warnings', async () => {

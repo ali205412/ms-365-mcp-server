@@ -131,14 +131,26 @@ function headersFromIncoming(headers: IncomingHttpHeaders): Headers {
 function absoluteRequestUrl(req: ExpressIncomingMessage): string {
   const path = req.originalUrl ?? req.url ?? '/';
   const host = firstHeader(req.headers.host) ?? 'localhost';
-  const forwardedProto = firstHeader(req.headers['x-forwarded-proto']);
-  const protocol = forwardedProto ?? req.protocol ?? 'http';
+  const forwardedProto = firstHeaderToken(req.headers['x-forwarded-proto']);
+  const protocol =
+    normalizeHttpProtocol(forwardedProto) ?? normalizeHttpProtocol(req.protocol) ?? 'http';
   return new URL(path, `${protocol}://${host}`).toString();
 }
 
 function firstHeader(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) return value[0];
   return value;
+}
+
+function firstHeaderToken(value: string | string[] | undefined): string | undefined {
+  const header = firstHeader(value);
+  const token = header?.split(',')[0]?.trim();
+  return token && token.length > 0 ? token : undefined;
+}
+
+function normalizeHttpProtocol(value: string | undefined): 'http' | 'https' | undefined {
+  if (value === 'http' || value === 'https') return value;
+  return undefined;
 }
 
 async function writeWebResponse(response: Response, res: ServerResponse): Promise<void> {

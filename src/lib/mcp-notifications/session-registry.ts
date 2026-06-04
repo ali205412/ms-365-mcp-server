@@ -29,6 +29,7 @@ export interface RegisteredMcpSession {
   capabilityProfile?: ClientCapabilityProfile;
   createdAt?: number;
   lastSeenAt?: number;
+  activeSseStreams?: number;
 }
 
 export type RegisterSessionInput = RegisteredMcpSession;
@@ -104,6 +105,30 @@ export class McpSessionRegistry {
     return touched;
   }
 
+  openSseStream(sessionId: string): RegisteredMcpSession | undefined {
+    const session = this.sessions.get(sessionId);
+    if (!session) return undefined;
+    const opened = {
+      ...session,
+      activeSseStreams: (session.activeSseStreams ?? 0) + 1,
+      lastSeenAt: this.now(),
+    };
+    this.sessions.set(sessionId, opened);
+    return opened;
+  }
+
+  closeSseStream(sessionId: string): RegisteredMcpSession | undefined {
+    const session = this.sessions.get(sessionId);
+    if (!session) return undefined;
+    const closed = {
+      ...session,
+      activeSseStreams: Math.max((session.activeSseStreams ?? 0) - 1, 0),
+      lastSeenAt: this.now(),
+    };
+    this.sessions.set(sessionId, closed);
+    return closed;
+  }
+
   unregisterSession(sessionId: string): RegisteredMcpSession | undefined {
     const session = this.sessions.get(sessionId);
     if (session) {
@@ -117,6 +142,10 @@ export class McpSessionRegistry {
   takeExpiredSessions(now = this.now()): RegisteredMcpSession[] {
     const expired: RegisteredMcpSession[] = [];
     for (const session of this.sessions.values()) {
+      if (hasActiveSseStream(session)) {
+        this.sessions.set(session.sessionId, { ...session, lastSeenAt: now });
+        continue;
+      }
       const lastSeenAt = session.lastSeenAt ?? session.createdAt ?? now;
       if (now - lastSeenAt <= this.sessionTtlMs) continue;
       const removed = this.unregisterSession(session.sessionId);
@@ -131,6 +160,7 @@ export class McpSessionRegistry {
 
     const oldest = [...this.sessions.values()].sort(
       (left, right) =>
+        Number(hasActiveSseStream(left)) - Number(hasActiveSseStream(right)) ||
         (left.lastSeenAt ?? left.createdAt ?? 0) - (right.lastSeenAt ?? right.createdAt ?? 0)
     );
     const removed: RegisteredMcpSession[] = [];
@@ -309,6 +339,10 @@ function resourceUpdatedParams(
 
 function positiveNumber(value: number | undefined, fallback: number): number {
   return value !== undefined && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function hasActiveSseStream(session: RegisteredMcpSession): boolean {
+  return (session.activeSseStreams ?? 0) > 0;
 }
 
 function isRedisSubscriber(value: unknown): value is RedisSubscriberLike {
