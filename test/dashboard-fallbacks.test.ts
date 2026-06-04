@@ -121,6 +121,50 @@ describe('dashboard fallback behavior', () => {
     expect(result.structuredContent?.warnings.join('\n')).toContain('Required scopes unavailable');
   });
 
+  it('treats generated mail aliases as satisfying legacy dashboard prerequisites', async () => {
+    const result = (await callTool(
+      dashboardServer({ enabledTools: new Set(['me.ListMessages']) }),
+      'inbox-triage-view'
+    )) as {
+      structuredContent?: {
+        data?: { unavailableTools?: string[] };
+        warnings: string[];
+      };
+      isError?: boolean;
+    };
+
+    expect(result.isError).toBeUndefined();
+    expect(result.structuredContent?.data?.unavailableTools).toEqual([]);
+    expect(result.structuredContent?.warnings.join('\n')).not.toContain('list-mail-messages');
+    expect(result.structuredContent?.warnings.join('\n')).not.toContain(
+      'Required enabled tools unavailable'
+    );
+  });
+
+  it('treats generated dashboard aliases as satisfying explicit discovery allowlists', async () => {
+    const result = (await callTool(
+      dashboardServer({
+        enabledTools: new Set(['me.ListCalendarView']),
+        allowedScopes: ['Calendars.Read'],
+      }),
+      'calendar-brief-view'
+    )) as {
+      structuredContent?: {
+        data?: { unavailableTools?: string[]; unavailableScopes?: string[] };
+        warnings: string[];
+      };
+      isError?: boolean;
+    };
+
+    expect(result.isError).toBeUndefined();
+    expect(result.structuredContent?.data?.unavailableTools).toEqual([]);
+    expect(result.structuredContent?.data?.unavailableScopes).toEqual([]);
+    expect(result.structuredContent?.warnings.join('\n')).not.toContain('get-calendar-view');
+    expect(result.structuredContent?.warnings.join('\n')).not.toContain(
+      'Required enabled tools unavailable'
+    );
+  });
+
   it('does not warn that Mail.Read is missing when Mail.ReadWrite is allowed', async () => {
     const result = (await callTool(
       dashboardServer({ allowedScopes: ['Mail.ReadWrite'] }),
