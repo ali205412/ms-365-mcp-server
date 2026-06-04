@@ -6,6 +6,8 @@ Deploys ms-365-mcp-server to Azure Container Apps using the colocated Bicep temp
 .DESCRIPTION
 Creates (or updates) the target Resource Group and runs the Bicep deployment.
 The Entra ID client secret is prompted interactively and stored in Key Vault.
+Production state is not provisioned by this example; provide external Postgres,
+Redis, and a base64 32-byte KEK when prompted or through secure parameters.
 
 .EXAMPLE
 ./deploy.ps1 -ResourceGroup rg-ms365mcp -BaseName ms365mcp `
@@ -34,14 +36,17 @@ param(
 
   [string]$Location = 'eastus',
   [string]$ContainerImage = 'ghcr.io/softeria/ms-365-mcp-server:latest',
-  [ValidateSet('global', 'gcc-high', 'dod', 'china')]
+  [ValidateSet('global', 'china')]
   [string]$CloudType = 'global',
-  [string]$CorsOrigin = 'http://localhost:3000',
+  [securestring]$DatabaseUrl,
+  [securestring]$RedisUrl,
+  [securestring]$McpKek,
+  [string]$CorsOrigins = 'https://claude.ai,https://chatgpt.com',
   [string]$PublicBaseUrl = '',
   [string[]]$KvAdminObjectIds = @(),
   [bool]$OrgMode = $true,
   [bool]$ReadOnly = $false,
-  [int]$MinReplicas = 0,
+  [int]$MinReplicas = 1,
   [int]$MaxReplicas = 3,
   [switch]$SkipLogin,
   [switch]$WhatIf
@@ -52,6 +57,16 @@ $bicepFile = Join-Path $PSScriptRoot 'main.bicep'
 
 if (-not (Test-Path $bicepFile)) {
   throw "Bicep file not found: $bicepFile"
+}
+
+function Convert-SecureStringToPlainText([securestring]$Value) {
+  if (-not $Value -or $Value.Length -eq 0) { return '' }
+  $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Value)
+  try {
+    return [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+  } finally {
+    [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+  }
 }
 
 # --- Prerequisites ---
@@ -80,17 +95,26 @@ if (-not $SkipLogin) {
   }
 }
 
-# --- Client secret (interactive, SecureString) ---
+# --- Secrets (interactive, SecureString) ---
 $secretSecure = Read-Host 'Entra ID client secret (leave empty for public client)' -AsSecureString
-$secretPlain = ''
-if ($secretSecure.Length -gt 0) {
-  $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secretSecure)
-  try {
-    $secretPlain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
-  } finally {
-    [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
-  }
+if (-not $DatabaseUrl) {
+  $DatabaseUrl = Read-Host 'External Postgres connection string (MS365_MCP_DATABASE_URL)' -AsSecureString
 }
+if (-not $RedisUrl) {
+  $RedisUrl = Read-Host 'External Redis connection string (MS365_MCP_REDIS_URL)' -AsSecureString
+}
+if (-not $McpKek) {
+  $McpKek = Read-Host 'Base64 32-byte KEK (MS365_MCP_KEK)' -AsSecureString
+}
+
+$secretPlain = Convert-SecureStringToPlainText $secretSecure
+$databaseUrlPlain = Convert-SecureStringToPlainText $DatabaseUrl
+$redisUrlPlain = Convert-SecureStringToPlainText $RedisUrl
+$mcpKekPlain = Convert-SecureStringToPlainText $McpKek
+
+if (-not $databaseUrlPlain) { throw 'External Postgres connection string is required.' }
+if (-not $redisUrlPlain) { throw 'External Redis connection string is required.' }
+if (-not $mcpKekPlain) { throw 'MS365_MCP_KEK is required.' }
 
 # --- Resource Group ---
 $rg = az group show -n $ResourceGroup --only-show-errors 2>$null | ConvertFrom-Json
@@ -110,7 +134,10 @@ $params = @{
   mcpClientSecret = @{ value = $secretPlain }
   cloudType      = @{ value = $CloudType }
   containerImage = @{ value = $ContainerImage }
-  corsOrigin     = @{ value = $CorsOrigin }
+  databaseUrl    = @{ value = $databaseUrlPlain }
+  redisUrl       = @{ value = $redisUrlPlain }
+  mcpKek         = @{ value = $mcpKekPlain }
+  corsOrigins    = @{ value = $CorsOrigins }
   publicBaseUrl  = @{ value = $PublicBaseUrl }
   orgMode        = @{ value = $OrgMode }
   readOnly       = @{ value = $ReadOnly }
@@ -166,5 +193,8 @@ try {
 finally {
   Remove-Item $paramsFile.FullName -ErrorAction SilentlyContinue
   $secretPlain = $null
+  $databaseUrlPlain = $null
+  $redisUrlPlain = $null
+  $mcpKekPlain = $null
   [GC]::Collect()
 }

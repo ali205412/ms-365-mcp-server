@@ -68,7 +68,8 @@ describe('McpSessionRegistry session lifecycle bounds', () => {
     });
   });
 
-  it('prunes expired sessions before notification delivery', async () => {
+  it('prunes and cleans expired sessions before notification delivery', async () => {
+    const cleanup = vi.fn();
     const expiredServer = {
       sendToolListChanged: vi.fn(),
       sendResourceListChanged: vi.fn(),
@@ -83,7 +84,11 @@ describe('McpSessionRegistry session lifecycle bounds', () => {
       sendPromptListChanged: vi.fn(),
       sendLoggingMessage: vi.fn(),
     };
-    const registry = new McpSessionRegistry({ sessionTtlMs: 5_000, now: () => 10_000 });
+    const registry = new McpSessionRegistry({
+      expiredSessionCleanup: cleanup,
+      sessionTtlMs: 5_000,
+      now: () => 10_000,
+    });
     registry.registerSession(
       makeSession({ sessionId: 'expired-notify', lastSeenAt: 1_000, server: expiredServer })
     );
@@ -95,6 +100,8 @@ describe('McpSessionRegistry session lifecycle bounds', () => {
 
     expect(expiredServer.sendToolListChanged).not.toHaveBeenCalled();
     expect(activeServer.sendToolListChanged).toHaveBeenCalledTimes(1);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(cleanup).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'expired-notify' }));
     expect(registry.getSession('expired-notify')).toBeUndefined();
   });
 

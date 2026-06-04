@@ -336,6 +336,45 @@ describe('Phase 7 Plan 07-11 Task 2 - MCP resource read dispatch', () => {
     });
   });
 
+  it('round-trips Graph-backed resource IDs with encoded slashes', async () => {
+    const graphClient = {
+      graphRequest: vi.fn(async () => ({
+        content: [{ type: 'text', text: JSON.stringify({ id: 'message/with/slash' }) }],
+      })),
+    };
+    const messageId = 'message/with/slash';
+    const encodedMessageId = encodeURIComponent(messageId);
+
+    await requestContext.run(discoveryContext(), () =>
+      readMcpResource(`m365://tenant/${TENANT_A}/mail/messages/${encodedMessageId}.json`, {
+        tenant: discoveryTenant(),
+        graphClient,
+      })
+    );
+
+    expect(graphClient.graphRequest).toHaveBeenCalledTimes(1);
+    expect(graphClient.graphRequest).toHaveBeenCalledWith('/me/messages/message%2Fwith%2Fslash', {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+  });
+
+  it('rejects Graph-backed resource IDs containing encoded dot segments', async () => {
+    const graphClient = { graphRequest: vi.fn() };
+
+    await expect(
+      requestContext.run(discoveryContext(), () =>
+        readMcpResource(`m365://tenant/${TENANT_A}/mail/messages/message%2F..%2Fsecret.json`, {
+          tenant: discoveryTenant(),
+          graphClient,
+        })
+      )
+    ).rejects.toMatchObject({
+      data: { code: 'invalid_resource_uri' },
+    });
+    expect(graphClient.graphRequest).not.toHaveBeenCalled();
+  });
+
   it('rejects Graph-backed resources when required scopes are absent', async () => {
     await expect(
       requestContext.run(discoveryContext(), () =>

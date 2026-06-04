@@ -51,12 +51,15 @@ export type ResourceSubscriptionChecker = (
   uri: string
 ) => boolean | Promise<boolean>;
 
+export type ExpiredSessionCleanup = (session: RegisteredMcpSession) => void | Promise<void>;
+
 const DEFAULT_SESSION_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_SESSIONS = 1000;
 
 export interface McpSessionRegistryOptions {
   coalescer?: ResourceNotificationCoalescer;
   isResourceSubscribed?: ResourceSubscriptionChecker;
+  expiredSessionCleanup?: ExpiredSessionCleanup;
   sessionTtlMs?: number;
   maxSessions?: number;
   now?: () => number;
@@ -69,10 +72,12 @@ export class McpSessionRegistry {
   private readonly maxSessions: number;
   private readonly now: () => number;
   private isResourceSubscribed?: ResourceSubscriptionChecker;
+  private expiredSessionCleanup?: ExpiredSessionCleanup;
 
   constructor(options: McpSessionRegistryOptions = {}) {
     this.coalescer = options.coalescer ?? defaultResourceNotificationCoalescer;
     this.isResourceSubscribed = options.isResourceSubscribed;
+    this.expiredSessionCleanup = options.expiredSessionCleanup;
     this.sessionTtlMs = positiveNumber(options.sessionTtlMs, DEFAULT_SESSION_TTL_MS);
     this.maxSessions = positiveNumber(options.maxSessions, DEFAULT_MAX_SESSIONS);
     this.now = options.now ?? Date.now;
@@ -80,6 +85,10 @@ export class McpSessionRegistry {
 
   setResourceSubscriptionChecker(checker: ResourceSubscriptionChecker | undefined): void {
     this.isResourceSubscribed = checker;
+  }
+
+  setExpiredSessionCleanup(cleanup: ExpiredSessionCleanup | undefined): void {
+    this.expiredSessionCleanup = cleanup;
   }
 
   registerSession(input: RegisterSessionInput): RegisteredMcpSession {
@@ -172,26 +181,23 @@ export class McpSessionRegistry {
   }
 
   async deliverToolsListChanged(tenantId: string): Promise<void> {
+    const sessions = await this.matchingDiscoverySessions(tenantId);
     await Promise.all(
-      this.matchingDiscoverySessions(tenantId).map((session) =>
-        Promise.resolve(session.server.sendToolListChanged())
-      )
+      sessions.map((session) => Promise.resolve(session.server.sendToolListChanged()))
     );
   }
 
   async deliverResourcesListChanged(tenantId: string): Promise<void> {
+    const sessions = await this.matchingDiscoverySessions(tenantId);
     await Promise.all(
-      this.matchingDiscoverySessions(tenantId).map((session) =>
-        Promise.resolve(session.server.sendResourceListChanged())
-      )
+      sessions.map((session) => Promise.resolve(session.server.sendResourceListChanged()))
     );
   }
 
   async deliverPromptsListChanged(tenantId: string): Promise<void> {
+    const sessions = await this.matchingDiscoverySessions(tenantId);
     await Promise.all(
-      this.matchingDiscoverySessions(tenantId).map((session) =>
-        Promise.resolve(session.server.sendPromptListChanged())
-      )
+      sessions.map((session) => Promise.resolve(session.server.sendPromptListChanged()))
     );
   }
 
@@ -201,7 +207,7 @@ export class McpSessionRegistry {
     metadata: { reason?: string; source?: string; changeType?: string } = {}
   ): Promise<void> {
     const sends: Array<Promise<void>> = [];
-    for (const session of this.matchingDiscoverySessions(tenantId)) {
+    for (const session of await this.matchingDiscoverySessions(tenantId)) {
       for (const uri of uris) {
         if (this.isResourceSubscribed) {
           const subscribed = await this.isResourceSubscribed(tenantId, session.sessionId, uri);
@@ -218,8 +224,9 @@ export class McpSessionRegistry {
   }
 
   async deliverLoggingMessage(tenantId: string, message: McpLogMessage): Promise<void> {
+    const sessions = await this.matchingDiscoverySessions(tenantId);
     await Promise.all(
-      this.matchingDiscoverySessions(tenantId)
+      sessions
         .filter((session) => shouldEmitToSession(session.sessionId, message.level))
         .map((session) => session.server.sendLoggingMessage(message, session.sessionId))
     );
@@ -229,11 +236,30 @@ export class McpSessionRegistry {
     return [...this.sessions.values()];
   }
 
-  private matchingDiscoverySessions(tenantId: string): RegisteredMcpSession[] {
-    this.takeExpiredSessions();
+  private async matchingDiscoverySessions(tenantId: string): Promise<RegisteredMcpSession[]> {
+    await this.cleanupExpiredNotificationSessions(this.takeExpiredSessions());
     return [...this.sessions.values()].filter(
       (session) => session.tenantId === tenantId && session.surface === 'discovery'
     );
+  }
+
+  private async cleanupExpiredNotificationSessions(
+    sessions: readonly RegisteredMcpSession[]
+  ): Promise<void> {
+    if (!this.expiredSessionCleanup || sessions.length === 0) return;
+
+    const results = await Promise.allSettled(
+      sessions.map((session) => Promise.resolve().then(() => this.expiredSessionCleanup?.(session)))
+    );
+    for (const [index, result] of results.entries()) {
+      if (result.status === 'rejected') {
+        const session = sessions[index];
+        logger.warn(
+          { tenantId: session?.tenantId, sessionId: session?.sessionId, err: result.reason },
+          'Expired MCP session cleanup failed during notification delivery'
+        );
+      }
+    }
   }
 }
 

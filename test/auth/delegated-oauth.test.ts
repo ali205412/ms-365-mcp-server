@@ -218,7 +218,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     expect(body.error).toBe('invalid_redirect_uri');
   });
 
-  it('allows trusted hosted connector redirect host without exact path allowlist', async () => {
+  it('rejects trusted hosted connector redirect host without exact path allowlist', async () => {
     harness = await startApp(
       {
         redirect_uri_allowlist: ['https://claude.ai/api/mcp/auth_callback'],
@@ -229,6 +229,38 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     const clientVerifier = crypto.randomBytes(32).toString('base64url');
     const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
     const redirectUri = 'https://chatgpt.com/connector/oauth/generatedPath';
+
+    const params = new URLSearchParams({
+      redirect_uri: redirectUri,
+      code_challenge: clientChallenge,
+      code_challenge_method: 'S256',
+      state: 'xyz',
+      client_id: harness.tenant.client_id,
+    });
+
+    const res = await fetch(`${harness.url}/authorize?${params}`, {
+      redirect: 'manual',
+    });
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('invalid_redirect_uri');
+
+    const entry = await harness.pkceStore.takeByChallenge(harness.tenant.id, clientChallenge);
+    expect(entry).toBeNull();
+  });
+
+  it('allows trusted hosted connector redirect URI only when exact path is allowlisted', async () => {
+    const redirectUri = 'https://chatgpt.com/connector/oauth/generatedPath';
+    harness = await startApp(
+      {
+        redirect_uri_allowlist: [redirectUri],
+      },
+      { extraAllowedHosts: ['https://chatgpt.com'] }
+    );
+
+    const clientVerifier = crypto.randomBytes(32).toString('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
 
     const params = new URLSearchParams({
       redirect_uri: redirectUri,

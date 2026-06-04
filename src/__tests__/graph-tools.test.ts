@@ -469,12 +469,70 @@ describe('graph-tools', () => {
       const result = await requestContext.run(
         { tenantId: operationKey.tenantId, requestId: operationKey.requestId },
         () =>
-          tool!.handler({
-            fetchAllPages: true,
-            _meta: { progressToken: operationKey.progressToken },
-          })
+          tool!.handler(
+            { fetchAllPages: true },
+            { _meta: { progressToken: operationKey.progressToken } }
+          )
       );
 
+      expect(result.isError).toBe(true);
+      expect(cancelOperation(operationKey)).toBe(false);
+    });
+
+    it('aborts the active initial Graph request when pagination is cancelled', async () => {
+      const endpoint = makeEndpoint();
+      const config = makeConfig();
+      mockEndpoints.push(endpoint);
+      mockEndpointsJson = [config];
+
+      let capturedSignal: AbortSignal | undefined;
+      const graphClient = {
+        graphRequest: vi.fn(
+          async (_path: string, options: { signal?: AbortSignal }): Promise<unknown> =>
+            new Promise((resolve, reject) => {
+              capturedSignal = options.signal;
+              if (capturedSignal?.aborted) {
+                reject(new Error('aborted'));
+                return;
+              }
+              capturedSignal?.addEventListener('abort', () => reject(new Error('aborted')), {
+                once: true,
+              });
+              setTimeout(() => {
+                resolve({ content: [{ type: 'text', text: JSON.stringify({ value: [] }) }] });
+              }, 50);
+            })
+        ),
+      };
+      const server = createMockServer();
+      const { registerGraphTools } = await loadModule();
+      const { requestContext } = await import('../request-context.js');
+      const { cancelOperation, resetOperationsForTesting } =
+        await import('../lib/mcp-progress/cancellation.js');
+      resetOperationsForTesting();
+      registerGraphTools(server as any, graphClient as any);
+
+      const operationKey = {
+        tenantId: 'tenant-a',
+        requestId: 'request-a',
+        progressToken: 'progress-a',
+      };
+      const tool = server.tools.get('test-tool');
+      const pending = requestContext.run(
+        { tenantId: operationKey.tenantId, requestId: operationKey.requestId },
+        () =>
+          tool!.handler(
+            { fetchAllPages: true },
+            { _meta: { progressToken: operationKey.progressToken } }
+          )
+      );
+
+      await vi.waitFor(() => expect(capturedSignal).toBeDefined());
+      expect(capturedSignal!.aborted).toBe(false);
+      expect(cancelOperation(operationKey)).toBe(true);
+      expect(capturedSignal!.aborted).toBe(true);
+
+      const result = await pending;
       expect(result.isError).toBe(true);
       expect(cancelOperation(operationKey)).toBe(false);
     });

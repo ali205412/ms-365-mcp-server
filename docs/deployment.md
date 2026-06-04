@@ -56,7 +56,7 @@ docker run -p 3000:3000 \
 
 ## Azure Container Apps
 
-> **Turnkey Bicep example**: see [`examples/azure-container-apps/`](../examples/azure-container-apps/) for a complete Bicep template + PowerShell deploy script that provisions Log Analytics, UAMI, Key Vault (RBAC), Container Apps Environment and the Container App in one command.
+> **Azure Container Apps scaffold**: see [`examples/azure-container-apps/`](../examples/azure-container-apps/) for a Bicep template + PowerShell deploy script that provisions Log Analytics, UAMI, Key Vault (RBAC), a Container Apps Environment, and the Container App. It is not a turnkey v2 production stack: you must supply external Postgres, Redis, and an `MS365_MCP_KEK` value (or equivalent secret-management wiring) before using it for real tenants.
 
 1. **Push the image** to Azure Container Registry:
 
@@ -196,7 +196,7 @@ The client automatically discovers OAuth endpoints and opens a browser for authe
 - **Managed identity**: use managed identity for Key Vault access (no secrets in environment variables)
 - **Read-only mode**: use `--read-only` to disable all write operations (send, delete, update, create)
 - **Tool filtering**: use `--enabled-tools <regex>` or `--preset <names>` to restrict available tools
-- **CORS**: configure `MS365_MCP_CORS_ORIGIN` to restrict allowed origins (defaults to `http://localhost:3000`); set explicitly when clients run on a different origin
+- **CORS**: configure `MS365_MCP_CORS_ORIGINS` to restrict allowed origins (defaults to `http://localhost:3000`); set explicitly when clients run on a different origin
 
 ## Exposed Endpoints
 

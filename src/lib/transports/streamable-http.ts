@@ -24,6 +24,7 @@ import {
 import type { Request, Response, RequestHandler } from 'express';
 import type { TenantRow } from '../tenant/tenant-row.js';
 import logger from '../../logger.js';
+import { requestContext } from '../../request-context.js';
 import { isDiscoverySurface } from '../tenant-surface/surface.js';
 import {
   buildEffectiveCapabilityProfile,
@@ -68,6 +69,7 @@ export function createStreamableHttpHandler(deps: StreamableHttpDeps): RequestHa
   const registry = deps.sessionRegistry ?? mcpSessionRegistry;
   const createTransport =
     deps.createTransport ?? ((options) => new ExpressStreamableHTTPServerTransport(options));
+  registry.setExpiredSessionCleanup((session) => closeRegisteredSession(session, deps));
 
   return async (req: Request, res: Response): Promise<void> => {
     const tenant = (req as Request & { tenant?: TenantRow }).tenant;
@@ -105,10 +107,19 @@ export function createStreamableHttpHandler(deps: StreamableHttpDeps): RequestHa
       }
 
       try {
-        await session.transport.handleRequest(
-          req as unknown as Parameters<typeof session.transport.handleRequest>[0],
-          res as unknown as Parameters<typeof session.transport.handleRequest>[1],
-          req.body
+        const existingCtx = requestContext.getStore() ?? {};
+        await requestContext.run(
+          {
+            ...existingCtx,
+            capabilityProfile: session.capabilityProfile ?? existingCtx.capabilityProfile,
+          },
+          async () => {
+            await session.transport.handleRequest(
+              req as unknown as Parameters<typeof session.transport.handleRequest>[0],
+              res as unknown as Parameters<typeof session.transport.handleRequest>[1],
+              req.body
+            );
+          }
         );
       } catch (err) {
         handleTransportError(res, err, tenant.id);

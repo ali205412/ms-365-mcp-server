@@ -423,6 +423,39 @@ function applyAdvancedDirectoryQueryHeaders(
   headers[CONSISTENCY_LEVEL_HEADER] = CONSISTENCY_LEVEL_EVENTUAL;
 }
 
+function combineAbortSignals(signals: ReadonlyArray<AbortSignal | undefined>): {
+  signal?: AbortSignal;
+  cleanup: () => void;
+} {
+  const activeSignals = signals.filter((signal): signal is AbortSignal => signal !== undefined);
+  if (activeSignals.length === 0) return { cleanup: () => undefined };
+  if (activeSignals.length === 1) return { signal: activeSignals[0], cleanup: () => undefined };
+
+  const controller = new AbortController();
+  const trackedSignals: AbortSignal[] = [];
+  const abort = (): void => {
+    if (!controller.signal.aborted) controller.abort();
+  };
+
+  for (const signal of activeSignals) {
+    if (signal.aborted) {
+      abort();
+      break;
+    }
+    signal.addEventListener('abort', abort, { once: true });
+    trackedSignals.push(signal);
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      for (const signal of trackedSignals) {
+        signal.removeEventListener('abort', abort);
+      }
+    },
+  };
+}
+
 function transcriptTextFromResult(result: CallToolResult): string | undefined {
   return result.content.find((item): item is TextContent => item.type === 'text')?.text;
 }
@@ -960,9 +993,35 @@ async function executeGraphToolInner(
       headers,
     };
 
+    const shouldFetchAllPages = params.fetchAllPages === true;
+    const ctx = requestContext.getStore();
+    const meta =
+      typeof params._meta === 'object' && params._meta !== null
+        ? (params._meta as { progressToken?: unknown })
+        : undefined;
+    const progressToken = meta?.progressToken;
+    const token =
+      typeof progressToken === 'string' || typeof progressToken === 'number'
+        ? progressToken
+        : undefined;
+    const operationKey = {
+      tenantId: ctx?.tenantId ?? tenantInfo.id,
+      requestId: ctx?.requestId,
+      progressToken: token !== undefined ? String(token) : undefined,
+    };
+    const sendNotification =
+      typeof params._sendNotification === 'function'
+        ? (params._sendNotification as ProgressNotificationSender)
+        : undefined;
+    const registeredOperationController =
+      shouldFetchAllPages && token !== undefined ? registerOperation(operationKey) : undefined;
     const requestSignal = params._signal instanceof AbortSignal ? params._signal : undefined;
-    if (requestSignal) {
-      options.signal = requestSignal;
+    const combinedSignal = combineAbortSignals([
+      requestSignal,
+      registeredOperationController?.signal,
+    ]);
+    if (combinedSignal.signal) {
+      options.signal = combinedSignal.signal;
     }
 
     if (options.method !== 'GET' && body) {
@@ -1018,91 +1077,72 @@ async function executeGraphToolInner(
       `Making graph request to ${path} with options: ${JSON.stringify(loggableOptions)}${_redacted ? ' [accessToken=REDACTED]' : ''}`
     );
 
-    let response = await graphClient.graphRequest(path, options);
-    if (isTranscriptContent) {
-      response = preserveRawTranscriptText(response);
-    }
+    let response: Awaited<ReturnType<GraphClient['graphRequest']>> | undefined;
+    try {
+      response = await graphClient.graphRequest(path, options);
+      if (isTranscriptContent) {
+        response = preserveRawTranscriptText(response);
+      }
 
-    // Plan 02-04 / MWARE-04: delegate pagination to src/lib/middleware/page-iterator.ts.
-    // The v1 inline loop at this site silently swallowed mid-stream errors
-    // (CONCERNS.md "fetchAllPages swallows pagination errors"); the new
-    // buffered wrapper throws on any mid-stream failure so the outer
-    // executeGraphTool catch-block surfaces them as typed `isError: true`
-    // MCP responses. D-06 caps at 20 pages by default (overridable via
-    // MS365_MCP_MAX_PAGES); _truncated + _nextLink surface in the envelope
-    // when the cap is hit. Dynamic import keeps page-iterator out of the
-    // module graph for callers that never opt-in to pagination.
-    const shouldFetchAllPages = params.fetchAllPages === true;
-    if (shouldFetchAllPages && response?.content?.[0]?.text) {
-      const { fetchAllPages } = await import('./lib/middleware/page-iterator.js');
-      // Seed the iterator with the already-fetched first page so we avoid
-      // a duplicate graphRequest call (preserves v1's "1 initial + N nextLinks"
-      // call-count contract that existing fetchAllPages tests rely on).
-      const firstPage = JSON.parse(response.content[0].text);
-      const ctx = requestContext.getStore();
-      const meta =
-        typeof params._meta === 'object' && params._meta !== null
-          ? (params._meta as { progressToken?: unknown })
-          : undefined;
-      const progressToken = meta?.progressToken;
-      const token =
-        typeof progressToken === 'string' || typeof progressToken === 'number'
-          ? progressToken
-          : undefined;
-      const operationKey = {
-        tenantId: ctx?.tenantId ?? tenantInfo.id,
-        requestId: ctx?.requestId,
-        progressToken: token !== undefined ? String(token) : undefined,
-      };
-      const sendNotification =
-        typeof params._sendNotification === 'function'
-          ? (params._sendNotification as ProgressNotificationSender)
-          : undefined;
-      if (token !== undefined) registerOperation(operationKey);
-      const combined = await (async () => {
-        try {
-          return await fetchAllPages(path, options, graphClient, {
-            seedFirstPage: firstPage,
-            progressToken: token,
-            sendNotification,
-            capabilityProfile: ctx?.capabilityProfile,
-            operationKey,
-            signal: requestSignal,
-          });
-        } finally {
-          unregisterOperation(operationKey);
+      // Plan 02-04 / MWARE-04: delegate pagination to src/lib/middleware/page-iterator.ts.
+      // The v1 inline loop at this site silently swallowed mid-stream errors
+      // (CONCERNS.md "fetchAllPages swallows pagination errors"); the new
+      // buffered wrapper throws on any mid-stream failure so the outer
+      // executeGraphTool catch-block surfaces them as typed `isError: true`
+      // MCP responses. D-06 caps at 20 pages by default (overridable via
+      // MS365_MCP_MAX_PAGES); _truncated + _nextLink surface in the envelope
+      // when the cap is hit. Dynamic import keeps page-iterator out of the
+      // module graph for callers that never opt-in to pagination.
+      if (shouldFetchAllPages && response?.content?.[0]?.text) {
+        const { fetchAllPages } = await import('./lib/middleware/page-iterator.js');
+        // Seed the iterator with the already-fetched first page so we avoid
+        // a duplicate graphRequest call (preserves v1's "1 initial + N nextLinks"
+        // call-count contract that existing fetchAllPages tests rely on).
+        const firstPage = JSON.parse(response.content[0].text);
+        const combined = await fetchAllPages(path, options, graphClient, {
+          seedFirstPage: firstPage,
+          progressToken: token,
+          sendNotification,
+          capabilityProfile: ctx?.capabilityProfile,
+          operationKey,
+          signal: combinedSignal.signal,
+        });
+        firstPage.value = combined.value;
+        if (combined._cancelled) {
+          const payload = {
+            status: 'cancelled',
+            operation: tool.alias,
+            resourceUri: combined._partialResourceUri,
+            partial: { value: combined.value },
+          };
+          response.content[0].text = JSON.stringify(payload);
+          response._meta = {
+            ...response._meta,
+            cancelled: true,
+            partialResourceUri: combined._partialResourceUri,
+          };
+        } else if (combined._truncated) {
+          firstPage._truncated = true;
+          if (combined._nextLink !== undefined) {
+            firstPage._nextLink = combined._nextLink;
+          }
         }
-      })();
-      firstPage.value = combined.value;
-      if (combined._cancelled) {
-        const payload = {
-          status: 'cancelled',
-          operation: tool.alias,
-          resourceUri: combined._partialResourceUri,
-          partial: { value: combined.value },
-        };
-        response.content[0].text = JSON.stringify(payload);
-        response._meta = {
-          ...response._meta,
-          cancelled: true,
-          partialResourceUri: combined._partialResourceUri,
-        };
-      } else if (combined._truncated) {
-        firstPage._truncated = true;
-        if (combined._nextLink !== undefined) {
-          firstPage._nextLink = combined._nextLink;
+        if (!combined._cancelled && firstPage['@odata.count'] !== undefined) {
+          firstPage['@odata.count'] = combined.value.length;
         }
+        if (!combined._cancelled) {
+          delete firstPage['@odata.nextLink'];
+          response.content[0].text = JSON.stringify(firstPage);
+        }
+        logger.info(
+          `Pagination via page-iterator: items=${combined.value.length} truncated=${Boolean(combined._truncated)}`
+        );
       }
-      if (!combined._cancelled && firstPage['@odata.count'] !== undefined) {
-        firstPage['@odata.count'] = combined.value.length;
+    } finally {
+      combinedSignal.cleanup();
+      if (registeredOperationController) {
+        unregisterOperation(operationKey);
       }
-      if (!combined._cancelled) {
-        delete firstPage['@odata.nextLink'];
-        response.content[0].text = JSON.stringify(firstPage);
-      }
-      logger.info(
-        `Pagination via page-iterator: items=${combined.value.length} truncated=${Boolean(combined._truncated)}`
-      );
     }
 
     if (response?.content?.[0]?.text) {
@@ -1120,6 +1160,10 @@ async function executeGraphToolInner(
       } catch {
         // Non-JSON response
       }
+    }
+
+    if (!response) {
+      throw new Error('Graph request did not return a response.');
     }
 
     // Convert McpResponse to CallToolResult with the correct structure
