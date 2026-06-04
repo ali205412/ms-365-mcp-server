@@ -5,6 +5,10 @@ import {
   DISCOVERY_META_TOOL_NAMES,
   DISCOVERY_PRESET_VERSION,
 } from '../../src/lib/tenant-surface/surface.js';
+import {
+  buildEffectiveCapabilityProfile,
+  DEFAULT_SERVER_CAPABILITIES,
+} from '../../src/lib/mcp-capabilities/profile.js';
 import { readMcpResource } from '../../src/lib/mcp-resources/read.js';
 import { registerMcpResources } from '../../src/lib/mcp-resources/register.js';
 import MicrosoftGraphServer from '../../src/server.js';
@@ -269,6 +273,40 @@ describe('Phase 7 Plan 07-11 Task 2 - MCP resource read dispatch', () => {
     ).rejects.toMatchObject({
       data: { code: 'tenant_resource_mismatch' },
     });
+  });
+
+  it('reads connector capabilities from the live request profile before static connector deps', async () => {
+    const staticProfile = buildEffectiveCapabilityProfile({
+      protocolVersion: '2025-03-26',
+      clientInfo: { name: 'static-client', version: '1.0.0' },
+      advertisedCapabilities: {},
+      transport: 'legacy-sse',
+      surface: 'discovery',
+      tenantPolicy: { phase8Enabled: false },
+      serverCapabilities: DEFAULT_SERVER_CAPABILITIES,
+    });
+    const liveProfile = buildEffectiveCapabilityProfile({
+      protocolVersion: '2025-06-18',
+      clientInfo: { name: 'live-client', version: '2.0.0' },
+      advertisedCapabilities: { resources: {}, prompts: {}, progress: {} },
+      transport: 'stdio',
+      surface: 'static',
+      tenantPolicy: { phase8Enabled: true },
+      serverCapabilities: DEFAULT_SERVER_CAPABILITIES,
+    });
+
+    const result = await requestContext.run(
+      { ...discoveryContext(), capabilityProfile: liveProfile },
+      () =>
+        readMcpResource(`m365://tenant/${TENANT_A}/connector/capabilities.json`, {
+          tenant: discoveryTenant(),
+          connector: { profile: staticProfile },
+        })
+    );
+    const body = JSON.parse(readText(result)) as { transport: string; enabledFeatures: string[] };
+
+    expect(body.transport).toBe('stdio');
+    expect(body.enabledFeatures).toContain('resources');
   });
 
   it('reads Graph-backed resources through bounded same-tenant Graph GETs', async () => {

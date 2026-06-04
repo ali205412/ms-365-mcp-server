@@ -37,6 +37,7 @@ docker run -p 3000:3000 \
   -e MS365_MCP_KEK=<base64-32-byte-key> \
   -e MS365_MCP_PUBLIC_URL=https://mcp.example.com \
   -e MS365_MCP_CORS_ORIGINS=https://claude.ai,https://chatgpt.com,https://mcp.example.com \
+  -e MS365_MCP_OAUTH_REDIRECT_HOSTS=claude.ai,chatgpt.com \
   ms-365-mcp-server \
   --http 0.0.0.0:3000
 ```
@@ -50,6 +51,7 @@ docker run -p 3000:3000 \
   -e MS365_MCP_REDIS_URL=redis://redis:6379 \
   -e MS365_MCP_PUBLIC_URL=https://mcp.example.com \
   -e MS365_MCP_CORS_ORIGINS=https://claude.ai,https://chatgpt.com,https://mcp.example.com \
+  -e MS365_MCP_OAUTH_REDIRECT_HOSTS=claude.ai,chatgpt.com \
   ms-365-mcp-server \
   --http 0.0.0.0:3000
 ```
@@ -89,6 +91,10 @@ docker run -p 3000:3000 \
        "MS365_MCP_KEK=secretref:kek" \
        "MS365_MCP_PUBLIC_URL=https://mcp.example.com" \
        "MS365_MCP_CORS_ORIGINS=https://claude.ai,https://chatgpt.com,https://mcp.example.com" \
+      "MS365_MCP_OAUTH_REDIRECT_HOSTS=claude.ai,chatgpt.com" \
+      "MS365_MCP_ADMIN_APP_CLIENT_ID=<admin-app-client-id>" \
+      "MS365_MCP_ADMIN_GROUP_ID=<admin-group-object-id>" \
+      "MS365_MCP_ADMIN_ORIGINS=https://admin.example.com" \
      --command "node" "dist/index.js" "--http" "0.0.0.0:3000"
    ```
 
@@ -121,6 +127,10 @@ az webapp config appsettings set --name mcp-server --resource-group your-rg \
     MS365_MCP_KEK="@Microsoft.KeyVault(SecretUri=https://your-keyvault.vault.azure.net/secrets/kek/)" \
     MS365_MCP_PUBLIC_URL="https://mcp-server.azurewebsites.net" \
     MS365_MCP_CORS_ORIGINS="https://claude.ai,https://chatgpt.com,https://mcp-server.azurewebsites.net" \
+    MS365_MCP_OAUTH_REDIRECT_HOSTS="claude.ai,chatgpt.com" \
+    MS365_MCP_ADMIN_APP_CLIENT_ID="<admin-app-client-id>" \
+    MS365_MCP_ADMIN_GROUP_ID="<admin-group-object-id>" \
+    MS365_MCP_ADMIN_ORIGINS="https://admin.example.com" \
     WEBSITES_PORT="3000"
 
 az webapp config set --name mcp-server --resource-group your-rg \
@@ -134,7 +144,7 @@ When deploying for an organization, create a dedicated app registration instead 
 1. **Create the app** in [Azure Portal](https://portal.azure.com) > App registrations > New registration
    - Name: `MS365 MCP Server`
    - Supported account types: **Accounts in this organizational directory only** (single tenant)
-   - Redirect URI: your server's callback URL
+   - Redirect URI: add the exact callback URI used by each MCP client, such as `https://claude.ai/api/mcp/auth_callback`, not a generic server `/oauth/callback` path. Hosted connector hosts such as `claude.ai` and `chatgpt.com` also need to be present in `MS365_MCP_OAUTH_REDIRECT_HOSTS`.
 
 2. **Add API permissions** > Microsoft Graph > Delegated permissions
    Run `npx @softeria/ms-365-mcp-server --org-mode --list-permissions` to print the exact list of permissions required for your enabled tools.
@@ -162,6 +172,14 @@ MS365_MCP_PUBLIC_URL=https://mcp.example.com
 ```
 
 Only browser-facing fields (`issuer`, `authorization_endpoint`, `authorization_servers`) are pinned to this URL. Server-to-server endpoints (`token_endpoint`, `registration_endpoint`, `resource`) stay on the request origin, so clients that reach the server over an internal network (e.g. another container on the same Docker network) don't have to round-trip back through the public URL. Client MCP URLs should still use the origin and tenant route that the client can actually reach, for example `https://mcp.example.com/t/<tenant-route-id>/mcp` for internet-facing clients.
+
+Hosted MCP clients often send OAuth callbacks on their own domains. Configure `MS365_MCP_OAUTH_REDIRECT_HOSTS` with the callback hosts you trust, for example `claude.ai,chatgpt.com`. This host list is only a scheme/host policy gate: each tenant's `redirect_uri_allowlist` must still contain the full callback URI as an exact string, including path, casing, encoding, and trailing slash.
+
+## First Tenant and Admin Bootstrap
+
+A fresh multi-tenant deployment has no tenant rows until an administrator onboards one. Configure both `MS365_MCP_ADMIN_APP_CLIENT_ID` and `MS365_MCP_ADMIN_GROUP_ID` so the `/admin/*` API is mounted, and set `MS365_MCP_ADMIN_ORIGINS` if a browser admin UI calls it. Then create the first tenant through `POST /admin/tenants` with the tenant's Microsoft app registration, `allowed_scopes`, `enabled_tools` or `preset_version`, CORS origins, and exact `redirect_uri_allowlist` values.
+
+If you skip the admin environment variables, health checks and OAuth metadata can still respond, but no runtime tenant can be onboarded through the gateway and `/t/<tenant-route-id>/mcp` has nothing to authenticate against.
 
 ## Client Configuration
 
@@ -197,6 +215,7 @@ The client automatically discovers OAuth endpoints and opens a browser for authe
 - **Read-only mode**: use `--read-only` to disable all write operations (send, delete, update, create)
 - **Tool filtering**: use `--enabled-tools <regex>` or `--preset <names>` to restrict available tools
 - **CORS**: configure `MS365_MCP_CORS_ORIGINS` to restrict allowed origins (defaults to `http://localhost:3000`); set explicitly when clients run on a different origin
+- **OAuth redirects**: configure `MS365_MCP_OAUTH_REDIRECT_HOSTS` for hosted connector callback hosts, and keep each tenant `redirect_uri_allowlist` exact to the callback URI in use
 
 ## Exposed Endpoints
 
@@ -206,7 +225,7 @@ The client automatically discovers OAuth endpoints and opens a browser for authe
 | `/healthz` / `/readyz`                    | GET             | Liveness / readiness probes              | No            |
 | `/t/:tenantId/mcp`                        | GET/POST/DELETE | Tenant Streamable HTTP MCP endpoint      | Bearer token  |
 | `/t/:tenantId/authorize`                  | GET             | Tenant OAuth redirect to Microsoft       | No            |
-| `/t/:tenantId/token`                      | POST            | Tenant OAuth code/refresh exchange       | No            |
+| `/t/:tenantId/token`                      | POST            | Tenant OAuth authorization-code exchange | No            |
 | `/register`                               | POST            | OAuth dynamic registration               | No            |
 | `/.well-known/oauth-authorization-server` | GET             | Root OAuth server metadata               | No            |
 | `/.well-known/oauth-protected-resource`   | GET             | Root protected-resource metadata         | No            |

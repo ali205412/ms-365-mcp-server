@@ -66,7 +66,7 @@ interface AppHarness {
 
 async function startApp(
   tenantOverrides: Partial<TenantRow> = {},
-  authorizeOptions: { extraAllowedHosts?: readonly string[] } = {}
+  authorizeOptions: { publicUrlHost?: string | null; extraAllowedHosts?: readonly string[] } = {}
 ): Promise<AppHarness> {
   const redis = new MemoryRedisFacade();
   const pkceStore = new RedisPkceStore(redis);
@@ -282,6 +282,79 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
 
     const entry = await harness.pkceStore.takeByChallenge(harness.tenant.id, clientChallenge);
     expect(entry?.redirectUri).toBe(redirectUri);
+  });
+
+  it('allows exact public URL host redirect URI without extra redirect hosts', async () => {
+    const redirectUri = 'https://mcp.example.com/oauth/callback';
+    harness = await startApp(
+      {
+        redirect_uri_allowlist: [redirectUri],
+      },
+      { publicUrlHost: 'mcp.example.com' }
+    );
+
+    const clientVerifier = crypto.randomBytes(32).toString('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
+
+    const params = new URLSearchParams({
+      redirect_uri: redirectUri,
+      code_challenge: clientChallenge,
+      code_challenge_method: 'S256',
+      state: 'xyz',
+      client_id: harness.tenant.client_id,
+    });
+
+    const res = await fetch(`${harness.url}/authorize?${params}`, {
+      redirect: 'manual',
+    });
+
+    expect(res.status).toBe(302);
+    const location = res.headers.get('location');
+    expect(location).toBeTruthy();
+    const loc = new URL(location!);
+    expect(loc.searchParams.get('redirect_uri')).toBe(redirectUri);
+  });
+
+  it('rejects redirect URI variants that are not exact tenant allowlist matches', async () => {
+    const redirectUri = 'https://chatgpt.com/connector/oauth/generatedPath';
+    harness = await startApp(
+      {
+        redirect_uri_allowlist: [redirectUri],
+      },
+      { extraAllowedHosts: ['https://chatgpt.com'] }
+    );
+
+    const variants = [
+      `${redirectUri}/`,
+      'https://chatgpt.com:443/connector/oauth/generatedPath',
+      'https://chatgpt.com/connector/oauth/%67eneratedPath',
+      'https://chatgpt.com/connector/oauth/generatedpath',
+    ];
+
+    for (const variant of variants) {
+      const clientVerifier = crypto.randomBytes(32).toString('base64url');
+      const clientChallenge = crypto
+        .createHash('sha256')
+        .update(clientVerifier)
+        .digest('base64url');
+      const params = new URLSearchParams({
+        redirect_uri: variant,
+        code_challenge: clientChallenge,
+        code_challenge_method: 'S256',
+        state: 'xyz',
+        client_id: harness.tenant.client_id,
+      });
+
+      const res = await fetch(`${harness.url}/authorize?${params}`, {
+        redirect: 'manual',
+      });
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toBe('invalid_redirect_uri');
+      const entry = await harness.pkceStore.takeByChallenge(harness.tenant.id, clientChallenge);
+      expect(entry).toBeNull();
+    }
   });
 
   it('rejects hosted connector lookalike hosts', async () => {

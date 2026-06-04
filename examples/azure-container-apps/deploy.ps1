@@ -20,8 +20,8 @@ Requirements:
   - PowerShell 7+
   - Azure subscription with Contributor + User Access Administrator roles
     (User Access Administrator is needed for the UAMI -> Key Vault RBAC assignment)
-  - Entra ID app registration created beforehand, with a redirect URI matching
-    the Container App FQDN (update it after the first deployment).
+  - Entra ID app registration created beforehand, with redirect URIs matching
+    the MCP client callback URIs you will exact-allowlist for each tenant.
 #>
 [CmdletBinding()]
 param(
@@ -42,7 +42,11 @@ param(
   [securestring]$RedisUrl,
   [securestring]$McpKek,
   [string]$CorsOrigins = 'https://claude.ai,https://chatgpt.com',
+  [string]$OAuthRedirectHosts = 'claude.ai,chatgpt.com',
   [string]$PublicBaseUrl = '',
+  [string]$AdminAppClientId = '',
+  [string]$AdminGroupId = '',
+  [string]$AdminOrigins = '',
   [string[]]$KvAdminObjectIds = @(),
   [bool]$OrgMode = $true,
   [bool]$ReadOnly = $false,
@@ -138,7 +142,11 @@ $params = @{
   redisUrl       = @{ value = $redisUrlPlain }
   mcpKek         = @{ value = $mcpKekPlain }
   corsOrigins    = @{ value = $CorsOrigins }
+  oauthRedirectHosts = @{ value = $OAuthRedirectHosts }
   publicBaseUrl  = @{ value = $PublicBaseUrl }
+  adminAppClientId = @{ value = $AdminAppClientId }
+  adminGroupId   = @{ value = $AdminGroupId }
+  adminOrigins   = @{ value = $AdminOrigins }
   orgMode        = @{ value = $OrgMode }
   readOnly       = @{ value = $ReadOnly }
   minReplicas    = @{ value = $MinReplicas }
@@ -185,10 +193,12 @@ try {
   Write-Host "  Log Analytics       : $($outputs.logAnalyticsName.value)"
   Write-Host ''
   Write-Host 'Next steps:' -ForegroundColor Cyan
-  Write-Host "  1. Add '$($outputs.appUrl.value)/oauth/callback' as a redirect URI in your Entra ID app."
-  Write-Host "  2. Re-run with -PublicBaseUrl '$($outputs.appUrl.value)' so OAuth metadata returns the public URL."
-  Write-Host "  3. Test : curl $($outputs.appUrl.value)/.well-known/oauth-authorization-server"
-  Write-Host "  4. Logs : az containerapp logs show -n '$BaseName-app' -g '$ResourceGroup' --follow"
+  Write-Host "  1. Re-run with -PublicBaseUrl '$($outputs.appUrl.value)' so OAuth metadata returns the public URL."
+  Write-Host '  2. Add the MCP client callback URI (for example https://claude.ai/api/mcp/auth_callback or a hosted connector callback) to the tenant redirect_uri_allowlist exactly.'
+  Write-Host '  3. If the callback host is not your public MCP host, include it in -OAuthRedirectHosts; this does not replace the exact tenant allowlist entry.'
+  Write-Host '  4. Configure -AdminAppClientId and -AdminGroupId, then onboard the first tenant through /admin/tenants.'
+  Write-Host "  5. Test : curl $($outputs.appUrl.value)/.well-known/oauth-authorization-server"
+  Write-Host "  6. Logs : az containerapp logs show -n '$BaseName-app' -g '$ResourceGroup' --follow"
 }
 finally {
   Remove-Item $paramsFile.FullName -ErrorAction SilentlyContinue

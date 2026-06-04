@@ -58,8 +58,20 @@ param mcpKek string
 @description('Comma-separated CORS origins for the MCP HTTP endpoint. Include hosted connector origins and your public MCP origin.')
 param corsOrigins string = 'https://claude.ai,https://chatgpt.com'
 
+@description('Comma-separated HTTPS hosts allowed for hosted MCP OAuth callbacks in addition to the public server host. Tenant redirect_uri_allowlist entries still must match exactly.')
+param oauthRedirectHosts string = 'claude.ai,chatgpt.com'
+
 @description('Public base URL advertised in OAuth metadata. Derived from ingress FQDN after first deploy — leave empty initially, then redeploy with the assigned URL.')
 param publicBaseUrl string = ''
+
+@description('Admin Entra app client ID. Required, with adminGroupId, to mount /admin routes for first-tenant onboarding.')
+param adminAppClientId string = ''
+
+@description('Entra security group object ID allowed to call /admin routes. Required, with adminAppClientId, for first-tenant onboarding.')
+param adminGroupId string = ''
+
+@description('Comma-separated browser origins allowed to call /admin routes.')
+param adminOrigins string = ''
 
 @description('Object IDs of users/groups granted Key Vault Administrator role (for rotating secrets).')
 param kvAdminObjectIds array = []
@@ -244,7 +256,11 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'MS365_MCP_REDIS_URL', secretRef: 'redis-url' }
             { name: 'MS365_MCP_KEK', secretRef: 'mcp-kek' }
             { name: 'MS365_MCP_CORS_ORIGINS', value: corsOrigins }
+            { name: 'MS365_MCP_OAUTH_REDIRECT_HOSTS', value: oauthRedirectHosts }
             { name: 'MS365_MCP_PUBLIC_URL', value: empty(publicBaseUrl) ? '' : publicBaseUrl }
+            { name: 'MS365_MCP_ADMIN_APP_CLIENT_ID', value: adminAppClientId }
+            { name: 'MS365_MCP_ADMIN_GROUP_ID', value: adminGroupId }
+            { name: 'MS365_MCP_ADMIN_ORIGINS', value: adminOrigins }
             { name: 'AZURE_CLIENT_ID', value: uami.properties.clientId }
             { name: 'NODE_ENV', value: 'production' }
           ]
@@ -262,7 +278,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
       }
     }
   }
-  dependsOn: [ roleUami, secretClientId, secretTenantId, secretCloudType ]
+  dependsOn: [ roleUami, secretClientId, secretTenantId, secretCloudType, secretClientSecret ]
 }
 
 // ---------- Outputs ----------

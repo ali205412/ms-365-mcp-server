@@ -3,7 +3,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ErrorCode, McpError, type ReadResourceResult } from '@modelcontextprotocol/sdk/types.js';
 import { buildToolsRegistry } from '../../graph-tools.js';
-import { getRequestOwnerSubject, getRequestTenant } from '../../request-context.js';
+import {
+  getRequestOwnerSubject,
+  getRequestTenant,
+  getRequestTokens,
+} from '../../request-context.js';
 import { buildConnectorDiagnostics } from '../mcp-capabilities/diagnostics.js';
 import {
   buildEffectiveCapabilityProfile,
@@ -320,6 +324,8 @@ async function readSkillTenantResource(
 }
 
 function connectorProfile(deps: ReadMcpResourceDeps): ClientCapabilityProfile {
+  const liveProfile = getRequestTokens()?.capabilityProfile;
+  if (liveProfile) return liveProfile;
   if (deps.connector?.profile) return deps.connector.profile;
   const surface = deps.connector?.surface ?? 'discovery';
   return buildEffectiveCapabilityProfile({

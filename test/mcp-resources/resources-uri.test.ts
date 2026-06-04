@@ -98,6 +98,9 @@ describe('Phase 8 Plan 08-10 - MCP resource URI parser', () => {
     });
     for (const uri of [
       'm365://catalog/../navigation-guide.md',
+      'm365://catalog/a/%2e%2e/navigation-guide.md',
+      'm365://catalog/a/%2E%2e/navigation-guide.md',
+      `m365://tenant/${TENANT_A}/a/%2e%2e/bookmarks.json`,
       'm365://user:pass@catalog/navigation-guide.md',
       'm365://catalog/navigation-guide.md?x=1',
       'm365://catalog/navigation-guide.md#frag',

@@ -18,6 +18,7 @@ import type { TenantPool } from '../tenant/tenant-pool.js';
 export interface AuthorizeHandlerConfig {
   pkceStore: PkceStore;
   pgPool?: Pool;
+  publicUrlHost?: string | null;
   extraAllowedHosts?: readonly string[];
 }
 
@@ -28,21 +29,12 @@ export interface TenantTokenHandlerConfig {
   pgPool?: Pool;
 }
 
-function normalizeRedirectUri(u: string): string {
-  try {
-    const parsed = new URL(u);
-    return parsed.href.replace(/\/$/, '');
-  } catch {
-    return u;
-  }
-}
-
 function pkceChallengeForVerifier(verifier: string): string {
   return crypto.createHash('sha256').update(verifier).digest('base64url');
 }
 
 export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
-  const { pkceStore, pgPool, extraAllowedHosts } = config;
+  const { pkceStore, pgPool, publicUrlHost, extraAllowedHosts } = config;
 
   const emitAudit = (
     tenantId: string,
@@ -79,7 +71,7 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
     const redirectUri = String(req.query.redirect_uri ?? '');
     const schemeCheck = validateRedirectUri(redirectUri, {
       mode: 'prod',
-      publicUrlHost: null,
+      publicUrlHost: publicUrlHost ?? null,
       extraAllowedHosts,
     });
     if (!schemeCheck.ok) {
@@ -94,9 +86,7 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
       return;
     }
 
-    const normalizedRedirect = normalizeRedirectUri(redirectUri);
-    const allowlistNormalized = tenant.redirect_uri_allowlist.map(normalizeRedirectUri);
-    const allowedByTenant = allowlistNormalized.includes(normalizedRedirect);
+    const allowedByTenant = tenant.redirect_uri_allowlist.includes(redirectUri);
     if (!allowedByTenant) {
       emitAudit(tenant.id, 'failure', redirectUri, { error: 'invalid_redirect_uri' }, req);
       res.status(400).json({ error: 'invalid_redirect_uri' });

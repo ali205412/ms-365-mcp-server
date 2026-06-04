@@ -725,6 +725,7 @@ class MicrosoftGraphServer {
       createAuthorizeHandler({
         pkceStore: this.pkceStore,
         pgPool: pg,
+        publicUrlHost: publicBase ? new URL(publicBase).hostname : null,
         extraAllowedHosts: oauthRedirectHosts,
       })
     );

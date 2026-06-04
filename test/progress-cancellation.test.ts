@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ClientCapabilityProfile } from '../src/lib/mcp-capabilities/profile.js';
-import { cancelOperation } from '../src/lib/mcp-progress/cancellation.js';
+import {
+  cancelOperation,
+  isOperationCancelled,
+  registerOperation,
+  resetOperationsForTesting,
+} from '../src/lib/mcp-progress/cancellation.js';
 import { requestContext } from '../src/request-context.js';
 import type { CallToolResult } from '../src/graph-tools.js';
 
@@ -83,6 +88,23 @@ async function withTenant<T>(tenantId: string, fn: () => Promise<T>): Promise<T>
 }
 
 describe('Phase 8 progress and cancellation for paginated Graph tools', () => {
+  it('keeps operation keys unambiguous when request IDs and progress tokens contain delimiters', () => {
+    resetOperationsForTesting();
+    const first = { tenantId: 'tenant-a', requestId: 'request:a', progressToken: 'b' };
+    const second = { tenantId: 'tenant-a', requestId: 'request', progressToken: 'a:b' };
+
+    try {
+      registerOperation(first);
+      registerOperation(second);
+
+      expect(cancelOperation(first)).toBe(true);
+      expect(isOperationCancelled(first)).toBe(true);
+      expect(isOperationCancelled(second)).toBe(false);
+    } finally {
+      resetOperationsForTesting();
+    }
+  });
+
   it('emits increasing progress notifications when a progress token is supplied', async () => {
     const { registerGraphTools } = await import('../src/graph-tools.js');
     const server = new McpServer({ name: 'test', version: '0.0.0' });

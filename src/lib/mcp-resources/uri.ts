@@ -232,6 +232,35 @@ function hasDotSegment(pathname: string): boolean {
   return pathname.split('/').some((segment) => segment === '.' || segment === '..');
 }
 
+function isDotSegment(segment: string): boolean {
+  if (segment === '.' || segment === '..') return true;
+  try {
+    const decoded = decodeURIComponent(segment);
+    return decoded === '.' || decoded === '..';
+  } catch {
+    return false;
+  }
+}
+
+function rawPathSegments(raw: string): readonly string[] {
+  const schemeEnd = raw.indexOf('://');
+  if (schemeEnd < 0) return [];
+
+  const authorityAndPath = raw.slice(schemeEnd + 3);
+  const slashIndex = authorityAndPath.indexOf('/');
+  if (slashIndex < 0) return [];
+
+  const pathAndDecorators = authorityAndPath.slice(slashIndex + 1);
+  const decoratorIndex = pathAndDecorators.search(/[?#]/);
+  const pathOnly =
+    decoratorIndex < 0 ? pathAndDecorators : pathAndDecorators.slice(0, decoratorIndex);
+  return pathOnly.split('/');
+}
+
+function hasRawDotSegment(raw: string): boolean {
+  return rawPathSegments(raw).some(isDotSegment);
+}
+
 function hasNoUrlDecorators(url: URL): boolean {
   return (
     url.username === '' &&
@@ -429,7 +458,7 @@ function parseTenantResource(
 }
 
 export function parseMcpResourceUri(raw: string): ParsedMcpResourceUri {
-  if (/\/\.{1,2}(?:\/|$)/.test(raw)) {
+  if (hasRawDotSegment(raw)) {
     return invalid('invalid_resource_uri', 'Resource URI path must not include dot segments.');
   }
 
