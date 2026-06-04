@@ -162,9 +162,16 @@ async function writeWebResponse(response: Response, res: ServerResponse): Promis
     });
   }
 
+  const isEventStream =
+    response.headers.get('content-type')?.toLowerCase().includes('text/event-stream') ?? false;
+
   if (!response.body) {
     res.end();
     return;
+  }
+
+  if (isEventStream && !res.headersSent && typeof res.flushHeaders === 'function') {
+    res.flushHeaders();
   }
 
   const body = Readable.fromWeb(response.body as import('node:stream/web').ReadableStream);
