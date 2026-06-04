@@ -1,4 +1,4 @@
-import type { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type { ExpressStreamableHTTPServerTransport } from '../transports/express-streamable-http-transport.js';
 import type { ResourceUpdatedNotification } from '@modelcontextprotocol/sdk/types.js';
 import logger from '../../logger.js';
 import type { ClientCapabilityProfile } from '../mcp-capabilities/profile.js';
@@ -24,9 +24,11 @@ export interface RegisteredMcpSession {
   tenantId: string;
   sessionId: string;
   server: McpNotificationServer;
-  transport: StreamableHTTPServerTransport;
+  transport: ExpressStreamableHTTPServerTransport;
   surface: McpNotificationSurface;
   capabilityProfile?: ClientCapabilityProfile;
+  createdAt?: number;
+  lastSeenAt?: number;
 }
 
 export type RegisterSessionInput = RegisteredMcpSession;
@@ -48,19 +50,31 @@ export type ResourceSubscriptionChecker = (
   uri: string
 ) => boolean | Promise<boolean>;
 
+const DEFAULT_SESSION_TTL_MS = 30 * 60 * 1000;
+const DEFAULT_MAX_SESSIONS = 1000;
+
 export interface McpSessionRegistryOptions {
   coalescer?: ResourceNotificationCoalescer;
   isResourceSubscribed?: ResourceSubscriptionChecker;
+  sessionTtlMs?: number;
+  maxSessions?: number;
+  now?: () => number;
 }
 
 export class McpSessionRegistry {
   private readonly sessions = new Map<string, RegisteredMcpSession>();
   private readonly coalescer: ResourceNotificationCoalescer;
+  private readonly sessionTtlMs: number;
+  private readonly maxSessions: number;
+  private readonly now: () => number;
   private isResourceSubscribed?: ResourceSubscriptionChecker;
 
   constructor(options: McpSessionRegistryOptions = {}) {
     this.coalescer = options.coalescer ?? defaultResourceNotificationCoalescer;
     this.isResourceSubscribed = options.isResourceSubscribed;
+    this.sessionTtlMs = positiveNumber(options.sessionTtlMs, DEFAULT_SESSION_TTL_MS);
+    this.maxSessions = positiveNumber(options.maxSessions, DEFAULT_MAX_SESSIONS);
+    this.now = options.now ?? Date.now;
   }
 
   setResourceSubscriptionChecker(checker: ResourceSubscriptionChecker | undefined): void {
@@ -68,12 +82,26 @@ export class McpSessionRegistry {
   }
 
   registerSession(input: RegisterSessionInput): RegisteredMcpSession {
-    this.sessions.set(input.sessionId, input);
-    return input;
+    const now = this.now();
+    const session = {
+      ...input,
+      createdAt: input.createdAt ?? now,
+      lastSeenAt: input.lastSeenAt ?? now,
+    };
+    this.sessions.set(input.sessionId, session);
+    return session;
   }
 
   getSession(sessionId: string): RegisteredMcpSession | undefined {
     return this.sessions.get(sessionId);
+  }
+
+  touchSession(sessionId: string): RegisteredMcpSession | undefined {
+    const session = this.sessions.get(sessionId);
+    if (!session) return undefined;
+    const touched = { ...session, lastSeenAt: this.now() };
+    this.sessions.set(sessionId, touched);
+    return touched;
   }
 
   unregisterSession(sessionId: string): RegisteredMcpSession | undefined {
@@ -84,6 +112,33 @@ export class McpSessionRegistry {
       this.coalescer.clearSession(session.tenantId, sessionId);
     }
     return session;
+  }
+
+  takeExpiredSessions(now = this.now()): RegisteredMcpSession[] {
+    const expired: RegisteredMcpSession[] = [];
+    for (const session of this.sessions.values()) {
+      const lastSeenAt = session.lastSeenAt ?? session.createdAt ?? now;
+      if (now - lastSeenAt <= this.sessionTtlMs) continue;
+      const removed = this.unregisterSession(session.sessionId);
+      if (removed) expired.push(removed);
+    }
+    return expired;
+  }
+
+  takeOverflowSessions(): RegisteredMcpSession[] {
+    const overflow = this.sessions.size - this.maxSessions;
+    if (overflow <= 0) return [];
+
+    const oldest = [...this.sessions.values()].sort(
+      (left, right) =>
+        (left.lastSeenAt ?? left.createdAt ?? 0) - (right.lastSeenAt ?? right.createdAt ?? 0)
+    );
+    const removed: RegisteredMcpSession[] = [];
+    for (const session of oldest.slice(0, overflow)) {
+      const taken = this.unregisterSession(session.sessionId);
+      if (taken) removed.push(taken);
+    }
+    return removed;
   }
 
   async deliverToolsListChanged(tenantId: string): Promise<void> {
@@ -250,6 +305,10 @@ function resourceUpdatedParams(
   return Object.keys(meta).length > 0
     ? ({ uri, _meta: meta } as ResourceUpdatedNotification['params'])
     : { uri };
+}
+
+function positiveNumber(value: number | undefined, fallback: number): number {
+  return value !== undefined && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 function isRedisSubscriber(value: unknown): value is RedisSubscriberLike {

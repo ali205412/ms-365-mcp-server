@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { ExpressStreamableHTTPServerTransport } from './lib/transports/express-streamable-http-transport.js';
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import express, { type Request, type Response, type RequestHandler } from 'express';
 import expressRateLimit from 'express-rate-limit';
@@ -81,8 +81,20 @@ import {
 import crypto from 'node:crypto';
 import { pinoHttp } from 'pino-http';
 import { nanoid } from 'nanoid';
+import { requestLogProps } from './lib/request-log-props.js';
 
 const LEGACY_SINGLE_TENANT_KEY = '_';
+
+function onceAsync<T extends unknown[]>(
+  fn: (...args: T) => Promise<void>
+): (...args: T) => Promise<void> {
+  let called = false;
+  return async (...args: T) => {
+    if (called) return;
+    called = true;
+    await fn(...args);
+  };
+}
 
 function pkceChallengeForVerifier(verifier: string): string {
   return crypto.createHash('sha256').update(verifier).digest('base64url');
@@ -959,7 +971,7 @@ class MicrosoftGraphServer {
               return url.startsWith('/healthz') || url.startsWith('/readyz');
             },
           },
-          customProps: (req) => ({ requestId: req.id, tenantId: null }),
+          customProps: requestLogProps,
         })
       );
 
@@ -1322,13 +1334,15 @@ class MicrosoftGraphServer {
         async (req: Request & { microsoftAuth?: { accessToken: string } }, res: Response) => {
           const handler = async () => {
             const server = this.createMcpServer();
-            const transport = new StreamableHTTPServerTransport({
+            const transport = new ExpressStreamableHTTPServerTransport({
               sessionIdGenerator: undefined, // Stateless mode
             });
 
-            res.on('close', () => {
-              transport.close();
-              server.close();
+            const cleanup = onceAsync(() =>
+              Promise.all([transport.close(), server.close()]).then(() => undefined)
+            );
+            res.once('close', () => {
+              void cleanup();
             });
 
             await server.connect(transport);
@@ -1379,13 +1393,15 @@ class MicrosoftGraphServer {
         async (req: Request & { microsoftAuth?: { accessToken: string } }, res: Response) => {
           const handler = async () => {
             const server = this.createMcpServer();
-            const transport = new StreamableHTTPServerTransport({
+            const transport = new ExpressStreamableHTTPServerTransport({
               sessionIdGenerator: undefined, // Stateless mode
             });
 
-            res.on('close', () => {
-              transport.close();
-              server.close();
+            const cleanup = onceAsync(() =>
+              Promise.all([transport.close(), server.close()]).then(() => undefined)
+            );
+            res.once('close', () => {
+              void cleanup();
             });
 
             await server.connect(transport);

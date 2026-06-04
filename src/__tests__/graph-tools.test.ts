@@ -197,9 +197,15 @@ describe('graph-tools', () => {
 
   // ---- 1. $count advanced query mode ----
   describe('$count advanced query mode', () => {
-    it('should set ConsistencyLevel: eventual header when $count=true', async () => {
-      const endpoint = makeEndpoint();
-      const config = makeConfig();
+    it('sets ConsistencyLevel: eventual for directory $count=true when endpoint supports it', async () => {
+      const endpoint = makeEndpoint({
+        path: '/users',
+        parameters: [
+          ...makeEndpoint().parameters,
+          { name: 'ConsistencyLevel', type: 'Header', schema: z.string().optional() },
+        ],
+      });
+      const config = makeConfig({ pathPattern: '/users', scopes: ['User.Read.All'] });
       mockEndpoints.push(endpoint);
       mockEndpointsJson = [config];
 
@@ -216,11 +222,81 @@ describe('graph-tools', () => {
       expect(tool).toBeDefined();
       await tool!.handler({ count: true });
 
-      // Verify graphRequest was called with ConsistencyLevel header
       expect(graphClient.graphRequest).toHaveBeenCalledTimes(1);
-      const [url] = graphClient.graphRequest.mock.calls[0];
-      // $count=true should appear in query string
+      const [url, options] = graphClient.graphRequest.mock.calls[0];
       expect(url).toContain('$count=true');
+      expect(options.headers).toMatchObject({ ConsistencyLevel: 'eventual' });
+    });
+
+    it('sets ConsistencyLevel: eventual for directory $search when endpoint supports it', async () => {
+      const endpoint = makeEndpoint({
+        path: '/groups',
+        parameters: [
+          ...makeEndpoint().parameters,
+          { name: 'ConsistencyLevel', type: 'Header', schema: z.string().optional() },
+        ],
+      });
+      const config = makeConfig({ pathPattern: '/groups', scopes: ['Group.Read.All'] });
+      mockEndpoints.push(endpoint);
+      mockEndpointsJson = [config];
+
+      const graphClient = createMockGraphClient();
+      const server = createMockServer();
+      const { registerGraphTools } = await loadModule();
+      registerGraphTools(server as any, graphClient as any);
+
+      const tool = server.tools.get('test-tool');
+      expect(tool).toBeDefined();
+      await tool!.handler({ search: '"displayName:Ali"' });
+
+      const [url, options] = graphClient.graphRequest.mock.calls[0];
+      expect(url).toContain('$search=%22displayName%3AAli%22');
+      expect(options.headers).toMatchObject({ ConsistencyLevel: 'eventual' });
+    });
+
+    it('preserves caller-provided ConsistencyLevel header', async () => {
+      const endpoint = makeEndpoint({
+        path: '/users',
+        parameters: [
+          ...makeEndpoint().parameters,
+          { name: 'ConsistencyLevel', type: 'Header', schema: z.string().optional() },
+        ],
+      });
+      const config = makeConfig({ pathPattern: '/users', scopes: ['User.Read.All'] });
+      mockEndpoints.push(endpoint);
+      mockEndpointsJson = [config];
+
+      const graphClient = createMockGraphClient();
+      const server = createMockServer();
+      const { registerGraphTools } = await loadModule();
+      registerGraphTools(server as any, graphClient as any);
+
+      const tool = server.tools.get('test-tool');
+      expect(tool).toBeDefined();
+      await tool!.handler({ search: '"displayName:Ali"', ConsistencyLevel: 'session' });
+
+      const [, options] = graphClient.graphRequest.mock.calls[0];
+      expect(options.headers).toMatchObject({ ConsistencyLevel: 'session' });
+    });
+
+    it('does not set ConsistencyLevel for mail $search endpoints without the header parameter', async () => {
+      const endpoint = makeEndpoint();
+      const config = makeConfig();
+      mockEndpoints.push(endpoint);
+      mockEndpointsJson = [config];
+
+      const graphClient = createMockGraphClient();
+      const server = createMockServer();
+      const { registerGraphTools } = await loadModule();
+      registerGraphTools(server as any, graphClient as any);
+
+      const tool = server.tools.get('test-tool');
+      expect(tool).toBeDefined();
+      await tool!.handler({ search: '"from:ali@example.com"' });
+
+      const [url, options] = graphClient.graphRequest.mock.calls[0];
+      expect(url).toContain('$search=%22from%3Aali%40example.com%22');
+      expect(options.headers).not.toHaveProperty('ConsistencyLevel');
     });
   });
 

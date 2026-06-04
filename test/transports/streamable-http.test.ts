@@ -212,4 +212,51 @@ describe('Streamable HTTP transport (TRANS-01)', () => {
     expect(secondTenantArg.id).toBe(tenant2);
     expect(firstTenantArg).not.toBe(secondTenantArg);
   });
+
+  it('handles repeated stateless POSTs without ServerResponse MaxListeners warnings', async () => {
+    const warnings: Error[] = [];
+    const onWarning = (warning: Error): void => {
+      if (
+        warning.name === 'MaxListenersExceededWarning' &&
+        warning.message.includes('ServerResponse') &&
+        warning.message.includes('finish')
+      ) {
+        warnings.push(warning);
+      }
+    };
+    process.on('warning', onWarning);
+
+    try {
+      const responses = await Promise.all(
+        Array.from({ length: 25 }, async (_, index) => {
+          const res = await fetch(`${baseUrl}/t/${FAKE_TENANT.id}/mcp`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json, text/event-stream',
+            },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              method: 'initialize',
+              id: index + 1,
+              params: {
+                protocolVersion: '2024-11-05',
+                capabilities: {},
+                clientInfo: { name: 'listener-test-client', version: '1.0.0' },
+              },
+            }),
+          });
+          await res.text();
+          return res.status;
+        })
+      );
+
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(responses).toEqual(Array.from({ length: 25 }, () => 200));
+      expect(warnings).toEqual([]);
+    } finally {
+      process.off('warning', onWarning);
+    }
+  });
 });

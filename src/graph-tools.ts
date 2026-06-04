@@ -320,6 +320,8 @@ function summarizeSerializedBody(
 }
 
 const TRANSCRIPT_VTT_ACCEPT = 'text/vtt';
+const CONSISTENCY_LEVEL_HEADER = 'ConsistencyLevel';
+const CONSISTENCY_LEVEL_EVENTUAL = 'eventual';
 
 function normalizedToolAlias(alias: string): string {
   return alias.replace(/^__beta__/, '').toLowerCase();
@@ -372,6 +374,44 @@ function preserveRawTranscriptText(result: TextToolResult): TextToolResult {
       rawTextResponse: true,
     },
   };
+}
+
+function supportsConsistencyLevelHeader(
+  tool: Pick<(typeof api.endpoints)[0], 'parameters'>
+): boolean {
+  return (tool.parameters ?? []).some(
+    (param) =>
+      param.type === 'Header' && param.name.toLowerCase() === CONSISTENCY_LEVEL_HEADER.toLowerCase()
+  );
+}
+
+function hasHeaderCaseInsensitive(headers: Record<string, string>, name: string): boolean {
+  return Object.keys(headers).some((key) => key.toLowerCase() === name.toLowerCase());
+}
+
+function isTruthyGraphBoolean(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'true' || normalized === '1';
+}
+
+function usesAdvancedDirectoryQuery(queryParams: Record<string, string>): boolean {
+  return (
+    (queryParams['$search']?.trim().length ?? 0) > 0 ||
+    isTruthyGraphBoolean(queryParams['$count']) ||
+    isTruthyGraphBoolean(queryParams.count)
+  );
+}
+
+function applyAdvancedDirectoryQueryHeaders(
+  tool: Pick<(typeof api.endpoints)[0], 'parameters'>,
+  queryParams: Record<string, string>,
+  headers: Record<string, string>
+): void {
+  if (!supportsConsistencyLevelHeader(tool)) return;
+  if (!usesAdvancedDirectoryQuery(queryParams)) return;
+  if (hasHeaderCaseInsensitive(headers, CONSISTENCY_LEVEL_HEADER)) return;
+  headers[CONSISTENCY_LEVEL_HEADER] = CONSISTENCY_LEVEL_EVENTUAL;
 }
 
 function transcriptTextFromResult(result: CallToolResult): string | undefined {
@@ -846,6 +886,7 @@ async function executeGraphToolInner(
     }
 
     clampTopQueryParam(queryParams);
+    applyAdvancedDirectoryQueryHeaders(tool, queryParams, headers);
 
     const preferValues: string[] = [];
 
