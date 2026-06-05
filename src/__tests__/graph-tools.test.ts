@@ -528,7 +528,7 @@ describe('graph-tools', () => {
       );
 
       await vi.waitFor(() => expect(graphClient.graphRequest).toHaveBeenCalledTimes(1));
-      expect(capturedSignal).toBeUndefined();
+      expect(capturedSignal?.aborted).toBe(false);
       expect(cancelOperation(operationKey)).toBe(true);
 
       const result = await pending;

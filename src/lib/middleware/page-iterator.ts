@@ -236,56 +236,67 @@ export async function fetchAllPages(
   let cancelled = false;
   let firstPageExtras: Record<string, unknown> = {};
 
-  for await (const { json, pageIndex } of pageIterator(initialPath, options, client, {
-    maxPages,
-    seedFirstPage: opts.seedFirstPage,
-    operationKey: opts.operationKey,
-    signal: opts.signal,
-  })) {
-    if (opts.signal?.aborted || (opts.operationKey && isOperationCancelled(opts.operationKey))) {
-      cancelled = true;
-      break;
-    }
-    if (pageIndex === 0) {
-      // Capture non-value fields from the first page (e.g., @odata.count,
-      // @odata.context) so the envelope returned to callers preserves them.
-      const { value: _value, '@odata.nextLink': _nl, ...rest } = json;
-      void _value;
-      void _nl;
-      firstPageExtras = rest;
-    }
-
-    if (pageIndex >= maxPages) {
-      // This is the (maxPages + 1)-th page we pulled solely to detect
-      // truncation. We do NOT append its items — the caller asked for
-      // exactly maxPages of data.
-      const nextLink = json['@odata.nextLink'];
-      lastNextLink = typeof nextLink === 'string' ? nextLink : undefined;
-      truncated = true;
-      break;
-    }
-
-    if (Array.isArray(json.value)) {
-      allItems.push(...json.value);
-    }
-    const nextLink = json['@odata.nextLink'];
-    lastNextLink = typeof nextLink === 'string' ? nextLink : undefined;
-
-    if (opts.signal?.aborted || (opts.operationKey && isOperationCancelled(opts.operationKey))) {
-      cancelled = true;
-      break;
-    }
-
-    if (opts.progressToken !== undefined) {
-      await emitProgress(opts.sendNotification, opts.capabilityProfile, {
-        progressToken: opts.progressToken,
-        progress: pageIndex + 1,
-        message: `Fetched ${pageIndex + 1} page${pageIndex === 0 ? '' : 's'}`,
-      });
+  try {
+    for await (const { json, pageIndex } of pageIterator(initialPath, options, client, {
+      maxPages,
+      seedFirstPage: opts.seedFirstPage,
+      operationKey: opts.operationKey,
+      signal: opts.signal,
+    })) {
       if (opts.signal?.aborted || (opts.operationKey && isOperationCancelled(opts.operationKey))) {
         cancelled = true;
         break;
       }
+      if (pageIndex === 0) {
+        // Capture non-value fields from the first page (e.g., @odata.count,
+        // @odata.context) so the envelope returned to callers preserves them.
+        const { value: _value, '@odata.nextLink': _nl, ...rest } = json;
+        void _value;
+        void _nl;
+        firstPageExtras = rest;
+      }
+
+      if (pageIndex >= maxPages) {
+        // This is the (maxPages + 1)-th page we pulled solely to detect
+        // truncation. We do NOT append its items — the caller asked for
+        // exactly maxPages of data.
+        const nextLink = json['@odata.nextLink'];
+        lastNextLink = typeof nextLink === 'string' ? nextLink : undefined;
+        truncated = true;
+        break;
+      }
+
+      if (Array.isArray(json.value)) {
+        allItems.push(...json.value);
+      }
+      const nextLink = json['@odata.nextLink'];
+      lastNextLink = typeof nextLink === 'string' ? nextLink : undefined;
+
+      if (opts.signal?.aborted || (opts.operationKey && isOperationCancelled(opts.operationKey))) {
+        cancelled = true;
+        break;
+      }
+
+      if (opts.progressToken !== undefined) {
+        await emitProgress(opts.sendNotification, opts.capabilityProfile, {
+          progressToken: opts.progressToken,
+          progress: pageIndex + 1,
+          message: `Fetched ${pageIndex + 1} page${pageIndex === 0 ? '' : 's'}`,
+        });
+        if (
+          opts.signal?.aborted ||
+          (opts.operationKey && isOperationCancelled(opts.operationKey))
+        ) {
+          cancelled = true;
+          break;
+        }
+      }
+    }
+  } catch (error) {
+    if (isCancelled(opts)) {
+      cancelled = true;
+    } else {
+      throw error;
     }
   }
 

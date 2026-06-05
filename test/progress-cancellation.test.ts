@@ -163,6 +163,59 @@ describe('Phase 8 progress and cancellation for paginated Graph tools', () => {
     expect(payload.partial.value).toHaveLength(1);
   });
 
+  it('aborts the active paginated Graph request signal when cancelOperation is called', async () => {
+    const { registerGraphTools } = await import('../src/graph-tools.js');
+    const server = new McpServer({ name: 'test', version: '0.0.0' });
+    let secondPageSignal: AbortSignal | undefined;
+    let resolveSecondPageStarted: (() => void) | undefined;
+    const secondPageStarted = new Promise<void>((resolve) => {
+      resolveSecondPageStarted = resolve;
+    });
+    const graphRequest = vi
+      .fn()
+      .mockResolvedValueOnce(page(['a'], 'https://graph.microsoft.com/v1.0/me/messages?$skip=1'))
+      .mockImplementationOnce(
+        async (_path: string, options: { signal?: AbortSignal }) =>
+          new Promise<ReturnType<typeof page>>((resolve, reject) => {
+            secondPageSignal = options.signal;
+            resolveSecondPageStarted?.();
+            const timer = setTimeout(() => resolve(page(['b'])), 10_000);
+            options.signal?.addEventListener(
+              'abort',
+              () => {
+                clearTimeout(timer);
+                reject(new DOMException('The operation was aborted.', 'AbortError'));
+              },
+              { once: true }
+            );
+          })
+      );
+
+    registerGraphTools(server, { graphRequest } as never, false, undefined, true);
+
+    const resultPromise = withTenant('tenant-a', () => callList(server, { fetchAllPages: true }));
+    await secondPageStarted;
+    expect(secondPageSignal?.aborted).toBe(false);
+
+    cancelOperation({
+      tenantId: 'tenant-a',
+      requestId: 'request-1',
+      progressToken: 'progress-1',
+    });
+
+    const result = await resultPromise;
+    const payload = JSON.parse(result.content[0]!.text) as {
+      status: string;
+      resourceUri: string;
+      partial: { value: unknown[] };
+    };
+
+    expect(secondPageSignal?.aborted).toBe(true);
+    expect(payload.status).toBe('cancelled');
+    expect(payload.resourceUri).toBe('m365://tenant/tenant-a/partial/request-1/progress-1.json');
+    expect(payload.partial.value).toHaveLength(1);
+  });
+
   it('stops fetchAllPages before the next page request when cancelled after progress', async () => {
     resetOperationsForTesting();
     const operationKey = {

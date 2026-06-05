@@ -121,25 +121,32 @@ describe('dashboard fallback behavior', () => {
     expect(result.structuredContent?.warnings.join('\n')).toContain('Required scopes unavailable');
   });
 
-  it('treats generated mail aliases as satisfying legacy dashboard prerequisites', async () => {
-    const result = (await callTool(
-      dashboardServer({ enabledTools: new Set(['me.ListMessages']) }),
-      'inbox-triage-view'
-    )) as {
-      structuredContent?: {
-        data?: { unavailableTools?: string[] };
-        warnings: string[];
+  it.each([
+    'me.ListMessages',
+    'me.messages.ListMessages',
+    'me.mailFolders.childFolders.ListMessages',
+  ])(
+    'treats generated mail alias %s as satisfying legacy dashboard prerequisites',
+    async (alias) => {
+      const result = (await callTool(
+        dashboardServer({ enabledTools: new Set([alias]) }),
+        'inbox-triage-view'
+      )) as {
+        structuredContent?: {
+          data?: { unavailableTools?: string[] };
+          warnings: string[];
+        };
+        isError?: boolean;
       };
-      isError?: boolean;
-    };
 
-    expect(result.isError).toBeUndefined();
-    expect(result.structuredContent?.data?.unavailableTools).toEqual([]);
-    expect(result.structuredContent?.warnings.join('\n')).not.toContain('list-mail-messages');
-    expect(result.structuredContent?.warnings.join('\n')).not.toContain(
-      'Required enabled tools unavailable'
-    );
-  });
+      expect(result.isError).toBeUndefined();
+      expect(result.structuredContent?.data?.unavailableTools).toEqual([]);
+      expect(result.structuredContent?.warnings.join('\n')).not.toContain('list-mail-messages');
+      expect(result.structuredContent?.warnings.join('\n')).not.toContain(
+        'Required enabled tools unavailable'
+      );
+    }
+  );
 
   it('treats generated dashboard aliases as satisfying explicit discovery allowlists', async () => {
     const result = (await callTool(

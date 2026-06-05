@@ -214,7 +214,14 @@ function tenantResourceUri(tenantId: string, path: string): string {
 }
 
 const DASHBOARD_ALIAS_EQUIVALENTS = Object.freeze({
-  'list-mail-messages': ['me.ListMessages', '__beta__me.ListMessages'],
+  'list-mail-messages': [
+    'me.ListMessages',
+    '__beta__me.ListMessages',
+    'me.messages.ListMessages',
+    '__beta__me.messages.ListMessages',
+    'me.mailFolders.childFolders.ListMessages',
+    '__beta__me.mailFolders.childFolders.ListMessages',
+  ],
   'get-calendar-view': ['me.ListCalendarView', '__beta__me.ListCalendarView'],
   'list-channel-messages': ['teams.channels.ListMessages', '__beta__teams.channels.ListMessages'],
   'search-query': ['search.query', '__beta__search.query'],

@@ -110,6 +110,33 @@ const endpointsMap: Map<string, EndpointConfig> = new Map(
   endpointsData.map((e) => [e.toolName, e])
 );
 
+function composeAbortSignals(...signals: Array<AbortSignal | undefined>): {
+  signal?: AbortSignal;
+  cleanup: () => void;
+} {
+  const activeSignals = signals.filter((signal): signal is AbortSignal => signal !== undefined);
+  if (activeSignals.length === 0) return { cleanup: () => undefined };
+  if (activeSignals.length === 1) return { signal: activeSignals[0], cleanup: () => undefined };
+
+  const controller = new AbortController();
+  const abort = (): void => controller.abort();
+  const cleanups = activeSignals.map((signal) => {
+    if (signal.aborted) {
+      controller.abort();
+      return () => undefined;
+    }
+    signal.addEventListener('abort', abort, { once: true });
+    return () => signal.removeEventListener('abort', abort);
+  });
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      for (const cleanup of cleanups) cleanup();
+    },
+  };
+}
+
 // `maxTopFromEnv` + `clampTopQueryParam` live in `./lib/graph-tools-pure.ts`
 // so other modules can consume them without transitively loading the 45 MB
 // generated client catalog. `clampTopQueryParam` is imported above and used
@@ -981,12 +1008,16 @@ async function executeGraphToolInner(
         ? (params._sendNotification as ProgressNotificationSender)
         : undefined;
     const operationWasRegistered = shouldFetchAllPages && token !== undefined;
-    if (operationWasRegistered) {
-      registerOperation(operationKey);
-    }
+    const operationController = operationWasRegistered
+      ? registerOperation(operationKey)
+      : undefined;
     const requestSignal = params._signal instanceof AbortSignal ? params._signal : undefined;
-    if (requestSignal) {
-      options.signal = requestSignal;
+    const { signal: graphRequestSignal, cleanup: cleanupGraphRequestSignal } = composeAbortSignals(
+      requestSignal,
+      operationController?.signal
+    );
+    if (graphRequestSignal) {
+      options.signal = graphRequestSignal;
     }
 
     if (options.method !== 'GET' && body) {
@@ -1044,7 +1075,29 @@ async function executeGraphToolInner(
 
     let response: Awaited<ReturnType<GraphClient['graphRequest']>> | undefined;
     try {
-      response = await graphClient.graphRequest(path, options);
+      try {
+        response = await graphClient.graphRequest(path, options);
+      } catch (error) {
+        if (operationWasRegistered && operationController?.signal.aborted) {
+          const partialResourceUri = `m365://tenant/${encodeURIComponent(operationKey.tenantId!)}/partial/${encodeURIComponent(operationKey.requestId!)}/${encodeURIComponent(operationKey.progressToken!)}.json`;
+          response = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  status: 'cancelled',
+                  operation: tool.alias,
+                  resourceUri: partialResourceUri,
+                  partial: { value: [] },
+                }),
+              },
+            ],
+            _meta: { cancelled: true, partialResourceUri },
+          };
+        } else {
+          throw error;
+        }
+      }
       if (isTranscriptContent) {
         response = preserveRawTranscriptText(response);
       }
@@ -1070,7 +1123,7 @@ async function executeGraphToolInner(
           sendNotification,
           capabilityProfile: ctx?.capabilityProfile,
           operationKey,
-          signal: requestSignal,
+          signal: graphRequestSignal,
         });
         firstPage.value = combined.value;
         if (combined._cancelled) {
@@ -1104,6 +1157,7 @@ async function executeGraphToolInner(
         );
       }
     } finally {
+      cleanupGraphRequestSignal();
       if (operationWasRegistered) {
         unregisterOperation(operationKey);
       }
