@@ -370,7 +370,10 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
       }),
     });
     expect(refreshRes.status).toBe(200);
-    const refreshBody = (await refreshRes.json()) as { access_token: string; refresh_token: string };
+    const refreshBody = (await refreshRes.json()) as {
+      access_token: string;
+      refresh_token: string;
+    };
     expect(refreshBody.access_token).toBe('access-token-rotated');
     expect(refreshBody.refresh_token).toEqual(expect.stringMatching(/^mcp_rt_/));
     expect(refreshBody.refresh_token).not.toBe(codeBody.refresh_token);
