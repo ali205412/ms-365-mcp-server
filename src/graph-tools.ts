@@ -55,6 +55,7 @@ export {
 } from './lib/graph-tools-pure.js';
 import { describeToolSchema } from './lib/tool-schema-describer.js';
 import { registerBulkActionTools } from './lib/bulk-actions/register.js';
+import { sanitizeErrorCode } from './lib/bulk-actions/sanitize.js';
 
 /**
  * Plan 05-06 (COVRG-05, D-20, T-05-12) — module-level per-tenant BM25 cache.
@@ -801,13 +802,28 @@ async function executeGraphToolInner(
       try {
         accountAccessToken = await authManager.getTokenForAccount(accountParam);
       } catch (err) {
+        const errorCode = 'account_token_resolution_failed';
+        const sourceErrorCode = sanitizeErrorCode(
+          typeof err === 'object' && err !== null && 'code' in err
+            ? (err as { code?: unknown }).code
+            : undefined,
+          'unknown'
+        );
+        logger.error(
+          { alias: tool.alias, errorCode, sourceErrorCode },
+          'Account token resolution failed'
+        );
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({ error: (err as Error).message }),
+              text: JSON.stringify({
+                error: 'account_token_resolution_failed',
+                code: errorCode,
+              }),
             },
           ],
+          _meta: { errorCode },
           isError: true,
         };
       }
@@ -1203,7 +1219,7 @@ async function executeGraphToolInner(
           logger.info(`Response contains ${jsonResponse.value.length} items`);
         }
         if (jsonResponse['@odata.nextLink']) {
-          logger.info(`Response has pagination nextLink: ${jsonResponse['@odata.nextLink']}`);
+          logger.info('Response has pagination nextLink: true');
         }
       } catch {
         // Non-JSON response

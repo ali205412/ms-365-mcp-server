@@ -195,6 +195,84 @@ describe('graph-tools', () => {
     expect(joined).toContain('"bytes"');
   });
 
+  it('does not log raw @odata.nextLink values', async () => {
+    const endpoint = makeEndpoint();
+    const config = makeConfig();
+    mockEndpoints.push(endpoint);
+    mockEndpointsJson = [config];
+
+    const graphClient = createMockGraphClient([
+      {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              value: [],
+              '@odata.nextLink':
+                'https://graph.microsoft.com/v1.0/me/messages?$skiptoken=raw-token-123',
+            }),
+          },
+        ],
+      },
+    ]);
+    const server = createMockServer();
+    const { registerGraphTools } = await loadModule();
+    registerGraphTools(server as any, graphClient as any);
+
+    const tool = server.tools.get('test-tool');
+    expect(tool).toBeDefined();
+    await tool!.handler({});
+
+    const joined = loggerMock.info.mock.calls
+      .flat()
+      .map((arg) => (typeof arg === 'string' ? arg : JSON.stringify(arg)))
+      .join('\n');
+    expect(joined).toContain('Response has pagination nextLink: true');
+    expect(joined).not.toContain('raw-token-123');
+    expect(joined).not.toContain('graph.microsoft.com/v1.0/me/messages');
+  });
+
+  it('does not return or log raw account token resolution errors', async () => {
+    const endpoint = makeEndpoint();
+    const config = makeConfig();
+    mockEndpoints.push(endpoint);
+    mockEndpointsJson = [config];
+
+    const graphClient = createMockGraphClient();
+    const authManager = {
+      isOAuthModeEnabled: vi.fn(() => false),
+      getTokenForAccount: vi.fn(async () => {
+        throw new Error('raw-token-123 private@example.com');
+      }),
+    };
+    const server = createMockServer();
+    const { registerGraphTools } = await loadModule();
+    registerGraphTools(
+      server as any,
+      graphClient as any,
+      false,
+      undefined,
+      false,
+      authManager as any
+    );
+
+    const tool = server.tools.get('test-tool');
+    expect(tool).toBeDefined();
+    const result = await tool!.handler({ account: 'private@example.com' });
+
+    const serializedResult = JSON.stringify(result);
+    expect(result.isError).toBe(true);
+    expect(serializedResult).toContain('account_token_resolution_failed');
+    expect(serializedResult).not.toContain('raw-token-123');
+    expect(serializedResult).not.toContain('private@example.com');
+    expect(graphClient.graphRequest).not.toHaveBeenCalled();
+
+    const serializedLogs = JSON.stringify(loggerMock.error.mock.calls);
+    expect(serializedLogs).toContain('account_token_resolution_failed');
+    expect(serializedLogs).not.toContain('raw-token-123');
+    expect(serializedLogs).not.toContain('private@example.com');
+  });
+
   // ---- 1. $count advanced query mode ----
   describe('$count advanced query mode', () => {
     it('sets ConsistencyLevel: eventual for directory $count=true without generated header metadata', async () => {
