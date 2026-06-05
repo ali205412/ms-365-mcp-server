@@ -248,6 +248,7 @@ describe('plan 03-08 — multi-tenant isolation (SC#2)', () => {
           redirect_uri: 'http://localhost:3200/callback-b',
           code_challenge: challengeB,
           state: 'b',
+          scope: 'Mail.Read',
         }),
       { redirect: 'manual' }
     );
@@ -306,6 +307,7 @@ describe('plan 03-08 — multi-tenant isolation (SC#2)', () => {
           redirect_uri: 'http://localhost:3200/callback-b',
           code_challenge: challengeB,
           state: 'b',
+          scope: 'Mail.Read',
         }),
       { redirect: 'manual' }
     );
@@ -360,6 +362,7 @@ describe('plan 03-08 — multi-tenant isolation (SC#2)', () => {
       redirect_uri: 'http://localhost:3200/callback-b',
       code_challenge: challenge,
       state: 'b',
+      scope: 'Mail.Read',
     });
 
     const r1 = await fetch(`${baseUrl}/t/${TENANT_A_ID}/authorize?${paramsA}`, {
@@ -383,6 +386,7 @@ describe('plan 03-08 — multi-tenant isolation (SC#2)', () => {
           redirect_uri: 'http://localhost:3200/callback-b',
           code_challenge: crypto.randomBytes(32).toString('base64url'),
           state: 'b2',
+          scope: 'Mail.Read',
         }),
       { redirect: 'manual' }
     );

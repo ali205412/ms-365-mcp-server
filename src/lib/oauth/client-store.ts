@@ -77,7 +77,9 @@ export async function createOAuthClientRegistration(
 ): Promise<OAuthClientRegistration> {
   const clientId = newClientId();
   const redirectUris = [...new Set(input.redirectUris)];
-  const grantTypes = input.grantTypes?.length ? [...new Set(input.grantTypes)] : [...DEFAULT_GRANT_TYPES];
+  const grantTypes = input.grantTypes?.length
+    ? [...new Set(input.grantTypes)]
+    : [...DEFAULT_GRANT_TYPES];
   const responseTypes = input.responseTypes?.length
     ? [...new Set(input.responseTypes)]
     : [...DEFAULT_RESPONSE_TYPES];
