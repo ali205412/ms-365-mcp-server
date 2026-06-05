@@ -53,6 +53,7 @@ async function postJson(url: string, payload: unknown): Promise<{ status: number
 async function startMiniServer(opts: {
   mode: 'prod' | 'dev';
   publicUrlHost: string | null;
+  supportedGrantTypes?: readonly string[];
 }): Promise<{ url: string; close: () => Promise<void> }> {
   // Dynamic import so module loading is lazy and picks up mocks correctly.
   const { createRegisterHandler } = await import('../src/lib/oauth/register-handler.js');
@@ -60,10 +61,13 @@ async function startMiniServer(opts: {
   app.use(express.json());
   app.post(
     '/register',
-    createRegisterHandler({
-      mode: opts.mode,
-      publicUrlHost: opts.publicUrlHost,
-    })
+    createRegisterHandler(
+      {
+        mode: opts.mode,
+        publicUrlHost: opts.publicUrlHost,
+      },
+      opts.supportedGrantTypes ? { supportedGrantTypes: opts.supportedGrantTypes } : {}
+    )
   );
 
   return await new Promise((resolve) => {
@@ -164,6 +168,48 @@ describe('POST /register — redirect_uri allowlist (AUTH-06, T-01-06)', () => {
     server = await startMiniServer({ mode: 'prod', publicUrlHost: null });
     const res = await postJson(`${server.url}/register`, { redirect_uris: [] });
     expect(res.status).toBe(201);
+  });
+
+  it('defaults and validates grant types against the mount policy', async () => {
+    server = await startMiniServer({
+      mode: 'prod',
+      publicUrlHost: null,
+      supportedGrantTypes: ['authorization_code'],
+    });
+
+    const defaultRes = await postJson(`${server.url}/register`, {
+      redirect_uris: ['http://localhost:3000/cb'],
+    });
+    expect(defaultRes.status).toBe(201);
+    expect((defaultRes.body as { grant_types: string[] }).grant_types).toEqual([
+      'authorization_code',
+    ]);
+
+    const refreshRes = await postJson(`${server.url}/register`, {
+      redirect_uris: ['http://localhost:3000/cb'],
+      grant_types: ['authorization_code', 'refresh_token'],
+    });
+    expect(refreshRes.status).toBe(400);
+    expect(refreshRes.body).toMatchObject({ error: 'invalid_client_metadata' });
+  });
+
+  it('accepts refresh grants when the mount policy enables them', async () => {
+    server = await startMiniServer({
+      mode: 'prod',
+      publicUrlHost: null,
+      supportedGrantTypes: ['authorization_code', 'refresh_token'],
+    });
+
+    const res = await postJson(`${server.url}/register`, {
+      redirect_uris: ['http://localhost:3000/cb'],
+      grant_types: ['authorization_code', 'refresh_token'],
+    });
+
+    expect(res.status).toBe(201);
+    expect((res.body as { grant_types: string[] }).grant_types).toEqual([
+      'authorization_code',
+      'refresh_token',
+    ]);
   });
 
   it('rejects unsupported token endpoint authentication methods', async () => {

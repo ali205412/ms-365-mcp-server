@@ -5,15 +5,17 @@ import logger from '../../logger.js';
 import { getCloudEndpoints } from '../../cloud-config.js';
 import { getRequestTokens } from '../../request-context.js';
 import { isSameAuthorizeRequest } from './authorize-request-identity.js';
-import { validateRedirectUri } from '../redirect-uri.js';
+import { validateRedirectUri, type RedirectUriPolicy } from '../redirect-uri.js';
 import { tenantScopeSatisfies } from '../scope-satisfaction.js';
 import {
   getActiveOAuthClientRegistration,
+  hashOpaqueValue,
   hasExactRedirectUri,
   touchOAuthClientRegistration,
 } from './client-store.js';
 import {
   delegatedAccessTokenTtlSeconds,
+  forgetDelegatedAccessToken,
   rememberDelegatedAccessToken,
 } from '../delegated-access-tokens.js';
 import { SessionStore } from '../session-store.js';
@@ -44,6 +46,25 @@ export interface TenantTokenHandlerConfig {
 
 function pkceChallengeForVerifier(verifier: string): string {
   return crypto.createHash('sha256').update(verifier).digest('base64url');
+}
+
+function tenantDefaultScopes(tenant: Pick<TenantRow, 'allowed_scopes'>): string[] {
+  return tenant.allowed_scopes.length ? [...tenant.allowed_scopes] : ['User.Read'];
+}
+
+function scopesAllowedByTenant(
+  tenant: Pick<TenantRow, 'allowed_scopes'>,
+  scopes: readonly string[]
+): boolean {
+  const allowedScopes = tenantDefaultScopes(tenant);
+  return scopes.every((scope) => tenantScopeSatisfies(allowedScopes, scope));
+}
+
+function redirectPolicyForStaticClient(args: { basePolicy: RedirectUriPolicy }): RedirectUriPolicy {
+  if (args.basePolicy.mode !== 'prod') {
+    return { mode: 'dev', publicUrlHost: null };
+  }
+  return args.basePolicy;
 }
 
 export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
@@ -86,15 +107,16 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
     const allowedByStaticClient =
       clientId === tenant.client_id && tenant.redirect_uri_allowlist.includes(redirectUri);
     {
+      const baseRedirectPolicy: RedirectUriPolicy = {
+        mode: process.env.NODE_ENV === 'production' ? 'prod' : 'dev',
+        publicUrlHost: publicUrlHost ?? null,
+        extraAllowedHosts,
+      };
       const schemeCheck = validateRedirectUri(
         redirectUri,
         allowedByStaticClient
-          ? { mode: 'dev', publicUrlHost: null }
-          : {
-              mode: process.env.NODE_ENV === 'production' ? 'prod' : 'dev',
-              publicUrlHost: publicUrlHost ?? null,
-              extraAllowedHosts,
-            }
+          ? redirectPolicyForStaticClient({ basePolicy: baseRedirectPolicy })
+          : baseRedirectPolicy
       );
       if (!schemeCheck.ok) {
         emitAudit(
@@ -146,8 +168,8 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
       .split(/\s+/)
       .map((scope) => scope.trim())
       .filter(Boolean);
-    const allowedScopes = tenant.allowed_scopes.length ? tenant.allowed_scopes : ['User.Read'];
-    const effectiveScopes = requestedScopes.length ? requestedScopes : ['User.Read'];
+    const allowedScopes = tenantDefaultScopes(tenant);
+    const effectiveScopes = requestedScopes.length ? requestedScopes : allowedScopes;
     const disallowedScopes = effectiveScopes.filter(
       (scope) => !tenantScopeSatisfies(allowedScopes, scope)
     );
@@ -377,7 +399,13 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
     const grantType = String(body?.grant_type ?? 'authorization_code');
     if (grantType === 'refresh_token') {
       const submittedRefreshToken = String(body?.refresh_token ?? '');
+      const refreshAuditMeta = (error?: string, extra: Record<string, unknown> = {}) => ({
+        grant_type: 'refresh_token',
+        ...(error ? { error } : {}),
+        ...extra,
+      });
       if (!submittedRefreshToken) {
+        emitTokenAudit(tenant.id, 'failure', refreshAuditMeta('invalid_request'), req);
         res
           .status(400)
           .json({ error: 'invalid_request', error_description: 'refresh_token required' });
@@ -393,17 +421,36 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
           refreshToken: submittedRefreshToken,
         });
         if (!session) {
+          emitTokenAudit(tenant.id, 'failure', refreshAuditMeta('invalid_grant'), req);
           res.status(400).json({ error: 'invalid_grant' });
           return;
         }
 
         const submittedClientId = String(body?.client_id ?? '');
+        const clientIdHash = submittedClientId
+          ? hashOpaqueValue(submittedClientId).slice(0, 16)
+          : undefined;
         if (!submittedClientId || submittedClientId !== session.record.clientId) {
+          emitTokenAudit(
+            tenant.id,
+            'failure',
+            refreshAuditMeta('invalid_grant', { reason: 'client_mismatch', clientIdHash }),
+            req
+          );
           res.status(400).json({ error: 'invalid_grant' });
           return;
         }
         if (submittedClientId !== tenant.client_id) {
           if (!pgPool) {
+            emitTokenAudit(
+              tenant.id,
+              'failure',
+              refreshAuditMeta('invalid_grant', {
+                reason: 'dynamic_store_unavailable',
+                clientIdHash,
+              }),
+              req
+            );
             res.status(400).json({ error: 'invalid_grant' });
             return;
           }
@@ -413,14 +460,37 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
             submittedClientId
           );
           if (!registration || !registration.grantTypes.includes('refresh_token')) {
+            emitTokenAudit(
+              tenant.id,
+              'failure',
+              refreshAuditMeta('invalid_grant', { reason: 'grant_not_allowed', clientIdHash }),
+              req
+            );
             res.status(400).json({ error: 'invalid_grant' });
             return;
           }
         }
 
+        if (!scopesAllowedByTenant(tenant, session.record.scopes)) {
+          emitTokenAudit(
+            tenant.id,
+            'failure',
+            refreshAuditMeta('invalid_grant', { reason: 'scope_revoked', clientIdHash }),
+            req
+          );
+          res.status(400).json({ error: 'invalid_grant' });
+          return;
+        }
+
         const msal = await tenantPool.acquire(tenant);
         const fresh = await refreshDelegatedSession(msal, session.record);
         if (!fresh?.accessToken) {
+          emitTokenAudit(
+            tenant.id,
+            'failure',
+            refreshAuditMeta('invalid_grant', { reason: 'upstream_refresh_failed', clientIdHash }),
+            req
+          );
           res.status(400).json({ error: 'invalid_grant' });
           return;
         }
@@ -432,10 +502,35 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
           refreshToken: submittedRefreshToken,
         });
         if (consumed?.accessTokenHash !== session.accessTokenHash) {
+          emitTokenAudit(
+            tenant.id,
+            'failure',
+            refreshAuditMeta('invalid_grant', { reason: 'rotation_mismatch', clientIdHash }),
+            req
+          );
           res.status(400).json({ error: 'invalid_grant' });
           return;
         }
 
+        const oldGraphAccessToken = session.record.graphAccessToken;
+        if (!oldGraphAccessToken) {
+          emitTokenAudit(
+            tenant.id,
+            'failure',
+            refreshAuditMeta('invalid_grant', {
+              reason: 'missing_session_access_token',
+              clientIdHash,
+            }),
+            req
+          );
+          res.status(400).json({ error: 'invalid_grant' });
+          return;
+        }
+        await forgetDelegatedAccessToken({
+          redis,
+          tenantId: tenant.id,
+          accessToken: oldGraphAccessToken,
+        });
         const nextMsalCache = serializeMsalCache(msal) ?? session.record.msalCache;
         await sessionStore.put(tenant.id, fresh.accessToken, {
           ...session.record,
@@ -460,6 +555,12 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
           accessToken: fresh.accessToken,
           expiresOn: fresh.expiresOn,
         });
+        emitTokenAudit(
+          tenant.id,
+          'success',
+          refreshAuditMeta(undefined, { clientIdHash, scopes: session.record.scopes }),
+          req
+        );
         res.json({
           access_token: fresh.accessToken,
           token_type: 'Bearer',
@@ -468,6 +569,7 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
         });
       } catch (err) {
         logger.error({ err: (err as Error).message, tenantId: tenant.id }, '/token refresh failed');
+        emitTokenAudit(tenant.id, 'failure', refreshAuditMeta('temporarily_unavailable'), req);
         res.status(503).json({ error: 'temporarily_unavailable' });
       }
       return;
@@ -531,6 +633,16 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
       return;
     }
 
+    let issueGatewayRefreshToken = submittedClientId === tenant.client_id;
+    if (!issueGatewayRefreshToken && pgPool) {
+      const registration = await getActiveOAuthClientRegistration(
+        pgPool,
+        tenant.id,
+        submittedClientId
+      );
+      issueGatewayRefreshToken = Boolean(registration?.grantTypes.includes('refresh_token'));
+    }
+
     try {
       const msal = await tenantPool.acquire(tenant);
       if (!isDelegatedMsalClient(msal)) {
@@ -554,7 +666,7 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
       }
 
       const refreshTokenFromAuthority = (result as { refreshToken?: string }).refreshToken;
-      const gatewayRefreshToken = mintGatewayRefreshToken();
+      const gatewayRefreshToken = issueGatewayRefreshToken ? mintGatewayRefreshToken() : undefined;
       try {
         const dek = tenantPool.getDekForTenant(tenant.id);
         const sessionStore = new SessionStore(redis, dek);
@@ -570,12 +682,14 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
           ownerSubject: result.account?.homeAccountId ?? result.account?.username,
           createdAt: Date.now(),
         });
-        await storeGatewayRefreshToken({
-          redis,
-          tenantId: tenant.id,
-          refreshToken: gatewayRefreshToken,
-          accessToken: result.accessToken,
-        });
+        if (gatewayRefreshToken) {
+          await storeGatewayRefreshToken({
+            redis,
+            tenantId: tenant.id,
+            refreshToken: gatewayRefreshToken,
+            accessToken: result.accessToken,
+          });
+        }
       } catch (sessionErr) {
         logger.error(
           { tenantId: tenant.id, err: (sessionErr as Error).message },
@@ -611,7 +725,7 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
         access_token: result.accessToken,
         token_type: 'Bearer',
         expires_in: expiresIn,
-        refresh_token: gatewayRefreshToken,
+        ...(gatewayRefreshToken ? { refresh_token: gatewayRefreshToken } : {}),
       });
     } catch (err) {
       logger.error({ err: (err as Error).message, tenantId: tenant.id }, '/token exchange failed');

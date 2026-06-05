@@ -109,7 +109,7 @@ export function createMetricsServer(
   });
 
   const server = createServer(app);
-  const host = config.host ?? '127.0.0.1';
+  const host = normalizeMetricsHost(config.host);
   if (isPublicBind(host) && !isBearerGated(config.bearerToken)) {
     throw new Error('MS365_MCP_METRICS_BEARER is required when metrics bind publicly');
   }
@@ -127,6 +127,11 @@ export function createMetricsServer(
   });
 
   return server;
+}
+
+function normalizeMetricsHost(host: string | undefined): string {
+  const trimmed = host?.trim();
+  return trimmed ? trimmed : '127.0.0.1';
 }
 
 function isBearerGated(token: string | null | undefined): boolean {

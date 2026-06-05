@@ -1151,11 +1151,19 @@ class MicrosoftGraphServer {
         app.post(
           '/register',
           legacyOauthRouteRateLimit,
-          createRegisterHandler({
-            mode: isProdMode ? 'prod' : 'dev',
-            publicUrlHost,
-            extraAllowedHosts: oauthRedirectHosts,
-          })
+          createRegisterHandler(
+            {
+              mode: isProdMode ? 'prod' : 'dev',
+              publicUrlHost,
+              extraAllowedHosts: oauthRedirectHosts,
+            },
+            {
+              supportedGrantTypes:
+                process.env.MS365_MCP_LEGACY_OAUTH_REFRESH === '1'
+                  ? ['authorization_code', 'refresh_token']
+                  : ['authorization_code'],
+            }
+          )
         );
       }
 

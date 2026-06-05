@@ -24,7 +24,10 @@ import crypto from 'node:crypto';
 import { MemoryRedisFacade } from '../../src/lib/redis-facade.js';
 import { RedisPkceStore } from '../../src/lib/pkce-store/redis-store.js';
 import { generateTenantDek } from '../../src/lib/crypto/dek.js';
-import { hasDelegatedAccessToken } from '../../src/lib/delegated-access-tokens.js';
+import {
+  forgetDelegatedAccessToken,
+  hasDelegatedAccessToken,
+} from '../../src/lib/delegated-access-tokens.js';
 import type { TenantRow } from '../../src/lib/tenant/tenant-row.js';
 
 vi.mock('../../src/logger.js', () => ({
@@ -230,6 +233,42 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     expect(location).toBeTruthy();
     const loc = new URL(location!);
     expect(loc.searchParams.get('scope')).toBe('Mail.Read');
+  });
+
+  it('defaults omitted authorize scope to the tenant allowed scopes', async () => {
+    harness = await startApp({ allowed_scopes: ['Mail.Read'] });
+
+    const clientVerifier = crypto.randomBytes(32).toString('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
+    const params = new URLSearchParams({
+      redirect_uri: 'http://localhost:3000/callback',
+      code_challenge: clientChallenge,
+      code_challenge_method: 'S256',
+      state: 'omitted-scope-test',
+      client_id: harness.tenant.client_id,
+    });
+
+    const res = await fetch(`${harness.url}/authorize?${params}`, { redirect: 'manual' });
+
+    expect(res.status).toBe(302);
+    const location = res.headers.get('location');
+    expect(location).toBeTruthy();
+    const loc = new URL(location!);
+    expect(loc.searchParams.get('scope')).toBe('Mail.Read');
+
+    const tokenRes = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: 'the-auth-code',
+        redirect_uri: 'http://localhost:3000/callback',
+        code_verifier: clientVerifier,
+      }),
+    });
+    expect(tokenRes.status).toBe(200);
+    expect(harness.mockMsalAcquireByCode).toHaveBeenCalledTimes(1);
+    expect(harness.mockMsalAcquireByCode.mock.calls[0]![0].scopes).toEqual(['Mail.Read']);
   });
 
   it('rejects requested scopes not permitted by the tenant', async () => {
@@ -594,6 +633,20 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     expect(refreshBody.expires_in).toBeGreaterThan(0);
     expect(refreshBody.refresh_token).toMatch(/^mcp_rt_/);
     expect(refreshBody.refresh_token).not.toBe(body.refresh_token);
+    await expect(
+      hasDelegatedAccessToken({
+        redis: harness.redis,
+        tenantId: harness.tenant.id,
+        accessToken: body.access_token,
+      })
+    ).resolves.toBe(false);
+    await expect(
+      hasDelegatedAccessToken({
+        redis: harness.redis,
+        tenantId: harness.tenant.id,
+        accessToken: refreshBody.access_token,
+      })
+    ).resolves.toBe(true);
     expect(harness.mockMsalAcquireSilent).toHaveBeenCalledTimes(1);
   });
 
@@ -646,6 +699,114 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
       }),
     });
     expect(goodRes.status).toBe(200);
+  });
+
+  it('rejects refresh before MSAL when stored scopes are no longer tenant-allowed', async () => {
+    harness = await startApp({ allowed_scopes: ['Mail.Read'] });
+    const clientVerifier = crypto.randomBytes(32).toString('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
+
+    await harness.pkceStore.put(harness.tenant.id, {
+      state: 'state',
+      clientCodeChallenge: clientChallenge,
+      clientCodeChallengeMethod: 'S256',
+      serverCodeVerifier: 'server-verifier-xyz',
+      clientId: harness.tenant.client_id,
+      redirectUri: 'http://localhost:3000/callback',
+      tenantId: harness.tenant.id,
+      scopes: ['Mail.Read'],
+      createdAt: Date.now(),
+    });
+
+    const codeRes = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: 'the-auth-code',
+        redirect_uri: 'http://localhost:3000/callback',
+        code_verifier: clientVerifier,
+      }),
+    });
+    const codeBody = (await codeRes.json()) as { refresh_token: string };
+    harness.tenant.allowed_scopes = ['User.Read'];
+
+    const refreshRes = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: codeBody.refresh_token,
+        client_id: harness.tenant.client_id,
+      }),
+    });
+
+    expect(refreshRes.status).toBe(400);
+    expect((await refreshRes.json()).error).toBe('invalid_grant');
+    expect(harness.mockMsalAcquireSilent).not.toHaveBeenCalled();
+  });
+
+  it('keeps refresh allowed when tenant scope hierarchy still satisfies stored scopes', async () => {
+    harness = await startApp({ allowed_scopes: ['Mail.ReadWrite'] });
+    const clientVerifier = crypto.randomBytes(32).toString('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
+
+    await harness.pkceStore.put(harness.tenant.id, {
+      state: 'state',
+      clientCodeChallenge: clientChallenge,
+      clientCodeChallengeMethod: 'S256',
+      serverCodeVerifier: 'server-verifier-xyz',
+      clientId: harness.tenant.client_id,
+      redirectUri: 'http://localhost:3000/callback',
+      tenantId: harness.tenant.id,
+      scopes: ['Mail.Read'],
+      createdAt: Date.now(),
+    });
+
+    const codeRes = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: 'the-auth-code',
+        redirect_uri: 'http://localhost:3000/callback',
+        code_verifier: clientVerifier,
+      }),
+    });
+    const codeBody = (await codeRes.json()) as { refresh_token: string };
+
+    const refreshRes = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: codeBody.refresh_token,
+        client_id: harness.tenant.client_id,
+      }),
+    });
+
+    expect(refreshRes.status).toBe(200);
+    expect(harness.mockMsalAcquireSilent).toHaveBeenCalledTimes(1);
+  });
+
+  it('forgets only the tenant-scoped delegated marker hash', async () => {
+    const redis = new MemoryRedisFacade();
+    await forgetDelegatedAccessToken({ redis, tenantId: 'tenant-a', accessToken: 'token-a' });
+    await import('../../src/lib/delegated-access-tokens.js').then((mod) =>
+      mod.rememberDelegatedAccessToken({ redis, tenantId: 'tenant-a', accessToken: 'token-a' })
+    );
+    await import('../../src/lib/delegated-access-tokens.js').then((mod) =>
+      mod.rememberDelegatedAccessToken({ redis, tenantId: 'tenant-b', accessToken: 'token-a' })
+    );
+
+    await forgetDelegatedAccessToken({ redis, tenantId: 'tenant-a', accessToken: 'token-a' });
+
+    await expect(
+      hasDelegatedAccessToken({ redis, tenantId: 'tenant-a', accessToken: 'token-a' })
+    ).resolves.toBe(false);
+    await expect(
+      hasDelegatedAccessToken({ redis, tenantId: 'tenant-b', accessToken: 'token-a' })
+    ).resolves.toBe(true);
   });
 
   it('Test 6: /token with PKCE miss → 400 invalid_grant', async () => {

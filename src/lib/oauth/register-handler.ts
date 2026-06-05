@@ -9,6 +9,8 @@ import { createOAuthClientRegistration, hashOpaqueValue } from './client-store.j
 export interface RegisterHandlerOptions {
   pgPool?: Pool;
   tenantId?: string;
+  supportedGrantTypes?: readonly string[];
+  defaultGrantTypes?: readonly string[];
 }
 
 function stringList(value: unknown, fallback: readonly string[]): string[] {
@@ -33,13 +35,18 @@ export function createRegisterHandler(
 ) {
   return async (req: Request, res: Response): Promise<void> => {
     const body = (req.body as Record<string, unknown>) ?? {};
-    const grantTypes = stringList(body.grant_types, ['authorization_code', 'refresh_token']);
+    const supportedGrantTypes = options.supportedGrantTypes ?? [
+      'authorization_code',
+      'refresh_token',
+    ];
+    const defaultGrantTypes = options.defaultGrantTypes ?? supportedGrantTypes;
+    const grantTypes = stringList(body.grant_types, defaultGrantTypes);
     const responseTypes = stringList(body.response_types, ['code']);
     const tokenEndpointAuthMethod =
       typeof body.token_endpoint_auth_method === 'string'
         ? body.token_endpoint_auth_method
         : 'none';
-    if (hasUnsupportedValues(grantTypes, ['authorization_code', 'refresh_token'])) {
+    if (hasUnsupportedValues(grantTypes, supportedGrantTypes)) {
       res.status(400).json({
         error: 'invalid_client_metadata',
         error_description: 'Unsupported grant_type requested.',
@@ -108,7 +115,7 @@ export function createRegisterHandler(
         tenantId: options.tenantId,
         clientName,
         redirectUris: validatedRedirectUris,
-        grantTypes: grantTypes.length ? grantTypes : ['authorization_code', 'refresh_token'],
+        grantTypes: grantTypes.length ? grantTypes : defaultGrantTypes,
         responseTypes: responseTypes.length ? responseTypes : ['code'],
         tokenEndpointAuthMethod,
       });
@@ -130,7 +137,7 @@ export function createRegisterHandler(
       client_id: clientId,
       client_id_issued_at: Math.floor(Date.now() / 1000),
       redirect_uris: validatedRedirectUris,
-      grant_types: grantTypes.length ? grantTypes : ['authorization_code', 'refresh_token'],
+      grant_types: grantTypes.length ? grantTypes : defaultGrantTypes,
       response_types: responseTypes.length ? responseTypes : ['code'],
       token_endpoint_auth_method: tokenEndpointAuthMethod,
       client_name: clientName,

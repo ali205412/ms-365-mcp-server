@@ -143,6 +143,24 @@ describe('plan 06-03 — /metrics integration contract (OPS-07)', () => {
     await new Promise<void>((resolve) => metricsServer!.close(() => resolve()));
     metricsServer = undefined;
 
+    metricsServer = createMetricsServer(exporter, { port: 0, bearerToken: null, host: '' });
+    await new Promise<void>((resolve) => {
+      metricsServer!.once('listening', () => resolve());
+    });
+    const emptyHostAddress = metricsServer.address() as AddressInfo;
+    expect(emptyHostAddress.address).toBe('127.0.0.1');
+    await new Promise<void>((resolve) => metricsServer!.close(() => resolve()));
+    metricsServer = undefined;
+
+    metricsServer = createMetricsServer(exporter, { port: 0, bearerToken: null, host: '   ' });
+    await new Promise<void>((resolve) => {
+      metricsServer!.once('listening', () => resolve());
+    });
+    const whitespaceHostAddress = metricsServer.address() as AddressInfo;
+    expect(whitespaceHostAddress.address).toBe('127.0.0.1');
+    await new Promise<void>((resolve) => metricsServer!.close(() => resolve()));
+    metricsServer = undefined;
+
     expect(() =>
       createMetricsServer(exporter, { port: 0, bearerToken: null, host: '0.0.0.0' })
     ).toThrow(/METRICS_BEARER/);
