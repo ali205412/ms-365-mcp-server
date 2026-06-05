@@ -22,3 +22,8 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
 CREATE INDEX IF NOT EXISTS oauth_clients_tenant_active_idx
   ON oauth_clients (tenant_id, client_id)
   WHERE disabled_at IS NULL;
+
+-- Down Migration
+
+DROP INDEX IF EXISTS oauth_clients_tenant_active_idx;
+DROP TABLE IF EXISTS oauth_clients;

@@ -308,7 +308,8 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
       expires_in: number;
     };
     expect(body.access_token).toBe('access-token-abc');
-    expect(body.refresh_token).toBeUndefined();
+    expect(body.refresh_token).toEqual(expect.stringMatching(/^mcp_rt_/));
+    expect(body.refresh_token).not.toContain('refresh-token-secret');
     expect(body.token_type).toBe('Bearer');
     expect(body.expires_in).toBeGreaterThan(0);
 
@@ -317,7 +318,7 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
         code: 'auth-code-1',
         redirectUri: 'http://localhost:3000/callback',
         codeVerifier: 'server-verifier-xyz',
-        scopes: ['User.Read', 'Mail.Read'],
+        scopes: ['User.Read'],
       })
     );
   });
