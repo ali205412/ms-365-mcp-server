@@ -113,8 +113,27 @@ None introduced by this fix pass.
 | threat_flag: oauth-refresh | src/lib/oauth/tenant-handlers.ts | Refresh grant path now performs cache-backed delegated token refresh and gateway refresh-token rotation. |
 | threat_flag: oauth-metadata | src/lib/connector-identity/metadata.ts | Authorization-server metadata now accepts per-route supported grant types. |
 
+## Final Operations Update
+
+- **Additional changed files:** `test/integration/oauth-surface/delegated-real-handlers.int.test.ts`, `src/server.ts`.
+- **Additional commits:**
+  - `1898eb3` — `style: format delegated OAuth integration test`
+  - `f062d79` — `fix: rate limit root dynamic registration`
+- **Local gates:**
+  - `npm run lint` — PASS with 174 pre-existing warnings and 0 errors.
+  - `npm run format:check` — PASS.
+  - `npm run build` — PASS.
+  - `npx vitest run /home/yui/Documents/ms-365-mcp-server/test/auth/delegated-oauth.test.ts /home/yui/Documents/ms-365-mcp-server/test/oauth-register-hardening.test.ts /home/yui/Documents/ms-365-mcp-server/test/oauth-metadata-paths.test.ts` — PASS (31 tests).
+  - `MS365_MCP_INTEGRATION=1 npx vitest run /home/yui/Documents/ms-365-mcp-server/test/integration/oauth-surface/delegated-real-handlers.int.test.ts` — PASS (9 tests).
+  - `npm test` — PASS across 187 batched test files.
+- **Graphify:** `graphify update /home/yui/Documents/ms-365-mcp-server` completed; `gsd-tools graphify status` reported `stale: false`, but still reported `commit_stale: true` from an older cached build record (`built_at_commit: d32a85b`) despite `GRAPH_REPORT.md` being rebuilt from the current commit. No graphify files had git diffs to commit.
+- **Push result:** `git push origin dev` completed; latest pushed head before this summary update was `f062d79`.
+- **CI result:** PR 18 checks for `f062d79` passed: Build, Docker image, container smoke test, Integration tests, OAuth-surface coverage gate (D-10), CodeQL, and Analyze all passed. Deploy to Coolify was skipped by workflow rules.
+- **PR comments/reviews:** No issue comments were present. Existing automated Codex reviews were on older commits only; no current blocking review comments were present for the latest head.
+- **Repository hygiene:** `.claude/settings.json` remained unstaged and uncommitted throughout final operations.
+
 ## Self-Check: PASSED
 
 - Modified files exist.
-- Commit `5572624` exists.
+- Commits `5572624`, `1898eb3`, and `f062d79` exist.
 - `.claude/settings.json` was not staged or committed.
