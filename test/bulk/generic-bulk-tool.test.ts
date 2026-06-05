@@ -6,6 +6,56 @@ import { registerBulkActionTools } from '../../src/lib/bulk-actions/register.js'
 import { BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL } from '../../src/lib/bulk-actions/schema.js';
 import { resetBulkResultStoreForTesting } from '../../src/lib/bulk-actions/result-store.js';
 
+vi.mock('../../src/generated/client.js', async () => {
+  const { z } = await import('zod');
+  return {
+    api: {
+      endpoints: [
+        {
+          alias: 'get-chat',
+          method: 'GET',
+          path: '/chats/:chatId',
+          parameters: [
+            { name: 'chatId', type: 'Path', schema: z.string() },
+            {
+              name: 'select',
+              type: 'Query',
+              schema: z.union([z.string(), z.array(z.string())]).optional(),
+            },
+          ],
+        },
+        {
+          alias: 'list-chats',
+          method: 'GET',
+          path: '/chats',
+          parameters: [
+            { name: 'top', type: 'Query', schema: z.number().optional() },
+            { name: 'count', type: 'Query', schema: z.boolean().optional() },
+          ],
+        },
+        {
+          alias: 'get-meeting-transcript-content',
+          method: 'GET',
+          path: '/me/onlineMeetings/:meetingId/transcripts/:transcriptId/content',
+          parameters: [
+            { name: 'meetingId', type: 'Path', schema: z.string() },
+            { name: 'transcriptId', type: 'Path', schema: z.string() },
+          ],
+        },
+        {
+          alias: 'delete-onedrive-file',
+          method: 'DELETE',
+          path: '/drives/:driveId/items/:driveItemId',
+          parameters: [
+            { name: 'driveId', type: 'Path', schema: z.string() },
+            { name: 'driveItemId', type: 'Path', schema: z.string() },
+          ],
+        },
+      ],
+    },
+  };
+});
+
 interface ToolLikeResult {
   isError?: boolean;
   _meta?: Record<string, unknown>;
