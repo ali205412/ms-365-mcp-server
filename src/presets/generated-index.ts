@@ -9,6 +9,8 @@ export const DISCOVERY_V1_OPS: ReadonlySet<string> = Object.freeze(
     'connector-diagnostics',
     'delete-skill',
     'execute-tool',
+    'bulk-action',
+    'read-bulk-result',
     'export-skill-pack',
     'file-search-view',
     'forget-fact',

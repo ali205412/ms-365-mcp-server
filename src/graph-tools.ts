@@ -54,6 +54,7 @@ export {
   type DiscoverySearchIndex,
 } from './lib/graph-tools-pure.js';
 import { describeToolSchema } from './lib/tool-schema-describer.js';
+import { registerBulkActionTools } from './lib/bulk-actions/register.js';
 
 /**
  * Plan 05-06 (COVRG-05, D-20, T-05-12) — module-level per-tenant BM25 cache.
@@ -1531,6 +1532,16 @@ export function registerGraphTools(
     }
   }
 
+  registeredCount += registerBulkActionTools(server, {
+    graphClient,
+    authManager,
+    readOnly,
+    orgMode,
+    executeToolAlias,
+    enabledToolsPattern: enabledToolsRegex,
+    enabledToolsSet,
+  });
+
   // Register graph-batch tool (Plan 02-05 / MWARE — $batch coalescing).
   // Combines up to 20 Graph sub-requests into one POST /$batch. Skipped in
   // read-only mode because a batch can contain arbitrary write methods; the
@@ -2380,6 +2391,14 @@ export function registerDiscoveryTools(
       };
     }
   );
+
+  registerBulkActionTools(server, {
+    graphClient,
+    authManager,
+    readOnly,
+    orgMode,
+    executeToolAlias,
+  });
 
   // Layer 3 (list-accounts) is registered by registerAuthTools — no duplicate here.
 }

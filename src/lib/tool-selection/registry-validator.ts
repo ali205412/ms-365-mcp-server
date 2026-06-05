@@ -41,7 +41,6 @@ import { z } from 'zod';
 import { distance } from 'fastest-levenshtein';
 import { api } from '../../generated/client.js';
 import { PRESET_VERSIONS } from '../../presets/generated-index.js';
-import { PRODUCT_AUDIENCES } from '../auth/products.js';
 import type { Selector } from './selector-ast.js';
 import { parseSelectorList } from './selector-ast.js';
 
@@ -76,12 +75,15 @@ import { extractWorkloadPrefix } from './workload-prefix.js';
 export { extractWorkloadPrefix };
 
 // Built once at module load, frozen to prevent downstream mutation.
+const SYNTHETIC_REGISTRY_ALIASES = ['bulk-action', 'read-bulk-result'];
+
 const REGISTRY_ALIASES: ReadonlySet<string> = Object.freeze(
-  new Set(
-    api.endpoints
+  new Set([
+    ...api.endpoints
       .map((e) => e.alias)
-      .filter((a): a is string => typeof a === 'string' && a.length > 0)
-  )
+      .filter((a): a is string => typeof a === 'string' && a.length > 0),
+    ...SYNTHETIC_REGISTRY_ALIASES,
+  ])
 );
 
 const WORKLOAD_PREFIXES: ReadonlySet<string> = Object.freeze(
