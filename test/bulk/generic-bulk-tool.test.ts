@@ -8,6 +8,7 @@ import { resetBulkResultStoreForTesting } from '../../src/lib/bulk-actions/resul
 
 interface ToolLikeResult {
   isError?: boolean;
+  _meta?: Record<string, unknown>;
   structuredContent?: { data?: unknown };
   content: Array<{ type: 'text'; text: string }>;
 }
@@ -244,5 +245,117 @@ describe('generic bulk-action tool', () => {
     expect(serialized).not.toContain('private@example.com');
     expect(serialized).not.toContain('example.invalid');
     expect(serialized).not.toContain('Private subject');
+    expect(JSON.stringify(payload)).not.toContain('safe-id');
+  });
+
+  it('treats non-JSON text tool responses as opaque metadata', async () => {
+    resetBulkResultStoreForTesting();
+    const { server, handlers } = makeServer();
+    registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias: vi.fn(async () => ({
+        content: [
+          { type: 'text', text: 'Transcript body with private@example.com and private words' },
+        ],
+      })),
+    });
+
+    const preview = await withTenant(
+      [BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'],
+      async () =>
+        handlers.get(BULK_ACTION_TOOL)!({
+          mode: 'preview',
+          outputMode: 'full',
+          items: [{ id: 'read-1', toolName: 'get-chat', parameters: { chatId: 'chat-id' } }],
+        })
+    );
+    const executed = await withTenant(
+      [BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'],
+      async () =>
+        handlers.get(BULK_ACTION_TOOL)!({
+          mode: 'execute',
+          outputMode: 'full',
+          confirmation: asRecord(dataFrom(preview)).confirmation,
+          items: [{ id: 'read-1', toolName: 'get-chat', parameters: { chatId: 'chat-id' } }],
+        })
+    );
+    const payload = asRecord(dataFrom(executed));
+    const read = await withTenant([BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'], async () =>
+      handlers.get(READ_BULK_RESULT_TOOL)!({ resultId: payload.resultId, limit: 10 })
+    );
+    const serialized = JSON.stringify(dataFrom(read));
+    expect(serialized).toContain('rawTextResponse');
+    expect(serialized).toContain('byteCount');
+    expect(serialized).not.toContain('Transcript body');
+    expect(serialized).not.toContain('private words');
+  });
+
+  it('stops scheduling remaining items after throttling metadata', async () => {
+    resetBulkResultStoreForTesting();
+    const { server, handlers } = makeServer();
+    const executeToolAlias = vi.fn(async () => ({
+      isError: true,
+      _meta: { errorCode: 'TooManyRequests', retryAfterSeconds: 60 },
+      content: [{ type: 'text', text: JSON.stringify({ error: 'throttled' }) }],
+    }));
+    registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias: executeToolAlias as never,
+    });
+
+    const items = [
+      { id: 'read-1', toolName: 'get-chat', parameters: { chatId: 'a' } },
+      { id: 'read-2', toolName: 'get-chat', parameters: { chatId: 'b' } },
+    ];
+    const preview = await withTenant([BULK_ACTION_TOOL, 'get-chat'], async () =>
+      handlers.get(BULK_ACTION_TOOL)!({ mode: 'preview', outputMode: 'errors', items })
+    );
+    const result = await withTenant([BULK_ACTION_TOOL, 'get-chat'], async () =>
+      handlers.get(BULK_ACTION_TOOL)!({
+        mode: 'execute',
+        outputMode: 'errors',
+        confirmation: asRecord(dataFrom(preview)).confirmation,
+        items,
+      })
+    );
+    const payload = asRecord(dataFrom(result));
+    expect(executeToolAlias).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(payload)).toContain('graph_throttled');
+  });
+
+  it('marks an in-flight aborted item as cancelled', async () => {
+    resetBulkResultStoreForTesting();
+    const { server, handlers } = makeServer();
+    const controller = new AbortController();
+    registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias: vi.fn(async () => {
+        controller.abort();
+        return { content: [{ type: 'text', text: JSON.stringify({ id: 'late-id' }) }] };
+      }),
+    });
+
+    const items = [{ id: 'read-1', toolName: 'get-chat', parameters: { chatId: 'a' } }];
+    const preview = await withTenant([BULK_ACTION_TOOL, 'get-chat'], async () =>
+      handlers.get(BULK_ACTION_TOOL)!({ mode: 'preview', outputMode: 'errors', items })
+    );
+    const result = await withTenant([BULK_ACTION_TOOL, 'get-chat'], async () =>
+      handlers.get(BULK_ACTION_TOOL)!(
+        {
+          mode: 'execute',
+          outputMode: 'errors',
+          confirmation: asRecord(dataFrom(preview)).confirmation,
+          items,
+        },
+        { signal: controller.signal }
+      )
+    );
+    expect(JSON.stringify(dataFrom(result))).toContain('cancelled');
   });
 });

@@ -21,6 +21,70 @@ function runWithTenant<T>(enabled: string[], fn: () => T): T {
 }
 
 describe('bulk action planner', () => {
+  it('accepts public single-tool OData string parameter overrides', () => {
+    const plan = runWithTenant([BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'], () =>
+      buildBulkPlan(
+        {
+          mode: 'preview',
+          outputMode: 'summary',
+          items: [
+            {
+              id: 'read-1',
+              toolName: 'get-chat',
+              parameters: { chatId: 'secret-chat-id', select: 'id,topic' },
+            },
+          ],
+        },
+        { readOnly: false, orgMode: true, now: new Date('2026-06-05T00:00:00Z') }
+      )
+    );
+    expect('error' in plan).toBe(false);
+    if ('error' in plan) return;
+    expect(plan.items[0]).toMatchObject({ status: 'allowed' });
+    expect(plan.executionParameters.get('read-1')).toMatchObject({ select: 'id,topic' });
+  });
+
+  it('accepts numeric and boolean public OData controls', () => {
+    const plan = runWithTenant([BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'list-chats'], () =>
+      buildBulkPlan(
+        {
+          mode: 'preview',
+          outputMode: 'summary',
+          items: [
+            {
+              id: 'list-1',
+              toolName: 'list-chats',
+              parameters: { top: 5, count: true },
+            },
+          ],
+        },
+        { readOnly: false, orgMode: true, now: new Date('2026-06-05T00:00:00Z') }
+      )
+    );
+    expect('error' in plan).toBe(false);
+    if ('error' in plan) return;
+    expect(plan.items[0]).toMatchObject({ status: 'allowed' });
+    expect(plan.executionParameters.get('list-1')).toMatchObject({ top: 5, count: true });
+  });
+
+  it('documents intentional strict unknown parameter rejection for bulk safety', () => {
+    const plan = runWithTenant([BULK_ACTION_TOOL, 'get-chat'], () =>
+      buildBulkPlan(
+        {
+          mode: 'preview',
+          outputMode: 'summary',
+          items: [
+            { id: 'read-1', toolName: 'get-chat', parameters: { chatId: 'a', unknown: 'ignored' } },
+          ],
+        },
+        { readOnly: false, orgMode: true, now: new Date('2026-06-05T00:00:00Z') }
+      )
+    );
+    expect('error' in plan).toBe(false);
+    if ('error' in plan) return;
+    expect(plan.items[0]).toMatchObject({ status: 'invalid', code: 'parameter_validation_failed' });
+  });
+
   it('previews generated aliases without exposing raw parameter values', () => {
     const plan = runWithTenant([BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'], () =>
       buildBulkPlan(

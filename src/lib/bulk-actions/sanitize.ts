@@ -62,7 +62,12 @@ export function sanitizeMessage(message: unknown): string {
 
 function keyAllowed(key: string): boolean {
   if (key === 'id' || key === '@odata.id') return true;
+  if (key === 'text') return false;
   return !FORBIDDEN_KEY_PATTERNS.some((pattern) => pattern.test(key));
+}
+
+export function resultIdPrefix(resultId: string): string {
+  return sha256Hex(resultId).slice(0, 12);
 }
 
 export function sanitizeValue(value: unknown, depth = 0): unknown {

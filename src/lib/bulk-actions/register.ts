@@ -3,7 +3,9 @@ import { z } from 'zod';
 import type AuthManager from '../../auth.js';
 import type GraphClient from '../../graph-client.js';
 import type { CallToolResult } from '../../graph-tools.js';
-import { getRequestTenant, requestContext } from '../../request-context.js';
+import { getFlow, getRequestId, getRequestTenant, requestContext } from '../../request-context.js';
+import { writeAuditStandalone } from '../audit.js';
+import { getPool } from '../postgres.js';
 import { checkDispatch } from '../tool-selection/dispatch-guard.js';
 import { createMcpErrorEnvelope, createMcpResultEnvelope } from '../mcp-results/envelope.js';
 import { emitMcpLogEvent } from '../mcp-logging/register.js';
@@ -26,9 +28,9 @@ import {
 } from './result-store.js';
 import {
   byteLength,
+  resultIdPrefix,
   safeIdsPayload,
   sanitizeErrorCode,
-  sanitizeMessage,
   sanitizeValue,
 } from './sanitize.js';
 
@@ -47,6 +49,7 @@ export interface RegisterBulkActionToolsOptions {
   readOnly: boolean;
   orgMode: boolean;
   executeToolAlias: (args: ExecuteToolAliasLikeArgs) => Promise<CallToolResult>;
+  createToolAliasExecutor?: () => (args: ExecuteToolAliasLikeArgs) => Promise<CallToolResult>;
   enabledToolsPattern?: RegExp;
   enabledToolsSet?: ReadonlySet<string>;
 }
@@ -71,7 +74,7 @@ function parseResultJson(result: CallToolResult): unknown {
   try {
     return JSON.parse(text) as unknown;
   } catch {
-    return { text: sanitizeMessage(text) };
+    return { rawTextResponse: true, byteCount: Buffer.byteLength(text, 'utf8') };
   }
 }
 
@@ -145,13 +148,66 @@ function renderBulkOutput(input: {
   return { ...base, items: input.executionItems };
 }
 
-async function emitBulkEvent(event: string, data: Record<string, unknown>): Promise<void> {
+async function emitBulkEvent(
+  event: Parameters<typeof emitMcpLogEvent>[0]['event'],
+  data: Record<string, unknown>
+): Promise<void> {
   await emitMcpLogEvent({
     tenantId: getRequestTenant().id,
     event,
     level: 'info',
     data: sanitizeValue(data) as Record<string, unknown>,
   });
+}
+
+function compactStoredOutput(input: {
+  planSummary: Record<string, unknown>;
+  status: string;
+  results: BulkStoredItem[];
+  resultId: string;
+  resultExpiresAt: string;
+}): Record<string, unknown> {
+  const failures = input.results.filter((item) => item.status !== 'succeeded');
+  return {
+    ...input.planSummary,
+    status: input.status,
+    resultId: input.resultId,
+    resultExpiresAt: input.resultExpiresAt,
+    resultStore: 'process_local_best_effort',
+    successCount: input.results.length - failures.length,
+    failureCount: failures.length,
+    failures: failures.map((item) => ({
+      id: item.id,
+      toolName: item.toolName,
+      status: item.status,
+      code: item.code,
+      retryAfterSeconds: item.retryAfterSeconds,
+    })),
+    nextAction: 'Call read-bulk-result with resultId to page through sanitized details.',
+  };
+}
+
+function auditBulk(
+  action: string,
+  result: 'success' | 'failure',
+  meta: Record<string, unknown>
+): void {
+  const tenantId = getRequestTenant().id;
+  if (!tenantId) return;
+  try {
+    void writeAuditStandalone(getPool(), {
+      tenantId,
+      actor: bulkOwnerKey(),
+      action,
+      target: null,
+      ip: null,
+      requestId: getRequestId() ?? 'bulk-action',
+      result,
+      meta: sanitizeValue({ ...meta, flow: getFlow() }) as Record<string, unknown>,
+    });
+  } catch {
+    // Stdio/local sessions may not have Postgres configured; MCP logging still records the event.
+  }
 }
 
 async function handleBulkAction(
@@ -185,6 +241,16 @@ async function handleBulkAction(
   }
 
   const planSummary = bulkPlanPublicSummary(plan);
+  auditBulk(
+    input.mode === 'preview' ? 'bulk-action.preview' : 'bulk-action.execute.plan',
+    'success',
+    {
+      digestPrefix: plan.planDigest.slice(0, 12),
+      itemCount: plan.items.length,
+      outputMode: plan.outputMode,
+      requiresConfirmation: plan.requiresConfirmation,
+    }
+  );
   await emitBulkEvent(
     input.mode === 'preview' ? 'bulk-action.preview' : 'bulk-action.execute.plan',
     {
@@ -212,6 +278,11 @@ async function handleBulkAction(
 
   const invalidOrBlocked = plan.items.find((item) => item.status !== 'allowed');
   if (invalidOrBlocked) {
+    auditBulk('bulk-action.execute.blocked', 'failure', {
+      digestPrefix: plan.planDigest.slice(0, 12),
+      itemCount: plan.items.length,
+      code: invalidOrBlocked.code ?? 'invalid_bulk_item',
+    });
     return createMcpErrorEnvelope({
       toolName: BULK_ACTION_TOOL,
       summary: 'Bulk action execution blocked by invalid or disallowed items.',
@@ -224,6 +295,11 @@ async function handleBulkAction(
 
   if (plan.requiresConfirmation) {
     if (!input.confirmation) {
+      auditBulk('bulk-action.confirmation_required', 'failure', {
+        digestPrefix: plan.planDigest.slice(0, 12),
+        itemCount: plan.items.length,
+        code: 'confirmation_required',
+      });
       await emitBulkEvent('bulk-action.confirmation_required', {
         digestPrefix: plan.planDigest.slice(0, 12),
         itemCount: plan.items.length,
@@ -240,6 +316,11 @@ async function handleBulkAction(
       });
     }
     if (Date.parse(plan.expiresAt) <= Date.now()) {
+      auditBulk('bulk-action.confirmation_expired', 'failure', {
+        digestPrefix: plan.planDigest.slice(0, 12),
+        itemCount: plan.items.length,
+        code: 'plan_expired',
+      });
       return createMcpErrorEnvelope({
         toolName: BULK_ACTION_TOOL,
         summary: 'Bulk action plan expired.',
@@ -251,6 +332,11 @@ async function handleBulkAction(
       input.confirmation.planDigest !== plan.planDigest ||
       input.confirmation.confirmed !== true
     ) {
+      auditBulk('bulk-action.confirmation_mismatch', 'failure', {
+        digestPrefix: plan.planDigest.slice(0, 12),
+        itemCount: plan.items.length,
+        code: 'confirmation_mismatch',
+      });
       await emitBulkEvent('bulk-action.confirmation_mismatch', {
         digestPrefix: plan.planDigest.slice(0, 12),
         itemCount: plan.items.length,
@@ -270,8 +356,15 @@ async function handleBulkAction(
     itemCount: plan.items.length,
     outputMode: plan.outputMode,
   });
+  const executeAlias = options.createToolAliasExecutor?.() ?? options.executeToolAlias;
   const results: BulkStoredItem[] = [];
-  for (const item of plan.items) {
+  for (let index = 0; index < plan.items.length; index++) {
+    const item = plan.items[index];
+    const cancelRemaining = (code: string): void => {
+      for (const pending of plan.items.slice(index + 1)) {
+        results.push({ id: pending.id, toolName: pending.toolName, status: 'cancelled', code });
+      }
+    };
     if (signal?.aborted) {
       results.push({
         id: item.id,
@@ -279,7 +372,8 @@ async function handleBulkAction(
         status: 'cancelled',
         code: 'cancelled',
       });
-      continue;
+      cancelRemaining('cancelled');
+      break;
     }
     const plannedParams = plan.executionParameters.get(item.id) ?? {};
     const params = {
@@ -290,26 +384,60 @@ async function handleBulkAction(
       ...(signal ? { _signal: signal } : {}),
     };
     const ctx = requestContext.getStore() ?? {};
-    const result = await requestContext.run({ ...ctx, toolAlias: item.toolName }, async () =>
-      options.executeToolAlias({
+    let result: CallToolResult;
+    try {
+      result = await requestContext.run({ ...ctx, toolAlias: item.toolName }, async () =>
+        executeAlias({
+          toolName: item.toolName,
+          parameters: params,
+          graphClient: options.graphClient,
+          authManager: options.authManager,
+          readOnly: options.readOnly,
+          orgMode: options.orgMode,
+        })
+      );
+    } catch (error) {
+      result = {
+        content: [{ type: 'text', text: JSON.stringify({ error: (error as Error).message }) }],
+        _meta: {
+          errorCode: (error as Error).name === 'AbortError' ? 'cancelled' : 'graph_item_failed',
+        },
+        isError: true,
+      };
+    }
+    if (
+      signal?.aborted ||
+      result._meta?.cancelled === true ||
+      result._meta?.errorCode === 'cancelled'
+    ) {
+      results.push({
+        id: item.id,
         toolName: item.toolName,
-        parameters: params,
-        graphClient: options.graphClient,
-        authManager: options.authManager,
-        readOnly: options.readOnly,
-        orgMode: options.orgMode,
-      })
-    );
+        status: 'cancelled',
+        code: 'cancelled',
+      });
+      cancelRemaining('cancelled');
+      break;
+    }
     const code = codeFromResult(result);
+    const retryAfterSeconds = retryAfterFromResult(result);
+    const throttled =
+      retryAfterSeconds !== undefined || code === 'TooManyRequests' || code === '429';
     const shapedData = result.isError ? undefined : shapeItemData(input.outputMode, result);
     results.push({
       id: item.id,
       toolName: item.toolName,
       status: result.isError ? 'failed' : 'succeeded',
-      ...(result.isError ? { code: code ?? 'graph_item_failed' } : {}),
-      retryAfterSeconds: retryAfterFromResult(result),
+      ...(result.isError
+        ? { code: throttled ? 'graph_throttled' : (code ?? 'graph_item_failed') }
+        : {}),
+      retryAfterSeconds,
       ...(shapedData !== undefined ? { data: shapedData } : {}),
     });
+    if (throttled) {
+      cancelRemaining('graph_throttled');
+      break;
+    }
   }
 
   const successCount = results.filter((item) => item.status === 'succeeded').length;
@@ -346,16 +474,26 @@ async function handleBulkAction(
     await emitBulkEvent('bulk-action.result_stored', {
       digestPrefix: plan.planDigest.slice(0, 12),
       itemCount: results.length,
+      resultIdPrefix: resultIdPrefix(resultId),
     });
   }
 
-  const output = renderBulkOutput({
-    planSummary,
-    executionItems: results,
-    outputMode: input.outputMode,
-    status,
-    resultId,
-    resultExpiresAt,
+  const output =
+    resultId && resultExpiresAt
+      ? compactStoredOutput({ planSummary, status, results, resultId, resultExpiresAt })
+      : renderBulkOutput({
+          planSummary,
+          executionItems: results,
+          outputMode: input.outputMode,
+          status,
+        });
+  auditBulk('bulk-action.execute.complete', status === 'completed' ? 'success' : 'failure', {
+    digestPrefix: plan.planDigest.slice(0, 12),
+    itemCount: results.length,
+    successCount,
+    failureCount: results.length - successCount,
+    stored: Boolean(resultId),
+    outputMode: plan.outputMode,
   });
   await emitBulkEvent('bulk-action.execute.complete', {
     digestPrefix: plan.planDigest.slice(0, 12),
@@ -390,6 +528,7 @@ async function handleReadBulkResult(rawInput: unknown): Promise<CallToolResult> 
   if (dispatchRejection) return dispatchRejection;
   const outcome = readBulkResult(parsed.data);
   if (!outcome.ok) {
+    auditBulk('bulk-action.result_read_denied', 'failure', { code: outcome.code });
     await emitBulkEvent('bulk-action.result_read_denied', { code: outcome.code });
     return createMcpErrorEnvelope({
       toolName: READ_BULK_RESULT_TOOL,
@@ -398,8 +537,12 @@ async function handleReadBulkResult(rawInput: unknown): Promise<CallToolResult> 
       message: outcome.message,
     });
   }
+  auditBulk('bulk-action.result_read', 'success', {
+    resultIdPrefix: resultIdPrefix(parsed.data.resultId),
+    itemCount: outcome.value.items.length,
+  });
   await emitBulkEvent('bulk-action.result_read', {
-    resultId: parsed.data.resultId,
+    resultIdPrefix: resultIdPrefix(parsed.data.resultId),
     itemCount: outcome.value.items.length,
   });
   return createMcpResultEnvelope({

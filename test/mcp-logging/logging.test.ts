@@ -336,6 +336,40 @@ describe('Phase 7 Plan 07-09 Task 1 - MCP logging', () => {
     expect(serialized).not.toContain('secret fact content');
   });
 
+  it('bulk-action log events publish curated data without raw result handles', async () => {
+    const { registry, setLevel } = await createLoggingHarness();
+    const sendA = registerSession(registry, TENANT_A, SESSION_A);
+    await setLevel('info', SESSION_A);
+
+    await emitMcpLogEvent({
+      tenantId: TENANT_A,
+      event: 'bulk-action.result_read',
+      level: 'info',
+      data: {
+        resultId: 'bulk_raw-secret-handle',
+        resultIdPrefix: 'abc123def456',
+        itemCount: 2,
+        rawPayload: { body: 'private body' },
+      },
+    });
+
+    const payloads = loggedPayloads(sendA);
+    expect(payloads).toEqual([
+      {
+        data: {
+          event: 'bulk-action.result_read',
+          resultIdPrefix: 'abc123def456',
+          itemCount: 2,
+        },
+        level: 'info',
+        logger: 'ms365-mcp',
+      },
+    ]);
+    const serialized = JSON.stringify(payloads);
+    expect(serialized).not.toContain('bulk_raw-secret-handle');
+    expect(serialized).not.toContain('private body');
+  });
+
   it('session log levels are cleared when unregisterSession removes a session', async () => {
     const { registry, setLevel } = await createLoggingHarness();
     registerSession(registry, TENANT_B, SESSION_A);

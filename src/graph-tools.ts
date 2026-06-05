@@ -319,6 +319,13 @@ function codeFromError(error: unknown): string {
   return error instanceof Error && error.name ? error.name : 'tool_error';
 }
 
+function retryAfterSecondsFromError(error: unknown): number | undefined {
+  if (typeof error !== 'object' || error === null || !('retryAfterMs' in error)) return undefined;
+  const retryAfterMs = (error as { retryAfterMs?: unknown }).retryAfterMs;
+  if (typeof retryAfterMs !== 'number' || !Number.isFinite(retryAfterMs)) return undefined;
+  return Math.max(1, Math.ceil(retryAfterMs / 1000));
+}
+
 function summarizeBodyValue(body: unknown): Record<string, unknown> {
   if (body === undefined || body === null) {
     return { present: false };
@@ -1221,7 +1228,10 @@ async function executeGraphToolInner(
           }),
         },
       ],
-      _meta: { errorCode: codeFromError(error) },
+      _meta: {
+        errorCode: codeFromError(error),
+        retryAfterSeconds: retryAfterSecondsFromError(error),
+      },
       isError: true,
     };
   }
@@ -1538,6 +1548,7 @@ export function registerGraphTools(
     readOnly,
     orgMode,
     executeToolAlias,
+    createToolAliasExecutor: () => createExecuteToolAliasForCurrentContext(readOnly, orgMode),
     enabledToolsPattern: enabledToolsRegex,
     enabledToolsSet,
   });
@@ -1879,28 +1890,26 @@ export interface ExecuteToolAliasArgs {
   orgMode?: boolean;
 }
 
-export async function executeToolAlias({
-  toolName,
-  parameters = {},
-  graphClient,
-  authManager,
+export function createExecuteToolAliasForCurrentContext(
   readOnly = false,
-  orgMode = false,
-}: ExecuteToolAliasArgs): Promise<CallToolResult> {
+  orgMode = false
+): (args: ExecuteToolAliasArgs) => Promise<CallToolResult> {
   const tenant = resolveTenantForDiscovery();
   if (!tenant) {
-    logger.warn({}, 'executeToolAlias: no tenant context; refusing dispatch');
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            error: 'tenant context unavailable',
-            tip: 'Tenant context not seeded — contact operator.',
-          }),
-        },
-      ],
-      isError: true,
+    return async () => {
+      logger.warn({}, 'executeToolAlias: no tenant context; refusing dispatch');
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              error: 'tenant context unavailable',
+              tip: 'Tenant context not seeded — contact operator.',
+            }),
+          },
+        ],
+        isError: true,
+      };
     };
   }
 
@@ -1912,67 +1921,74 @@ export async function executeToolAlias({
     registryAliases: toolsRegistry.keys(),
   });
 
-  if (!catalog.discoveryCatalogSet.has(toolName)) {
-    logger.info({ tool: toolName, tenantId: tenant.id }, 'executeToolAlias: tool not enabled');
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            error: `Tool not enabled for tenant: ${toolName}`,
-            tenantId: tenant.id,
-            tip: 'Use search-tools to discover tools available to this tenant.',
-          }),
-        },
-      ],
-      isError: true,
-    };
-  }
+  return async ({ toolName, parameters = {}, graphClient, authManager }: ExecuteToolAliasArgs) => {
+    if (!catalog.discoveryCatalogSet.has(toolName)) {
+      logger.info({ tool: toolName, tenantId: tenant.id }, 'executeToolAlias: tool not enabled');
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              error: `Tool not enabled for tenant: ${toolName}`,
+              tenantId: tenant.id,
+              tip: 'Use search-tools to discover tools available to this tenant.',
+            }),
+          },
+        ],
+        isError: true,
+      };
+    }
 
-  const toolData = toolsRegistry.get(toolName);
-  if (!toolData) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            error: `Tool not found: ${toolName}`,
-            tip: 'Use search-tools to find available tools.',
-          }),
-        },
-      ],
-      isError: true,
-    };
-  }
+    const toolData = toolsRegistry.get(toolName);
+    if (!toolData) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              error: `Tool not found: ${toolName}`,
+              tip: 'Use search-tools to find available tools.',
+            }),
+          },
+        ],
+        isError: true,
+      };
+    }
 
-  if (
-    catalog.isDiscoverySurface &&
-    !tenant.enabledToolsExplicit &&
-    !isReadSafeDiscoveryTool(toolData.tool, toolData.config)
-  ) {
-    logger.info(
-      { tool: toolName, tenantId: tenant.id, method: toolData.tool.method.toUpperCase() },
-      'executeToolAlias: write tool requires explicit tenant enablement'
+    if (
+      catalog.isDiscoverySurface &&
+      !tenant.enabledToolsExplicit &&
+      !isReadSafeDiscoveryTool(toolData.tool, toolData.config)
+    ) {
+      logger.info(
+        { tool: toolName, tenantId: tenant.id, method: toolData.tool.method.toUpperCase() },
+        'executeToolAlias: write tool requires explicit tenant enablement'
+      );
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              error: `Tool requires explicit tenant enablement: ${toolName}`,
+              tenantId: tenant.id,
+              tip: 'Ask an admin to add this write-capable alias to enabled_tools before using execute-tool.',
+            }),
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const ctx = requestContext.getStore() ?? {};
+    return requestContext.run({ ...ctx, enabledToolsSet: catalog.discoveryCatalogSet }, async () =>
+      executeGraphTool(toolData.tool, toolData.config, graphClient, parameters, authManager)
     );
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            error: `Tool requires explicit tenant enablement: ${toolName}`,
-            tenantId: tenant.id,
-            tip: 'Ask an admin to add this write-capable alias to enabled_tools before using execute-tool.',
-          }),
-        },
-      ],
-      isError: true,
-    };
-  }
+  };
+}
 
-  const ctx = requestContext.getStore() ?? {};
-  return requestContext.run({ ...ctx, enabledToolsSet: catalog.discoveryCatalogSet }, async () =>
-    executeGraphTool(toolData.tool, toolData.config, graphClient, parameters, authManager)
-  );
+export async function executeToolAlias(args: ExecuteToolAliasArgs): Promise<CallToolResult> {
+  const runner = createExecuteToolAliasForCurrentContext(args.readOnly, args.orgMode);
+  return runner(args);
 }
 
 // `buildDiscoverySearchIndex` + `scoreDiscoveryQuery` live in
@@ -2398,6 +2414,7 @@ export function registerDiscoveryTools(
     readOnly,
     orgMode,
     executeToolAlias,
+    createToolAliasExecutor: () => createExecuteToolAliasForCurrentContext(readOnly, orgMode),
   });
 
   // Layer 3 (list-accounts) is registered by registerAuthTools — no duplicate here.

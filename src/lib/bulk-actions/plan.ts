@@ -127,6 +127,27 @@ function parseBodyParameter(
   return { ok: false, message: zodIssueMessage(direct.error) };
 }
 
+function parseRuntimeParameter(
+  paramName: string,
+  value: unknown,
+  schema: z.ZodTypeAny | undefined
+): { ok: true; value: unknown } | { ok: false; message: string } {
+  const canonical = canonicalParamName(paramName);
+  if (['filter', 'search', 'select', 'expand', 'orderby', 'format'].includes(canonical)) {
+    if (typeof value === 'string') return { ok: true, value };
+  }
+  if (canonical === 'top' || canonical === 'skip') {
+    if (typeof value === 'number' && Number.isFinite(value)) return { ok: true, value };
+  }
+  if (canonical === 'count') {
+    if (typeof value === 'boolean') return { ok: true, value };
+  }
+  if (!schema) return { ok: true, value };
+  const parsed = schema.safeParse(value);
+  if (parsed.success) return { ok: true, value: parsed.data };
+  return { ok: false, message: zodIssueMessage(parsed.error) };
+}
+
 function normalizeParameters(
   endpoint: Endpoint,
   config: EndpointConfig | undefined,
@@ -159,17 +180,15 @@ function normalizeParameters(
             parameter: key,
             message: parsed.message,
           });
-      } else if (paramDef.schema) {
-        const parsed = paramDef.schema.safeParse(value);
-        if (parsed.success) normalized[paramDef.name] = parsed.data;
+      } else {
+        const parsed = parseRuntimeParameter(key, value, paramDef.schema);
+        if (parsed.ok) normalized[paramDef.name] = parsed.value;
         else
           errors.push({
             code: 'parameter_validation_failed',
             parameter: key,
-            message: zodIssueMessage(parsed.error),
+            message: parsed.message,
           });
-      } else {
-        normalized[paramDef.name] = value;
       }
       continue;
     }
