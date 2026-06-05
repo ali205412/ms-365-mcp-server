@@ -423,39 +423,6 @@ function applyAdvancedDirectoryQueryHeaders(
   headers[CONSISTENCY_LEVEL_HEADER] = CONSISTENCY_LEVEL_EVENTUAL;
 }
 
-function combineAbortSignals(signals: ReadonlyArray<AbortSignal | undefined>): {
-  signal?: AbortSignal;
-  cleanup: () => void;
-} {
-  const activeSignals = signals.filter((signal): signal is AbortSignal => signal !== undefined);
-  if (activeSignals.length === 0) return { cleanup: () => undefined };
-  if (activeSignals.length === 1) return { signal: activeSignals[0], cleanup: () => undefined };
-
-  const controller = new AbortController();
-  const trackedSignals: AbortSignal[] = [];
-  const abort = (): void => {
-    if (!controller.signal.aborted) controller.abort();
-  };
-
-  for (const signal of activeSignals) {
-    if (signal.aborted) {
-      abort();
-      break;
-    }
-    signal.addEventListener('abort', abort, { once: true });
-    trackedSignals.push(signal);
-  }
-
-  return {
-    signal: controller.signal,
-    cleanup: () => {
-      for (const signal of trackedSignals) {
-        signal.removeEventListener('abort', abort);
-      }
-    },
-  };
-}
-
 function transcriptTextFromResult(result: CallToolResult): string | undefined {
   return result.content.find((item): item is TextContent => item.type === 'text')?.text;
 }
@@ -1013,15 +980,13 @@ async function executeGraphToolInner(
       typeof params._sendNotification === 'function'
         ? (params._sendNotification as ProgressNotificationSender)
         : undefined;
-    const registeredOperationController =
-      shouldFetchAllPages && token !== undefined ? registerOperation(operationKey) : undefined;
+    const operationWasRegistered = shouldFetchAllPages && token !== undefined;
+    if (operationWasRegistered) {
+      registerOperation(operationKey);
+    }
     const requestSignal = params._signal instanceof AbortSignal ? params._signal : undefined;
-    const combinedSignal = combineAbortSignals([
-      requestSignal,
-      registeredOperationController?.signal,
-    ]);
-    if (combinedSignal.signal) {
-      options.signal = combinedSignal.signal;
+    if (requestSignal) {
+      options.signal = requestSignal;
     }
 
     if (options.method !== 'GET' && body) {
@@ -1105,7 +1070,7 @@ async function executeGraphToolInner(
           sendNotification,
           capabilityProfile: ctx?.capabilityProfile,
           operationKey,
-          signal: combinedSignal.signal,
+          signal: requestSignal,
         });
         firstPage.value = combined.value;
         if (combined._cancelled) {
@@ -1139,8 +1104,7 @@ async function executeGraphToolInner(
         );
       }
     } finally {
-      combinedSignal.cleanup();
-      if (registeredOperationController) {
+      if (operationWasRegistered) {
         unregisterOperation(operationKey);
       }
     }

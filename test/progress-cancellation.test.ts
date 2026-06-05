@@ -9,6 +9,7 @@ import {
 } from '../src/lib/mcp-progress/cancellation.js';
 import { requestContext } from '../src/request-context.js';
 import type { CallToolResult } from '../src/graph-tools.js';
+import { fetchAllPages } from '../src/lib/middleware/page-iterator.js';
 
 vi.mock('../src/logger.js', () => ({
   default: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -136,12 +137,15 @@ describe('Phase 8 progress and cancellation for paginated Graph tools', () => {
     const graphRequest = vi
       .fn()
       .mockResolvedValueOnce(page(['a'], 'https://graph.microsoft.com/v1.0/me/messages?$skip=1'))
-      .mockImplementationOnce(async () => {
+      .mockImplementationOnce(async (_path: string, options: { signal?: AbortSignal }) => {
         cancelOperation({
           tenantId: 'tenant-a',
           requestId: 'request-1',
           progressToken: 'progress-1',
         });
+        if (options.signal?.aborted) {
+          throw new DOMException('The operation was aborted.', 'AbortError');
+        }
         return page(['b'], 'https://graph.microsoft.com/v1.0/me/messages?$skip=2');
       });
 
@@ -157,6 +161,82 @@ describe('Phase 8 progress and cancellation for paginated Graph tools', () => {
     expect(payload.status).toBe('cancelled');
     expect(payload.resourceUri).toBe('m365://tenant/tenant-a/partial/request-1/progress-1.json');
     expect(payload.partial.value).toHaveLength(1);
+  });
+
+  it('stops fetchAllPages before the next page request when cancelled after progress', async () => {
+    resetOperationsForTesting();
+    const operationKey = {
+      tenantId: 'tenant-a',
+      requestId: 'request-1',
+      progressToken: 'progress-1',
+    };
+    registerOperation(operationKey);
+    const graphRequest = vi.fn().mockResolvedValue(page(['b']));
+    const sendNotification = vi.fn(async () => {
+      cancelOperation(operationKey);
+    });
+
+    try {
+      const result = await fetchAllPages(
+        '/me/messages',
+        { method: 'GET', headers: {} },
+        { graphRequest } as never,
+        {
+          seedFirstPage: JSON.parse(
+            page(['a'], 'https://graph.microsoft.com/v1.0/me/messages?$skip=1').content[0]!.text
+          ) as Record<string, unknown>,
+          progressToken: 'progress-1',
+          sendNotification,
+          capabilityProfile: progressProfile,
+          operationKey,
+        }
+      );
+
+      expect(result).toMatchObject({
+        _cancelled: true,
+        _partialResourceUri: 'm365://tenant/tenant-a/partial/request-1/progress-1.json',
+      });
+      expect(result.value).toHaveLength(1);
+      expect(graphRequest).not.toHaveBeenCalled();
+      expect(sendNotification).toHaveBeenCalledTimes(1);
+    } finally {
+      resetOperationsForTesting();
+    }
+  });
+
+  it('marks seeded pagination as cancelled when cancelled before iteration yields', async () => {
+    resetOperationsForTesting();
+    const operationKey = {
+      tenantId: 'tenant-a',
+      requestId: 'request-1',
+      progressToken: 'progress-1',
+    };
+    registerOperation(operationKey);
+    cancelOperation(operationKey);
+    const graphRequest = vi.fn();
+
+    try {
+      const result = await fetchAllPages(
+        '/me/messages',
+        { method: 'GET', headers: {} },
+        { graphRequest } as never,
+        {
+          seedFirstPage: JSON.parse(
+            page(['a'], 'https://graph.microsoft.com/v1.0/me/messages?$skip=1').content[0]!.text
+          ) as Record<string, unknown>,
+          operationKey,
+        }
+      );
+
+      expect(result).toMatchObject({
+        _cancelled: true,
+        _partialResourceUri: 'm365://tenant/tenant-a/partial/request-1/progress-1.json',
+      });
+      expect(result.value).toHaveLength(0);
+      expect(graphRequest).not.toHaveBeenCalled();
+    } finally {
+      resetOperationsForTesting();
+    }
   });
 
   it('does not allow Tenant A cancellation to cancel Tenant B work', async () => {

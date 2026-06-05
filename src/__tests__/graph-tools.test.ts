@@ -479,7 +479,7 @@ describe('graph-tools', () => {
       expect(cancelOperation(operationKey)).toBe(false);
     });
 
-    it('aborts the active initial Graph request when pagination is cancelled', async () => {
+    it('returns a cancelled payload when pagination is cancelled during the initial Graph request', async () => {
       const endpoint = makeEndpoint();
       const config = makeConfig();
       mockEndpoints.push(endpoint);
@@ -527,13 +527,18 @@ describe('graph-tools', () => {
           )
       );
 
-      await vi.waitFor(() => expect(capturedSignal).toBeDefined());
-      expect(capturedSignal!.aborted).toBe(false);
+      await vi.waitFor(() => expect(graphClient.graphRequest).toHaveBeenCalledTimes(1));
+      expect(capturedSignal).toBeUndefined();
       expect(cancelOperation(operationKey)).toBe(true);
-      expect(capturedSignal!.aborted).toBe(true);
 
       const result = await pending;
-      expect(result.isError).toBe(true);
+      expect(result.isError).toBeUndefined();
+      const payload = JSON.parse(result.content[0].text);
+      expect(payload).toMatchObject({
+        status: 'cancelled',
+        resourceUri: 'm365://tenant/tenant-a/partial/request-a/progress-a.json',
+        partial: { value: [] },
+      });
       expect(cancelOperation(operationKey)).toBe(false);
     });
   });

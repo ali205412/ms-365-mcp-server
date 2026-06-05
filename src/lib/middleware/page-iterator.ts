@@ -99,6 +99,13 @@ export interface FetchAllPagesResult {
  * or fail to parse fall back to the default with a warning — operators can
  * misconfigure without crashing the process.
  */
+function isCancelled(opts: PageIteratorOptions): boolean {
+  return (
+    opts.signal?.aborted === true ||
+    (opts.operationKey ? isOperationCancelled(opts.operationKey) : false)
+  );
+}
+
 function resolveMaxPages(opts: PageIteratorOptions | undefined): number {
   const perCall = opts?.maxPages;
   if (perCall !== undefined) {
@@ -156,7 +163,7 @@ export async function* pageIterator(
   // If a seed was provided, yield it as page 0 and jump to its nextLink
   // without issuing a duplicate request.
   if (seed !== undefined) {
-    if (signal?.aborted) return;
+    if (isCancelled(opts)) return;
     yield { json: seed, pageIndex: 0 };
     pageIndex = 1;
     const seedNextLink = seed['@odata.nextLink'];
@@ -175,7 +182,7 @@ export async function* pageIterator(
     // Stop at maxPages + 1 iterations — one extra so fetchAllPages can detect
     // truncation without itself issuing another request.
     if (pageIndex > maxPages) return;
-    if (signal?.aborted) return;
+    if (isCancelled(opts)) return;
 
     const response = await client.graphRequest(currentPath, { ...currentOptions, signal });
     const text = response?.content?.[0]?.text;
@@ -232,6 +239,7 @@ export async function fetchAllPages(
   for await (const { json, pageIndex } of pageIterator(initialPath, options, client, {
     maxPages,
     seedFirstPage: opts.seedFirstPage,
+    operationKey: opts.operationKey,
     signal: opts.signal,
   })) {
     if (opts.signal?.aborted || (opts.operationKey && isOperationCancelled(opts.operationKey))) {
@@ -263,13 +271,26 @@ export async function fetchAllPages(
     const nextLink = json['@odata.nextLink'];
     lastNextLink = typeof nextLink === 'string' ? nextLink : undefined;
 
+    if (opts.signal?.aborted || (opts.operationKey && isOperationCancelled(opts.operationKey))) {
+      cancelled = true;
+      break;
+    }
+
     if (opts.progressToken !== undefined) {
       await emitProgress(opts.sendNotification, opts.capabilityProfile, {
         progressToken: opts.progressToken,
         progress: pageIndex + 1,
         message: `Fetched ${pageIndex + 1} page${pageIndex === 0 ? '' : 's'}`,
       });
+      if (opts.signal?.aborted || (opts.operationKey && isOperationCancelled(opts.operationKey))) {
+        cancelled = true;
+        break;
+      }
     }
+  }
+
+  if (isCancelled(opts)) {
+    cancelled = true;
   }
 
   const result: FetchAllPagesResult = {

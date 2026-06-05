@@ -67,7 +67,7 @@ function Convert-SecureStringToPlainText([securestring]$Value) {
   if (-not $Value -or $Value.Length -eq 0) { return '' }
   $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Value)
   try {
-    return [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+    return [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
   } finally {
     [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
   }

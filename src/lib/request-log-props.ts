@@ -10,15 +10,15 @@ type RequestWithTenant = Request & {
 
 export interface RequestLogProps {
   requestId: string | null;
-  tenantId: string | null;
+  tenantId?: string;
 }
 
 export function requestLogProps(req: Request): RequestLogProps {
   const request = req as RequestWithTenant;
   const requestId = typeof request.id === 'string' && request.id.length > 0 ? request.id : null;
-  const tenantId = tenantIdFromRequest(request) ?? tenantIdFromContext() ?? null;
+  const tenantId = tenantIdFromRequest(request) ?? tenantIdFromContext();
 
-  return { requestId, tenantId };
+  return tenantId === undefined ? { requestId } : { requestId, tenantId };
 }
 
 function tenantIdFromRequest(req: RequestWithTenant): string | undefined {

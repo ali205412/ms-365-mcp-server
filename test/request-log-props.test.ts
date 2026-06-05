@@ -30,14 +30,21 @@ describe('requestLogProps', () => {
     expect(props).toEqual({ requestId: 'req-456', tenantId: 'tenant-from-context' });
   });
 
-  it('uses null for non-string or empty identifiers', () => {
+  it('omits tenantId when the async request context tenant id is null', () => {
+    const props = requestContext.run({ tenantId: null }, () =>
+      requestLogProps({ id: 'req-789' } as unknown as Request)
+    );
+
+    expect(props).toEqual({ requestId: 'req-789' });
+    expect(Object.hasOwn(props, 'tenantId')).toBe(false);
+  });
+
+  it('omits tenantId for non-string or empty identifiers', () => {
     expect(requestLogProps({ id: 123, tenant: { id: '' } } as unknown as Request)).toEqual({
       requestId: null,
-      tenantId: null,
     });
     expect(requestLogProps({ id: '', tenant: { id: '' } } as unknown as Request)).toEqual({
       requestId: null,
-      tenantId: null,
     });
   });
 });
