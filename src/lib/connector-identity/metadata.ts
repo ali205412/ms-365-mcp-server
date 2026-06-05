@@ -15,11 +15,11 @@ export interface ConnectorMetadataInput {
   tenantId?: string | null;
   tenantDisplayName?: string | null;
   version: string;
+  dynamicRegistration?: boolean;
 }
 
 export interface OAuthMetadataInput extends ConnectorMetadataInput {
   scopes: readonly string[];
-  dynamicRegistration?: boolean;
   grantTypesSupported?: readonly string[];
 }
 
@@ -182,7 +182,9 @@ export function buildConnectorWellKnownMetadata(
       oauthAuthorizationServerRfc8414: urls.oauthAuthorizationServerRfc8414,
       oauthProtectedResource: urls.oauthProtectedResource,
       oauthProtectedResourceRfc8414: urls.oauthProtectedResourceRfc8414,
-      dynamicClientRegistration: urls.dynamicClientRegistration,
+      ...(input.dynamicRegistration
+        ? { dynamicClientRegistration: urls.dynamicClientRegistration }
+        : {}),
     },
   };
 }
@@ -215,7 +217,9 @@ export function connectorIdentityDiagnostics(
       oauthAuthorizationServer: urls.oauthAuthorizationServer,
       oauthProtectedResource: urls.oauthProtectedResource,
       connectorWellKnown: urls.connectorWellKnown,
-      dynamicClientRegistration: urls.dynamicClientRegistration,
+      ...(input.dynamicRegistration
+        ? { dynamicClientRegistration: urls.dynamicClientRegistration }
+        : {}),
     },
     oauthAuthorizationServer: buildOAuthAuthorizationServerMetadata({ ...input, scopes }),
     protectedResource: buildOAuthProtectedResourceMetadata({ ...input, scopes }),

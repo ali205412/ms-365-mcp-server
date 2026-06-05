@@ -717,6 +717,59 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     expect(goodRes.status).toBe(200);
   });
 
+  it('burns refresh handle before upstream refresh so failed rotation is single-use', async () => {
+    harness = await startApp();
+    const clientVerifier = crypto.randomBytes(32).toString('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
+
+    await harness.pkceStore.put(harness.tenant.id, {
+      state: 'state',
+      clientCodeChallenge: clientChallenge,
+      clientCodeChallengeMethod: 'S256',
+      serverCodeVerifier: 'server-verifier-xyz',
+      clientId: harness.tenant.client_id,
+      redirectUri: 'http://localhost:3000/callback',
+      tenantId: harness.tenant.id,
+      createdAt: Date.now(),
+    });
+
+    const codeRes = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: 'the-auth-code',
+        redirect_uri: 'http://localhost:3000/callback',
+        code_verifier: clientVerifier,
+      }),
+    });
+    const codeBody = (await codeRes.json()) as { refresh_token: string };
+    harness.mockMsalAcquireSilent.mockResolvedValueOnce(null);
+
+    const failedRefresh = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: codeBody.refresh_token,
+        client_id: harness.tenant.client_id,
+      }),
+    });
+    expect(failedRefresh.status).toBe(400);
+
+    const replay = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: codeBody.refresh_token,
+        client_id: harness.tenant.client_id,
+      }),
+    });
+    expect(replay.status).toBe(400);
+    expect(harness.mockMsalAcquireSilent).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects refresh before MSAL when stored scopes are no longer tenant-allowed', async () => {
     harness = await startApp({ allowed_scopes: ['Mail.Read'] });
     const clientVerifier = crypto.randomBytes(32).toString('base64url');

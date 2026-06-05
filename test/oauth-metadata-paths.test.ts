@@ -71,6 +71,20 @@ describe('OAuth and connector metadata identity projection', () => {
     expect(metadata.endpoints.oauthProtectedResource).toBe(
       `${publicBaseUrl}/t/${tenantId}/.well-known/oauth-protected-resource`
     );
+    expect(metadata.endpoints.dynamicClientRegistration).toBeUndefined();
+  });
+
+  it('only advertises tenant connector DCR metadata when that route is mounted', () => {
+    const metadata = buildConnectorWellKnownMetadata({
+      publicBaseUrl,
+      tenantId,
+      version: '1.2.3',
+      dynamicRegistration: true,
+    });
+
+    expect(metadata.endpoints.dynamicClientRegistration).toBe(
+      `${publicBaseUrl}/t/${tenantId}/register`
+    );
   });
 
   it('builds WWW-Authenticate resource metadata URL for the tenant protected-resource document', () => {

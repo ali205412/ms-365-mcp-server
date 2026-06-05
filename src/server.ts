@@ -715,6 +715,7 @@ class MicrosoftGraphServer {
           tenantId: tenant.id,
           tenantDisplayName: tenant.slug,
           version: this.version,
+          dynamicRegistration: this.options.enableDynamicRegistration && durableDcrAvailable,
         })
       );
     });

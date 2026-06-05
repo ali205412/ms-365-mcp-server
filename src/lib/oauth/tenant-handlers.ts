@@ -470,19 +470,6 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
           return;
         }
 
-        const msal = await tenantPool.acquire(tenant);
-        const fresh = await refreshDelegatedSession(msal, session.record);
-        if (!fresh?.accessToken) {
-          emitTokenAudit(
-            tenant.id,
-            'failure',
-            refreshAuditMeta('invalid_grant', { reason: 'upstream_refresh_failed', clientIdHash }),
-            req
-          );
-          res.status(400).json({ error: 'invalid_grant' });
-          return;
-        }
-
         const consumed = await consumeGatewayRefreshSession({
           redis,
           sessionStore,
@@ -494,6 +481,19 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
             tenant.id,
             'failure',
             refreshAuditMeta('invalid_grant', { reason: 'rotation_mismatch', clientIdHash }),
+            req
+          );
+          res.status(400).json({ error: 'invalid_grant' });
+          return;
+        }
+
+        const msal = await tenantPool.acquire(tenant);
+        const fresh = await refreshDelegatedSession(msal, session.record);
+        if (!fresh?.accessToken) {
+          emitTokenAudit(
+            tenant.id,
+            'failure',
+            refreshAuditMeta('invalid_grant', { reason: 'upstream_refresh_failed', clientIdHash }),
             req
           );
           res.status(400).json({ error: 'invalid_grant' });
