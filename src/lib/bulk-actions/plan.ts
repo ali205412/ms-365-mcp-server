@@ -363,6 +363,9 @@ export function buildBulkPlan(
   const expiresAt = input.confirmation?.expiresAt
     ? new Date(input.confirmation.expiresAt)
     : new Date(now.getTime() + BULK_LIMITS.planTtlMs);
+  if (!Number.isFinite(expiresAt.getTime())) {
+    return { error: 'invalid_bulk_item', message: 'Bulk confirmation expiresAt is invalid.' };
+  }
   const seenIds = new Set<string>();
   const executionParameters = new Map<string, Record<string, unknown>>();
 

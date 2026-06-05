@@ -92,7 +92,13 @@ function codeFromResult(result: CallToolResult): string | undefined {
 
 function retryAfterFromResult(result: CallToolResult): number | undefined {
   const value = result._meta?.retryAfterSeconds;
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const graph = result._meta?.graph;
+  if (typeof graph !== 'object' || graph === null) return undefined;
+  const graphRetryAfter = (graph as Record<string, unknown>).retryAfterSeconds;
+  return typeof graphRetryAfter === 'number' && Number.isFinite(graphRetryAfter)
+    ? graphRetryAfter
+    : undefined;
 }
 
 function shapeItemData(mode: BulkOutputMode, result: CallToolResult): unknown {
@@ -293,6 +299,24 @@ async function handleBulkAction(
     });
   }
 
+  if (input.outputMode === 'full' && !readBulkResultAvailable(options)) {
+    auditBulk('bulk-action.execute.blocked', 'failure', {
+      digestPrefix: plan.planDigest.slice(0, 12),
+      itemCount: plan.items.length,
+      code: 'result_store_unavailable',
+      outputMode: input.outputMode,
+    });
+    return createMcpErrorEnvelope({
+      toolName: BULK_ACTION_TOOL,
+      summary: 'Bulk action full output is unavailable for this tenant.',
+      code: 'result_store_unavailable',
+      message:
+        'Enable read-bulk-result with bulk-action or choose outputMode summary, errors, or ids.',
+      data: planSummary,
+      warnings: ['no_items_executed'],
+    });
+  }
+
   if (plan.requiresConfirmation) {
     if (!input.confirmation) {
       auditBulk('bulk-action.confirmation_required', 'failure', {
@@ -398,7 +422,7 @@ async function handleBulkAction(
       );
     } catch (error) {
       result = {
-        content: [{ type: 'text', text: JSON.stringify({ error: (error as Error).message }) }],
+        content: [{ type: 'text', text: JSON.stringify({ error: 'Bulk item execution failed.' }) }],
         _meta: {
           errorCode: (error as Error).name === 'AbortError' ? 'cancelled' : 'graph_item_failed',
         },
@@ -456,6 +480,21 @@ async function handleBulkAction(
   let resultId: string | undefined;
   let resultExpiresAt: string | undefined;
   if (input.outputMode === 'full' || byteLength(preliminary) > BULK_LIMITS.maxInlineResultBytes) {
+    if (!readBulkResultAvailable(options)) {
+      return createMcpErrorEnvelope({
+        toolName: BULK_ACTION_TOOL,
+        summary:
+          'Bulk action result exceeds inline output budget and cannot be stored for this tenant.',
+        code: 'result_store_unavailable',
+        message: 'Enable read-bulk-result with bulk-action or choose a more compact outputMode.',
+        data: renderBulkOutput({
+          planSummary,
+          executionItems: results,
+          outputMode: 'summary',
+          status,
+        }),
+      });
+    }
     const stored = storeBulkResult({
       digest: plan.planDigest,
       items: results,
@@ -566,6 +605,14 @@ function setAllows(enabledToolsSet: ReadonlySet<string> | undefined, alias: stri
   return enabledToolsSet === undefined || enabledToolsSet.size === 0 || enabledToolsSet.has(alias);
 }
 
+function readBulkResultAvailable(options: RegisterBulkActionToolsOptions): boolean {
+  return (
+    patternAllows(options.enabledToolsPattern, READ_BULK_RESULT_TOOL) &&
+    setAllows(options.enabledToolsSet, READ_BULK_RESULT_TOOL) &&
+    syntheticAllowed(READ_BULK_RESULT_TOOL) === null
+  );
+}
+
 export function registerBulkActionTools(
   server: McpServer,
   options: RegisterBulkActionToolsOptions
@@ -597,7 +644,7 @@ export function registerBulkActionTools(
           .object({
             planDigest: z.string(),
             confirmed: z.literal(true),
-            expiresAt: z.string().optional(),
+            expiresAt: z.string().datetime().optional(),
           })
           .optional(),
       },

@@ -435,6 +435,10 @@ class GraphClient {
           finalMessage +=
             '. This tool requires organization mode. Please restart with --org-mode flag.';
         }
+        const retryAfterSeconds =
+          typeof error.retryAfterMs === 'number' && Number.isFinite(error.retryAfterMs)
+            ? Math.max(1, Math.ceil(error.retryAfterMs / 1000))
+            : undefined;
         return {
           content: [
             {
@@ -448,12 +452,14 @@ class GraphClient {
           ],
           isError: true,
           _meta: {
+            retryAfterSeconds,
             graph: {
               code: error.code,
               statusCode: error.statusCode,
               requestId: error.requestId,
               clientRequestId: error.clientRequestId,
               date: error.date,
+              retryAfterSeconds,
             },
           },
         };

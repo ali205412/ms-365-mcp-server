@@ -327,6 +327,127 @@ describe('generic bulk-action tool', () => {
     expect(JSON.stringify(payload)).toContain('graph_throttled');
   });
 
+  it('propagates GraphClient-shaped 429 retry metadata into failed bulk items', async () => {
+    resetBulkResultStoreForTesting();
+    const { server, handlers } = makeServer();
+    const executeToolAlias = vi.fn(async () => ({
+      isError: true,
+      _meta: { graph: { code: 'TooManyRequests', statusCode: 429, retryAfterSeconds: 7 } },
+      content: [{ type: 'text', text: JSON.stringify({ code: 'TooManyRequests' }) }],
+    }));
+    registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias: executeToolAlias as never,
+    });
+
+    const items = [
+      { id: 'read-1', toolName: 'get-chat', parameters: { chatId: 'a' } },
+      { id: 'read-2', toolName: 'get-chat', parameters: { chatId: 'b' } },
+    ];
+    const preview = await withTenant([BULK_ACTION_TOOL, 'get-chat'], async () =>
+      handlers.get(BULK_ACTION_TOOL)!({ mode: 'preview', outputMode: 'errors', items })
+    );
+    const result = await withTenant([BULK_ACTION_TOOL, 'get-chat'], async () =>
+      handlers.get(BULK_ACTION_TOOL)!({
+        mode: 'execute',
+        outputMode: 'errors',
+        confirmation: asRecord(dataFrom(preview)).confirmation,
+        items,
+      })
+    );
+    const serialized = JSON.stringify(dataFrom(result));
+    expect(executeToolAlias).toHaveBeenCalledTimes(1);
+    expect(serialized).toContain('graph_throttled');
+    expect(serialized).toContain('"retryAfterSeconds":7');
+  });
+
+  it('sanitizes thrown alias errors in bulk item output', async () => {
+    resetBulkResultStoreForTesting();
+    const { server, handlers } = makeServer();
+    const executeToolAlias = vi.fn(async () => {
+      throw new Error('raw-token-123 private@example.com should stay private');
+    });
+    registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias,
+    });
+
+    const items = [{ id: 'read-1', toolName: 'get-chat', parameters: { chatId: 'chat-id' } }];
+    const preview = await withTenant([BULK_ACTION_TOOL, 'get-chat'], async () =>
+      handlers.get(BULK_ACTION_TOOL)!({ mode: 'preview', outputMode: 'errors', items })
+    );
+    const result = await withTenant([BULK_ACTION_TOOL, 'get-chat'], async () =>
+      handlers.get(BULK_ACTION_TOOL)!({
+        mode: 'execute',
+        outputMode: 'errors',
+        confirmation: asRecord(dataFrom(preview)).confirmation,
+        items,
+      })
+    );
+    const serialized = JSON.stringify(dataFrom(result));
+    expect(result.isError).not.toBe(true);
+    expect(serialized).toContain('graph_item_failed');
+    expect(serialized).not.toContain('raw-token-123');
+    expect(serialized).not.toContain('private@example.com');
+    expect(serialized).not.toContain('should stay private');
+  });
+
+  it('returns a typed error instead of throwing for malformed confirmation expiry', async () => {
+    resetBulkResultStoreForTesting();
+    const { server, handlers } = makeServer();
+    const executeToolAlias = vi.fn(async () => ({
+      content: [{ type: 'text', text: JSON.stringify({ id: 'safe-id' }) }],
+    }));
+    registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias,
+    });
+
+    const result = await withTenant([BULK_ACTION_TOOL, 'get-chat'], async () =>
+      handlers.get(BULK_ACTION_TOOL)!({
+        mode: 'execute',
+        outputMode: 'summary',
+        confirmation: { confirmed: true, planDigest: '0'.repeat(64), expiresAt: 'not-a-date' },
+        items: [{ id: 'read-1', toolName: 'get-chat', parameters: { chatId: 'chat-id' } }],
+      })
+    );
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(dataFrom(result))).toContain('invalid_bulk_item');
+    expect(executeToolAlias).not.toHaveBeenCalled();
+  });
+
+  it('blocks full output execution when read-bulk-result is not registered for the tenant', async () => {
+    resetBulkResultStoreForTesting();
+    const { server, handlers } = makeServer();
+    const executeToolAlias = vi.fn(async () => ({
+      content: [{ type: 'text', text: JSON.stringify({ id: 'safe-id' }) }],
+    }));
+    registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias,
+      enabledToolsSet: new Set([BULK_ACTION_TOOL]),
+    });
+
+    const result = await withTenant([BULK_ACTION_TOOL, 'get-chat'], async () =>
+      handlers.get(BULK_ACTION_TOOL)!({
+        mode: 'execute',
+        outputMode: 'full',
+        items: [{ id: 'read-1', toolName: 'get-chat', parameters: { chatId: 'chat-id' } }],
+      })
+    );
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(dataFrom(result))).toContain('result_store_unavailable');
+    expect(executeToolAlias).not.toHaveBeenCalled();
+  });
+
   it('marks an in-flight aborted item as cancelled', async () => {
     resetBulkResultStoreForTesting();
     const { server, handlers } = makeServer();

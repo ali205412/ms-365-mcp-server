@@ -326,6 +326,14 @@ function retryAfterSecondsFromError(error: unknown): number | undefined {
   return Math.max(1, Math.ceil(retryAfterMs / 1000));
 }
 
+function safeRequestIdFromError(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null || !('requestId' in error)) return undefined;
+  const requestId = (error as { requestId?: unknown }).requestId;
+  return typeof requestId === 'string' && /^[a-zA-Z0-9_.:-]{1,128}$/.test(requestId)
+    ? requestId
+    : undefined;
+}
+
 function summarizeBodyValue(body: unknown): Record<string, unknown> {
   if (body === undefined || body === null) {
     return { present: false };
@@ -1218,19 +1226,33 @@ async function executeGraphToolInner(
       isError: response.isError,
     };
   } catch (error) {
-    logger.error(`Error in tool ${tool.alias}: ${(error as Error).message}`);
+    const errorCode = codeFromError(error);
+    const retryAfterSeconds = retryAfterSecondsFromError(error);
+    const requestId = safeRequestIdFromError(error);
+    logger.error(
+      {
+        alias: tool.alias,
+        errorCode,
+        retryAfterSeconds,
+        requestId,
+      },
+      'Graph tool execution failed'
+    );
     return {
       content: [
         {
           type: 'text',
           text: JSON.stringify({
-            error: `Error in tool ${tool.alias}: ${(error as Error).message}`,
+            error: `Error in tool ${tool.alias}: tool execution failed.`,
+            code: errorCode,
+            requestId,
           }),
         },
       ],
       _meta: {
-        errorCode: codeFromError(error),
-        retryAfterSeconds: retryAfterSecondsFromError(error),
+        errorCode,
+        retryAfterSeconds,
+        requestId,
       },
       isError: true,
     };
