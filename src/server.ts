@@ -1150,6 +1150,7 @@ class MicrosoftGraphServer {
         // MCP connectors whose redirect_uri lives off-host (Claude.ai etc.).
         app.post(
           '/register',
+          legacyOauthRouteRateLimit,
           createRegisterHandler({
             mode: isProdMode ? 'prod' : 'dev',
             publicUrlHost,
