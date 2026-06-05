@@ -122,15 +122,37 @@ describe('plan 06-03 — /metrics integration contract (OPS-07)', () => {
     vi.restoreAllMocks();
   });
 
-  async function startServer(bearerToken: string | null): Promise<string> {
+  async function startServer(bearerToken: string | null, host?: string): Promise<string> {
     const { createMetricsServer } = await import('../../src/lib/metrics-server/metrics-server.js');
-    metricsServer = createMetricsServer(exporter, { port: 0, bearerToken });
+    metricsServer = createMetricsServer(exporter, { port: 0, bearerToken, host });
     await new Promise<void>((resolve) => {
       metricsServer!.once('listening', () => resolve());
     });
     const { port } = metricsServer!.address() as AddressInfo;
     return `http://127.0.0.1:${port}`;
   }
+
+  it('binds to localhost by default and rejects public unauthenticated binds', async () => {
+    const { createMetricsServer } = await import('../../src/lib/metrics-server/metrics-server.js');
+    metricsServer = createMetricsServer(exporter, { port: 0, bearerToken: null });
+    await new Promise<void>((resolve) => {
+      metricsServer!.once('listening', () => resolve());
+    });
+    const address = metricsServer.address() as AddressInfo;
+    expect(address.address).toBe('127.0.0.1');
+    await new Promise<void>((resolve) => metricsServer!.close(() => resolve()));
+    metricsServer = undefined;
+
+    expect(() =>
+      createMetricsServer(exporter, { port: 0, bearerToken: null, host: '0.0.0.0' })
+    ).toThrow(/METRICS_BEARER/);
+  });
+
+  it('allows public metrics binds when Bearer auth is configured', async () => {
+    const baseUrl = await startServer('integration-token-abc', '0.0.0.0');
+    const res = await fetch(`${baseUrl}/healthz`);
+    expect(res.status).toBe(200);
+  });
 
   it('GET /metrics without Bearer when token is set → 401 + WWW-Authenticate: Bearer', async () => {
     const baseUrl = await startServer('integration-token-abc');

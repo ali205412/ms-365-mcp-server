@@ -90,7 +90,9 @@ function buildUrls(input: { publicBaseUrl: string; tenantId?: string | null }): 
     oauthProtectedResource: `${tenantBaseUrl}/.well-known/oauth-protected-resource`,
     oauthProtectedResourceRfc8414: `${publicBaseUrl}/.well-known/oauth-protected-resource${tenantSuffix}`,
     connectorWellKnown: `${tenantBaseUrl}/.well-known/mcp-connector`,
-    dynamicClientRegistration: input.tenantId ? `${tenantBaseUrl}/register` : `${publicBaseUrl}/register`,
+    dynamicClientRegistration: input.tenantId
+      ? `${tenantBaseUrl}/register`
+      : `${publicBaseUrl}/register`,
   };
 }
 
@@ -130,7 +132,7 @@ export function buildOAuthAuthorizationServerMetadata(
     token_endpoint: `${urls.tenantBaseUrl}/token`,
     response_types_supported: ['code'],
     response_modes_supported: ['query'],
-    grant_types_supported: ['authorization_code'],
+    grant_types_supported: ['authorization_code', 'refresh_token'],
     token_endpoint_auth_methods_supported: ['none'],
     code_challenge_methods_supported: ['S256'],
     scopes_supported: input.scopes,

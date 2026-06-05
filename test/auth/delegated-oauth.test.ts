@@ -193,6 +193,72 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     expect(entry?.redirectUri).toBe('http://localhost:3000/callback');
   });
 
+  it('forwards only requested tenant-allowed scopes to Microsoft', async () => {
+    harness = await startApp({ allowed_scopes: ['User.Read', 'Mail.ReadWrite'] });
+
+    const clientVerifier = crypto.randomBytes(32).toString('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
+    const params = new URLSearchParams({
+      redirect_uri: 'http://localhost:3000/callback',
+      code_challenge: clientChallenge,
+      code_challenge_method: 'S256',
+      state: 'scope-test',
+      client_id: harness.tenant.client_id,
+      scope: 'Mail.Read',
+    });
+
+    const res = await fetch(`${harness.url}/authorize?${params}`, { redirect: 'manual' });
+
+    expect(res.status).toBe(302);
+    const location = res.headers.get('location');
+    expect(location).toBeTruthy();
+    const loc = new URL(location!);
+    expect(loc.searchParams.get('scope')).toBe('Mail.Read');
+  });
+
+  it('rejects requested scopes not permitted by the tenant', async () => {
+    harness = await startApp({ allowed_scopes: ['User.Read'] });
+
+    const clientVerifier = crypto.randomBytes(32).toString('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
+    const params = new URLSearchParams({
+      redirect_uri: 'http://localhost:3000/callback',
+      code_challenge: clientChallenge,
+      code_challenge_method: 'S256',
+      state: 'scope-test',
+      client_id: harness.tenant.client_id,
+      scope: 'Mail.Read',
+    });
+
+    const res = await fetch(`${harness.url}/authorize?${params}`, { redirect: 'manual' });
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('invalid_scope');
+  });
+
+  it('preserves exact static redirect allowlist entries outside the public host policy', async () => {
+    const redirectUri = 'https://tenant-owned.example.org/oauth/callback';
+    harness = await startApp(
+      { redirect_uri_allowlist: [redirectUri] },
+      { publicUrlHost: 'mcp.example.com' }
+    );
+
+    const clientVerifier = crypto.randomBytes(32).toString('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
+    const params = new URLSearchParams({
+      redirect_uri: redirectUri,
+      code_challenge: clientChallenge,
+      code_challenge_method: 'S256',
+      state: 'static-allowlist-test',
+      client_id: harness.tenant.client_id,
+    });
+
+    const res = await fetch(`${harness.url}/authorize?${params}`, { redirect: 'manual' });
+
+    expect(res.status).toBe(302);
+  });
+
   it('Test 2: /authorize with redirect_uri NOT in allowlist → 400 invalid_redirect_uri', async () => {
     harness = await startApp({
       redirect_uri_allowlist: ['http://localhost:3000/callback'],

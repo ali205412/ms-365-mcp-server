@@ -27,6 +27,7 @@ describe('OAuth and connector metadata identity projection', () => {
     expect(metadata.client_name).toBe('Microsoft 365 MCP Gateway');
     expect(metadata.display_name).toBe('Microsoft 365 MCP Gateway');
     expect(metadata.server_info).toEqual({ name: 'Microsoft365MCP', version: '1.2.3' });
+    expect(metadata.grant_types_supported).toEqual(['authorization_code', 'refresh_token']);
     expect(JSON.stringify(metadata)).not.toContain('ToolHub');
   });
 

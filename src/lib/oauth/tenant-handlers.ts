@@ -6,6 +6,7 @@ import { getCloudEndpoints } from '../../cloud-config.js';
 import { getRequestTokens } from '../../request-context.js';
 import { isSameAuthorizeRequest } from './authorize-request-identity.js';
 import { validateRedirectUri } from '../redirect-uri.js';
+import { tenantScopeSatisfies } from '../scope-satisfaction.js';
 import {
   getActiveOAuthClientRegistration,
   hasExactRedirectUri,
@@ -17,9 +18,8 @@ import {
 } from '../delegated-access-tokens.js';
 import { SessionStore } from '../session-store.js';
 import {
-  lookupGatewayRefreshSession,
+  consumeGatewayRefreshSession,
   mintGatewayRefreshToken,
-  rotateGatewayRefreshToken,
   storeGatewayRefreshToken,
 } from './refresh-handles.js';
 import type { RedisClient } from '../redis.js';
@@ -81,34 +81,40 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
     }
 
     const redirectUri = String(req.query.redirect_uri ?? '');
-    const schemeCheck = validateRedirectUri(redirectUri, {
-      mode: 'prod',
-      publicUrlHost: publicUrlHost ?? null,
-      extraAllowedHosts,
-    });
-    if (!schemeCheck.ok) {
-      emitAudit(
-        tenant.id,
-        'failure',
-        redirectUri,
-        { error: 'invalid_redirect_uri', reason: schemeCheck.reason },
-        req
-      );
-      res.status(400).json({ error: 'invalid_redirect_uri', reason: schemeCheck.reason });
-      return;
-    }
-
     const clientId = String(req.query.client_id ?? tenant.client_id);
     const allowedByStaticClient =
       clientId === tenant.client_id && tenant.redirect_uri_allowlist.includes(redirectUri);
+    {
+      const schemeCheck = validateRedirectUri(
+        redirectUri,
+        allowedByStaticClient
+          ? { mode: 'dev', publicUrlHost: null }
+          : {
+              mode: process.env.NODE_ENV === 'production' ? 'prod' : 'dev',
+              publicUrlHost: publicUrlHost ?? null,
+              extraAllowedHosts,
+            }
+      );
+      if (!schemeCheck.ok) {
+        emitAudit(
+          tenant.id,
+          'failure',
+          redirectUri,
+          { error: 'invalid_redirect_uri', reason: schemeCheck.reason },
+          req
+        );
+        res.status(400).json({ error: 'invalid_redirect_uri', reason: schemeCheck.reason });
+        return;
+      }
+    }
     let allowedByDynamicClient = false;
     if (!allowedByStaticClient && pgPool) {
       const registration = await getActiveOAuthClientRegistration(pgPool, tenant.id, clientId);
       allowedByDynamicClient = Boolean(
         registration &&
-          hasExactRedirectUri(registration, redirectUri) &&
-          registration.grantTypes.includes('authorization_code') &&
-          registration.responseTypes.includes('code')
+        hasExactRedirectUri(registration, redirectUri) &&
+        registration.grantTypes.includes('authorization_code') &&
+        registration.responseTypes.includes('code')
       );
       if (allowedByDynamicClient) {
         await touchOAuthClientRegistration(pgPool, tenant.id, clientId);
@@ -135,6 +141,21 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
     const state = String(req.query.state ?? crypto.randomBytes(16).toString('base64url'));
     const tenantKey = tenant.id;
 
+    const requestedScopes = String(req.query.scope ?? '')
+      .split(/\s+/)
+      .map((scope) => scope.trim())
+      .filter(Boolean);
+    const allowedScopes = tenant.allowed_scopes.length ? tenant.allowed_scopes : ['User.Read'];
+    const effectiveScopes = requestedScopes.length ? requestedScopes : ['User.Read'];
+    const disallowedScopes = effectiveScopes.filter(
+      (scope) => !tenantScopeSatisfies(allowedScopes, scope)
+    );
+    if (disallowedScopes.length > 0) {
+      emitAudit(tenant.id, 'failure', redirectUri, { error: 'invalid_scope' }, req);
+      res.status(400).json({ error: 'invalid_scope' });
+      return;
+    }
+
     const serverCodeVerifier = crypto.randomBytes(32).toString('base64url');
     let serverChallenge = pkceChallengeForVerifier(serverCodeVerifier);
     const pkceEntry: PkceEntry = {
@@ -145,6 +166,7 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
       clientId,
       redirectUri,
       tenantId: tenantKey,
+      scopes: effectiveScopes,
       createdAt: Date.now(),
     };
 
@@ -180,10 +202,7 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
     authorizeUrl.searchParams.set('client_id', tenant.client_id);
     authorizeUrl.searchParams.set('response_type', 'code');
     authorizeUrl.searchParams.set('redirect_uri', redirectUri);
-    authorizeUrl.searchParams.set(
-      'scope',
-      tenant.allowed_scopes.length ? tenant.allowed_scopes.join(' ') : 'User.Read'
-    );
+    authorizeUrl.searchParams.set('scope', effectiveScopes.join(' '));
     authorizeUrl.searchParams.set('state', state);
     authorizeUrl.searchParams.set('code_challenge', serverChallenge);
     authorizeUrl.searchParams.set('code_challenge_method', 'S256');
@@ -202,8 +221,9 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
       'success',
       redirectUri,
       {
-        clientId: tenant.client_id,
-        scopes: tenant.allowed_scopes,
+        clientId,
+        clientSource: allowedByStaticClient ? 'static' : 'dynamic',
+        scopes: effectiveScopes,
       },
       req
     );
@@ -239,7 +259,8 @@ function isRefreshMsalClient(client: unknown): client is RefreshMsalClient {
     typeof client === 'object' &&
     client !== null &&
     'acquireTokenByRefreshToken' in client &&
-    typeof (client as { acquireTokenByRefreshToken: unknown }).acquireTokenByRefreshToken === 'function'
+    typeof (client as { acquireTokenByRefreshToken: unknown }).acquireTokenByRefreshToken ===
+      'function'
   );
 }
 
@@ -304,13 +325,15 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
     if (grantType === 'refresh_token') {
       const submittedRefreshToken = String(body?.refresh_token ?? '');
       if (!submittedRefreshToken) {
-        res.status(400).json({ error: 'invalid_request', error_description: 'refresh_token required' });
+        res
+          .status(400)
+          .json({ error: 'invalid_request', error_description: 'refresh_token required' });
         return;
       }
       try {
         const dek = tenantPool.getDekForTenant(tenant.id);
         const sessionStore = new SessionStore(redis, dek);
-        const session = await lookupGatewayRefreshSession({
+        const session = await consumeGatewayRefreshSession({
           redis,
           sessionStore,
           tenantId: tenant.id,
@@ -320,6 +343,28 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
           res.status(400).json({ error: 'invalid_grant' });
           return;
         }
+
+        const submittedClientId = String(body?.client_id ?? '');
+        if (!submittedClientId || submittedClientId !== session.record.clientId) {
+          res.status(400).json({ error: 'invalid_grant' });
+          return;
+        }
+        if (submittedClientId !== tenant.client_id) {
+          if (!pgPool) {
+            res.status(400).json({ error: 'invalid_grant' });
+            return;
+          }
+          const registration = await getActiveOAuthClientRegistration(
+            pgPool,
+            tenant.id,
+            submittedClientId
+          );
+          if (!registration || !registration.grantTypes.includes('refresh_token')) {
+            res.status(400).json({ error: 'invalid_grant' });
+            return;
+          }
+        }
+
         const msal = await tenantPool.acquire(tenant);
         if (!isRefreshMsalClient(msal)) {
           res.status(400).json({ error: 'unsupported_grant_type' });
@@ -342,18 +387,13 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
           createdAt: Date.now(),
         });
         const nextRefreshToken = mintGatewayRefreshToken();
-        const rotated = await rotateGatewayRefreshToken({
+        await storeGatewayRefreshToken({
           redis,
           tenantId: tenant.id,
-          oldRefreshToken: submittedRefreshToken,
-          newRefreshToken: nextRefreshToken,
+          refreshToken: nextRefreshToken,
           accessToken: fresh.accessToken,
         });
-        if (!rotated) {
-          res.status(400).json({ error: 'invalid_grant' });
-          return;
-        }
-        await sessionStore.delete(tenant.id, session.accessToken);
+        await sessionStore.deleteByAccessTokenHash(tenant.id, session.accessTokenHash);
         await rememberDelegatedAccessToken({
           redis,
           tenantId: tenant.id,
@@ -421,7 +461,12 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
       entry.redirectUri !== submittedRedirectUri ||
       entry.clientCodeChallengeMethod !== 'S256'
     ) {
-      emitTokenAudit(tenant.id, 'failure', { error: 'invalid_grant', reason: 'binding mismatch' }, req);
+      emitTokenAudit(
+        tenant.id,
+        'failure',
+        { error: 'invalid_grant', reason: 'binding mismatch' },
+        req
+      );
       res.status(400).json({ error: 'invalid_grant', error_description: 'binding mismatch' });
       return;
     }
@@ -434,7 +479,7 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
         return;
       }
 
-      const scopes = tenant.allowed_scopes.length ? tenant.allowed_scopes : ['User.Read'];
+      const scopes = entry.scopes?.length ? entry.scopes : ['User.Read'];
       const result = await msal.acquireTokenByCode({
         code: String(body?.code ?? ''),
         scopes,

@@ -5,7 +5,7 @@ import { hashAccessToken, type SessionRecord, type SessionStore } from '../sessi
 const DEFAULT_TTL_SECONDS = 14 * 24 * 60 * 60;
 
 export interface GatewayRefreshSession {
-  accessToken: string;
+  accessTokenHash: string;
   record: SessionRecord;
 }
 
@@ -18,6 +18,10 @@ function hashRefreshToken(refreshToken: string): string {
 }
 
 function refreshKey(tenantId: string, refreshToken: string): string {
+  return `mcp:refresh:${tenantId}:${hashRefreshToken(refreshToken)}`;
+}
+
+function legacyRefreshKey(tenantId: string, refreshToken: string): string {
   return `mcp:session:${tenantId}:refresh:${hashRefreshToken(refreshToken)}`;
 }
 
@@ -28,6 +32,39 @@ function resolveTtl(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TTL_SECONDS;
 }
 
+async function getRefreshHandle(args: {
+  redis: RedisClient;
+  tenantId: string;
+  refreshToken: string;
+  consume: boolean;
+}): Promise<string | null> {
+  const read = args.consume ? args.redis.getdel.bind(args.redis) : args.redis.get.bind(args.redis);
+  const current = await read(refreshKey(args.tenantId, args.refreshToken));
+  if (current) return current;
+
+  // Backward compatibility for refresh handles issued before the plaintext fix.
+  // Consumption migrates the client onto the safe mcp:refresh:* namespace.
+  return await read(legacyRefreshKey(args.tenantId, args.refreshToken));
+}
+
+async function resolveRefreshSession(args: {
+  redis: RedisClient;
+  sessionStore: SessionStore;
+  tenantId: string;
+  refreshToken: string;
+  consume: boolean;
+}): Promise<GatewayRefreshSession | null> {
+  const raw = await getRefreshHandle(args);
+  if (!raw) return null;
+  const parsed = JSON.parse(raw) as { accessTokenHash?: string; accessToken?: string };
+  const accessTokenHash =
+    parsed.accessTokenHash ??
+    (parsed.accessToken ? hashAccessToken(parsed.accessToken) : undefined);
+  if (!accessTokenHash) return null;
+  const record = await args.sessionStore.getByAccessTokenHash(args.tenantId, accessTokenHash);
+  return record ? { accessTokenHash, record } : null;
+}
+
 export async function storeGatewayRefreshToken(args: {
   redis: RedisClient;
   tenantId: string;
@@ -36,7 +73,7 @@ export async function storeGatewayRefreshToken(args: {
 }): Promise<void> {
   await args.redis.set(
     refreshKey(args.tenantId, args.refreshToken),
-    JSON.stringify({ accessTokenHash: hashAccessToken(args.accessToken), accessToken: args.accessToken }),
+    JSON.stringify({ accessTokenHash: hashAccessToken(args.accessToken) }),
     'EX',
     resolveTtl()
   );
@@ -48,31 +85,16 @@ export async function lookupGatewayRefreshSession(args: {
   tenantId: string;
   refreshToken: string;
 }): Promise<GatewayRefreshSession | null> {
-  const raw = await args.redis.get(refreshKey(args.tenantId, args.refreshToken));
-  if (!raw) return null;
-  const parsed = JSON.parse(raw) as { accessToken?: string };
-  if (!parsed.accessToken) return null;
-  const record = await args.sessionStore.get(args.tenantId, parsed.accessToken);
-  return record ? { accessToken: parsed.accessToken, record } : null;
+  return await resolveRefreshSession({ ...args, consume: false });
 }
 
-export async function rotateGatewayRefreshToken(args: {
+export async function consumeGatewayRefreshSession(args: {
   redis: RedisClient;
+  sessionStore: SessionStore;
   tenantId: string;
-  oldRefreshToken: string;
-  newRefreshToken: string;
-  accessToken: string;
-}): Promise<boolean> {
-  const oldKey = refreshKey(args.tenantId, args.oldRefreshToken);
-  const consumed = await args.redis.getdel(oldKey);
-  if (!consumed) return false;
-  await storeGatewayRefreshToken({
-    redis: args.redis,
-    tenantId: args.tenantId,
-    refreshToken: args.newRefreshToken,
-    accessToken: args.accessToken,
-  });
-  return true;
+  refreshToken: string;
+}): Promise<GatewayRefreshSession | null> {
+  return await resolveRefreshSession({ ...args, consume: true });
 }
 
 export async function revokeGatewayRefreshToken(args: {
@@ -80,5 +102,8 @@ export async function revokeGatewayRefreshToken(args: {
   tenantId: string;
   refreshToken: string;
 }): Promise<void> {
-  await args.redis.del(refreshKey(args.tenantId, args.refreshToken));
+  await args.redis.del(
+    refreshKey(args.tenantId, args.refreshToken),
+    legacyRefreshKey(args.tenantId, args.refreshToken)
+  );
 }

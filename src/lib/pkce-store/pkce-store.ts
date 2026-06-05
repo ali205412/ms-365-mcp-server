@@ -33,6 +33,7 @@ export interface PkceEntry {
   clientId: string;
   redirectUri: string;
   tenantId: string;
+  scopes?: string[];
   createdAt: number;
   forwardedAuthorizeParams?: Record<string, string>;
 }

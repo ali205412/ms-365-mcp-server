@@ -17,21 +17,49 @@ function stringList(value: unknown, fallback: readonly string[]): string[] {
   return filtered.length ? [...new Set(filtered)] : [...fallback];
 }
 
+function hasUnsupportedValues(values: readonly string[], supported: readonly string[]): boolean {
+  return values.some((value) => !supported.includes(value));
+}
+
 function safeClientName(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed.slice(0, 128) : undefined;
 }
 
-export function createRegisterHandler(policy: RedirectUriPolicy, options: RegisterHandlerOptions = {}) {
+export function createRegisterHandler(
+  policy: RedirectUriPolicy,
+  options: RegisterHandlerOptions = {}
+) {
   return async (req: Request, res: Response): Promise<void> => {
     const body = (req.body as Record<string, unknown>) ?? {};
-    const grantTypes = stringList(body.grant_types, ['authorization_code']).filter(
-      (grant) => grant === 'authorization_code' || grant === 'refresh_token'
-    );
-    const responseTypes = stringList(body.response_types, ['code']).filter((type) => type === 'code');
+    const grantTypes = stringList(body.grant_types, ['authorization_code']);
+    const responseTypes = stringList(body.response_types, ['code']);
     const tokenEndpointAuthMethod =
-      typeof body.token_endpoint_auth_method === 'string' ? body.token_endpoint_auth_method : 'none';
+      typeof body.token_endpoint_auth_method === 'string'
+        ? body.token_endpoint_auth_method
+        : 'none';
+    if (hasUnsupportedValues(grantTypes, ['authorization_code', 'refresh_token'])) {
+      res.status(400).json({
+        error: 'invalid_client_metadata',
+        error_description: 'Unsupported grant_type requested.',
+      });
+      return;
+    }
+    if (hasUnsupportedValues(responseTypes, ['code'])) {
+      res.status(400).json({
+        error: 'invalid_client_metadata',
+        error_description: 'Unsupported response_type requested.',
+      });
+      return;
+    }
+    if (tokenEndpointAuthMethod !== 'none') {
+      res.status(400).json({
+        error: 'invalid_client_metadata',
+        error_description: 'Only token_endpoint_auth_method "none" is supported.',
+      });
+      return;
+    }
     const clientName =
       safeClientName(body.client_name) ??
       resolveConnectorIdentity({ version: 'dynamic-registration' }).displayName;
@@ -39,8 +67,11 @@ export function createRegisterHandler(policy: RedirectUriPolicy, options: Regist
     logger.info(
       {
         durable: Boolean(options.pgPool && options.tenantId),
+        client_name: clientName,
+        grant_types: grantTypes,
         grantTypeCount: grantTypes.length,
         redirectUriCount: Array.isArray(body.redirect_uris) ? body.redirect_uris.length : 0,
+        redirect_uri_count: Array.isArray(body.redirect_uris) ? body.redirect_uris.length : 0,
       },
       'Client registration request'
     );
@@ -63,6 +94,7 @@ export function createRegisterHandler(policy: RedirectUriPolicy, options: Regist
         );
         res.status(400).json({
           error: 'invalid_redirect_uri',
+          redirect_uri: uri,
           reason: result.reason,
         });
         return;

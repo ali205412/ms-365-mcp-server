@@ -115,7 +115,7 @@ describe('POST /register — redirect_uri allowlist (AUTH-06, T-01-06)', () => {
     });
     expect(res.status).toBe(201);
     const body = res.body as { client_id?: string; redirect_uris?: string[] };
-    expect(body.client_id).toMatch(/^mcp-client-[0-9a-f]{16}$/);
+    expect(body.client_id).toMatch(/^mcp-client-[A-Za-z0-9_-]{32}$/);
     expect(body.redirect_uris).toEqual(['http://localhost:3000/cb']);
   });
 
@@ -164,6 +164,33 @@ describe('POST /register — redirect_uri allowlist (AUTH-06, T-01-06)', () => {
     server = await startMiniServer({ mode: 'prod', publicUrlHost: null });
     const res = await postJson(`${server.url}/register`, { redirect_uris: [] });
     expect(res.status).toBe(201);
+  });
+
+  it('rejects unsupported token endpoint authentication methods', async () => {
+    server = await startMiniServer({ mode: 'prod', publicUrlHost: null });
+    const res = await postJson(`${server.url}/register`, {
+      redirect_uris: ['http://localhost:3000/cb'],
+      token_endpoint_auth_method: 'client_secret_basic',
+    });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: 'invalid_client_metadata' });
+  });
+
+  it('rejects unsupported grant and response types instead of rewriting them', async () => {
+    server = await startMiniServer({ mode: 'prod', publicUrlHost: null });
+    const grantRes = await postJson(`${server.url}/register`, {
+      redirect_uris: ['http://localhost:3000/cb'],
+      grant_types: ['client_credentials'],
+    });
+    expect(grantRes.status).toBe(400);
+    expect(grantRes.body).toMatchObject({ error: 'invalid_client_metadata' });
+
+    const responseRes = await postJson(`${server.url}/register`, {
+      redirect_uris: ['http://localhost:3000/cb'],
+      response_types: ['token'],
+    });
+    expect(responseRes.status).toBe(400);
+    expect(responseRes.body).toMatchObject({ error: 'invalid_client_metadata' });
   });
 });
 

@@ -41,9 +41,9 @@ export interface MetricsServerConfig {
    * a kernel-assigned port.
    */
   port: number;
-  /** Bearer token gate. null / undefined / empty = open endpoint (D-02). */
+  /** Bearer token gate. null / undefined / empty is allowed only for localhost binds. */
   bearerToken: string | null | undefined;
-  /** Optional host bind. Default undefined = 0.0.0.0 (all interfaces). */
+  /** Optional host bind. Default undefined = 127.0.0.1. Public binds require Bearer auth. */
   host?: string;
 }
 
@@ -109,33 +109,30 @@ export function createMetricsServer(
   });
 
   const server = createServer(app);
-  if (config.host) {
-    server.listen(config.port, config.host, () => {
-      const addr = server.address();
-      const actualPort = typeof addr === 'object' && addr ? addr.port : config.port;
-      logger.info(
-        {
-          metricsPort: actualPort,
-          metricsHost: config.host,
-          bearerGated: isBearerGated(config.bearerToken),
-        },
-        'plan 06-03 — metrics server listening'
-      );
-    });
-  } else {
-    server.listen(config.port, () => {
-      const addr = server.address();
-      const actualPort = typeof addr === 'object' && addr ? addr.port : config.port;
-      logger.info(
-        { metricsPort: actualPort, bearerGated: isBearerGated(config.bearerToken) },
-        'plan 06-03 — metrics server listening on all interfaces'
-      );
-    });
+  const host = config.host ?? '127.0.0.1';
+  if (isPublicBind(host) && !isBearerGated(config.bearerToken)) {
+    throw new Error('MS365_MCP_METRICS_BEARER is required when metrics bind publicly');
   }
+  server.listen(config.port, host, () => {
+    const addr = server.address();
+    const actualPort = typeof addr === 'object' && addr ? addr.port : config.port;
+    logger.info(
+      {
+        metricsPort: actualPort,
+        metricsHost: host,
+        bearerGated: isBearerGated(config.bearerToken),
+      },
+      'plan 06-03 — metrics server listening'
+    );
+  });
 
   return server;
 }
 
 function isBearerGated(token: string | null | undefined): boolean {
   return typeof token === 'string' && token.length > 0;
+}
+
+function isPublicBind(host: string): boolean {
+  return host === '0.0.0.0' || host === '::' || host === '[::]';
 }

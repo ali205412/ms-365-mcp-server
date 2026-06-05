@@ -1344,7 +1344,11 @@ class MicrosoftGraphServer {
             if (typeof payload.tid !== 'string') {
               res.setHeader(
                 'WWW-Authenticate',
-                buildWwwAuthenticate({ req, error: 'invalid_token', errorDescription: 'Invalid token' })
+                buildWwwAuthenticate({
+                  req,
+                  error: 'invalid_token',
+                  errorDescription: 'Invalid token',
+                })
               );
               res.status(401).json({ error: 'invalid_token', detail: 'missing_tid_claim' });
               return;
@@ -1352,7 +1356,11 @@ class MicrosoftGraphServer {
             if (payload.tid.toLowerCase() !== expectedTid.toLowerCase()) {
               res.setHeader(
                 'WWW-Authenticate',
-                buildWwwAuthenticate({ req, error: 'invalid_token', errorDescription: 'Invalid token' })
+                buildWwwAuthenticate({
+                  req,
+                  error: 'invalid_token',
+                  errorDescription: 'Invalid token',
+                })
               );
               res.status(401).json({
                 error: 'tenant_mismatch',
@@ -1364,7 +1372,11 @@ class MicrosoftGraphServer {
             logger.info({ err: (err as Error).message }, 'legacy /mcp: JWT verification failed');
             res.setHeader(
               'WWW-Authenticate',
-              buildWwwAuthenticate({ req, error: 'invalid_token', errorDescription: 'Invalid token' })
+              buildWwwAuthenticate({
+                req,
+                error: 'invalid_token',
+                errorDescription: 'Invalid token',
+              })
             );
             res.status(401).json({ error: 'invalid_token' });
             return;
@@ -1543,6 +1555,7 @@ class MicrosoftGraphServer {
             const metricsServer = createMetricsServer(prometheusExporter, {
               port: metricsPort,
               bearerToken: process.env.MS365_MCP_METRICS_BEARER ?? null,
+              host: process.env.MS365_MCP_METRICS_HOST,
             });
             // Attach mcp_oauth_pkce_store_size — observable gauge polls
             // pkceStore.size() on each collection interval.
