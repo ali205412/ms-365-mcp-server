@@ -37,13 +37,26 @@ function makeServer() {
 }
 
 async function withTenant<T>(enabled: string[], fn: () => Promise<T>): Promise<T> {
+  return withTenantContext({ enabled }, fn);
+}
+
+async function withTenantContext<T>(
+  input: {
+    enabled: string[];
+    tenantId?: string;
+    ownerSubject?: string;
+    enabledToolsExplicit?: boolean;
+    presetVersion?: string;
+  },
+  fn: () => Promise<T>
+): Promise<T> {
   return requestContext.run(
     {
-      tenantId: 'tenant-a',
-      enabledToolsSet: new Set(enabled),
-      enabledToolsExplicit: true,
-      presetVersion: 'custom',
-      ownerSubject: 'owner-a',
+      tenantId: input.tenantId ?? 'tenant-a',
+      enabledToolsSet: new Set(input.enabled),
+      enabledToolsExplicit: input.enabledToolsExplicit ?? true,
+      presetVersion: input.presetVersion ?? 'custom',
+      ownerSubject: input.ownerSubject ?? 'owner-a',
     },
     fn
   );
@@ -446,6 +459,195 @@ describe('generic bulk-action tool', () => {
     expect(result.isError).toBe(true);
     expect(JSON.stringify(dataFrom(result))).toContain('result_store_unavailable');
     expect(executeToolAlias).not.toHaveBeenCalled();
+  });
+
+  it('blocks discovery-v1 writes unless enabled tools were explicitly selected', async () => {
+    resetBulkResultStoreForTesting();
+    const { server, handlers } = makeServer();
+    const executeToolAlias = vi.fn(async () => ({
+      content: [{ type: 'text', text: JSON.stringify({ id: 'deleted-id' }) }],
+    }));
+    registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias,
+    });
+
+    const result = await withTenantContext(
+      {
+        enabled: [BULK_ACTION_TOOL, 'delete-onedrive-file'],
+        enabledToolsExplicit: false,
+        presetVersion: 'discovery-v1',
+      },
+      async () =>
+        handlers.get(BULK_ACTION_TOOL)!({
+          mode: 'preview',
+          outputMode: 'summary',
+          items: [
+            {
+              id: 'delete-1',
+              toolName: 'delete-onedrive-file',
+              parameters: { driveId: 'drive', driveItemId: 'item' },
+            },
+          ],
+        })
+    );
+
+    expect(JSON.stringify(dataFrom(result))).toContain('discovery_write_not_enabled');
+    expect(executeToolAlias).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when a different owner or tenant reads stored full results', async () => {
+    resetBulkResultStoreForTesting();
+    const { server, handlers } = makeServer();
+    registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias: vi.fn(async () => ({
+        content: [{ type: 'text', text: JSON.stringify({ id: 'safe-id' }) }],
+      })),
+    });
+
+    const preview = await withTenant(
+      [BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'],
+      async () =>
+        handlers.get(BULK_ACTION_TOOL)!({
+          mode: 'preview',
+          outputMode: 'full',
+          items: [{ id: 'read-1', toolName: 'get-chat', parameters: { chatId: 'chat-id' } }],
+        })
+    );
+    const executed = await withTenant(
+      [BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'],
+      async () =>
+        handlers.get(BULK_ACTION_TOOL)!({
+          mode: 'execute',
+          outputMode: 'full',
+          confirmation: asRecord(dataFrom(preview)).confirmation,
+          items: [{ id: 'read-1', toolName: 'get-chat', parameters: { chatId: 'chat-id' } }],
+        })
+    );
+    const resultId = asRecord(dataFrom(executed)).resultId;
+
+    const ownerMismatch = await withTenantContext(
+      { enabled: [BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'], ownerSubject: 'owner-b' },
+      async () => handlers.get(READ_BULK_RESULT_TOOL)!({ resultId, limit: 10 })
+    );
+    const tenantMismatch = await withTenantContext(
+      { enabled: [BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'], tenantId: 'tenant-b' },
+      async () => handlers.get(READ_BULK_RESULT_TOOL)!({ resultId, limit: 10 })
+    );
+
+    expect(ownerMismatch.isError).toBe(true);
+    expect(JSON.stringify(dataFrom(ownerMismatch))).toContain('owner_mismatch');
+    expect(tenantMismatch.isError).toBe(true);
+    expect(JSON.stringify(dataFrom(tenantMismatch))).toContain('tenant_mismatch');
+  });
+
+  it('makes result cursors single-use to prevent replay', async () => {
+    resetBulkResultStoreForTesting();
+    const { server, handlers } = makeServer();
+    registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias: vi.fn(async ({ parameters }) => ({
+        content: [{ type: 'text', text: JSON.stringify({ id: asRecord(parameters).chatId }) }],
+      })),
+    });
+
+    const items = [
+      { id: 'read-1', toolName: 'get-chat', parameters: { chatId: 'a' } },
+      { id: 'read-2', toolName: 'get-chat', parameters: { chatId: 'b' } },
+    ];
+    const preview = await withTenant(
+      [BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'],
+      async () => handlers.get(BULK_ACTION_TOOL)!({ mode: 'preview', outputMode: 'full', items })
+    );
+    const executed = await withTenant(
+      [BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'],
+      async () =>
+        handlers.get(BULK_ACTION_TOOL)!({
+          mode: 'execute',
+          outputMode: 'full',
+          confirmation: asRecord(dataFrom(preview)).confirmation,
+          items,
+        })
+    );
+    const resultId = asRecord(dataFrom(executed)).resultId;
+    const firstPage = await withTenant(
+      [BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'],
+      async () => handlers.get(READ_BULK_RESULT_TOOL)!({ resultId, limit: 1 })
+    );
+    const cursor = asRecord(dataFrom(firstPage)).nextCursor;
+
+    const replayOne = await withTenant(
+      [BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'],
+      async () => handlers.get(READ_BULK_RESULT_TOOL)!({ resultId, cursor, limit: 1 })
+    );
+    const replayTwo = await withTenant(
+      [BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'],
+      async () => handlers.get(READ_BULK_RESULT_TOOL)!({ resultId, cursor, limit: 1 })
+    );
+
+    expect(replayOne.isError).not.toBe(true);
+    expect(replayTwo.isError).toBe(true);
+    expect(JSON.stringify(dataFrom(replayTwo))).toContain('invalid_cursor');
+  });
+
+  it('truncates oversized per-item full data while preserving safe ids', async () => {
+    resetBulkResultStoreForTesting();
+    const { server, handlers } = makeServer();
+    registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias: vi.fn(async () => ({
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              id: 'safe-id',
+              ...Object.fromEntries(
+                Array.from({ length: 80 }, (_, index) => [`safeField${index}`, 'x'.repeat(1000)])
+              ),
+            }),
+          },
+        ],
+      })),
+    });
+
+    const preview = await withTenant(
+      [BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'],
+      async () =>
+        handlers.get(BULK_ACTION_TOOL)!({
+          mode: 'preview',
+          outputMode: 'full',
+          items: [{ id: 'read-1', toolName: 'get-chat', parameters: { chatId: 'chat-id' } }],
+        })
+    );
+    const executed = await withTenant(
+      [BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'],
+      async () =>
+        handlers.get(BULK_ACTION_TOOL)!({
+          mode: 'execute',
+          outputMode: 'full',
+          confirmation: asRecord(dataFrom(preview)).confirmation,
+          items: [{ id: 'read-1', toolName: 'get-chat', parameters: { chatId: 'chat-id' } }],
+        })
+    );
+    const read = await withTenant([BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'], async () =>
+      handlers.get(READ_BULK_RESULT_TOOL)!({
+        resultId: asRecord(dataFrom(executed)).resultId,
+        limit: 10,
+      })
+    );
+    const serialized = JSON.stringify(dataFrom(read));
+    expect(serialized).toContain('truncated');
+    expect(serialized).toContain('safe-id');
+    expect(serialized).not.toContain('x'.repeat(1000));
   });
 
   it('marks an in-flight aborted item as cancelled', async () => {

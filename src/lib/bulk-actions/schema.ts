@@ -31,6 +31,12 @@ export const BULK_LIMITS = Object.freeze({
     10 * 1024 * 1024
   ),
   maxStoredItems: intFromEnv('MS365_MCP_BULK_MAX_STORED_ITEMS', 500, 1, 5000),
+  maxBatchOptimizationCandidates: intFromEnv(
+    'MS365_MCP_BULK_MAX_BATCH_OPTIMIZATION_CANDIDATES',
+    20,
+    1,
+    20
+  ),
   resultTtlMs: intFromEnv(
     'MS365_MCP_BULK_RESULT_TTL_MS',
     30 * 60 * 1000,
@@ -165,7 +171,7 @@ export interface BulkPlanItem {
   readOnly?: boolean;
   destructive?: boolean;
   openWorld?: boolean;
-  batchStrategy: 'single_alias_path';
+  batchStrategy: 'single_alias_path' | 'graph_batch_eligible_alias_fallback';
 }
 
 export interface BulkPlan {

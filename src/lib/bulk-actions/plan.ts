@@ -32,6 +32,9 @@ interface EndpointConfig {
   supportsTimezone?: boolean;
   supportsExpandExtendedProperties?: boolean;
   readOnly?: boolean;
+  returnDownloadUrl?: boolean;
+  contentType?: string;
+  acceptType?: string;
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -308,6 +311,38 @@ function endpointAllowedByMode(
   return orgMode || !config || Boolean(config.scopes) || !config.workScopes;
 }
 
+function pathTemplateHasUnsafeBatchSegment(pathPattern: string): boolean {
+  const normalized = pathPattern.toLowerCase();
+  return (
+    normalized.includes('/$batch') ||
+    normalized.includes('/content') ||
+    normalized.includes('/delta') ||
+    normalized.includes('createuploadsession') ||
+    normalized.includes('uploadsession')
+  );
+}
+
+function isJsonLikeContentType(value: string | undefined): boolean {
+  if (!value) return true;
+  const normalized = value.toLowerCase();
+  return normalized.includes('json') || normalized.includes('text/plain');
+}
+
+function batchStrategyFor(input: {
+  endpoint: Endpoint;
+  config: EndpointConfig | undefined;
+  normalizedParameters: Record<string, unknown>;
+}): BulkPlanItem['batchStrategy'] {
+  if (isProductPrefix(input.endpoint.alias)) return 'single_alias_path';
+  if (input.endpoint.alias.startsWith('__beta__')) return 'single_alias_path';
+  if (input.config?.returnDownloadUrl) return 'single_alias_path';
+  if (!isJsonLikeContentType(input.config?.contentType)) return 'single_alias_path';
+  if (!isJsonLikeContentType(input.config?.acceptType)) return 'single_alias_path';
+  if (pathTemplateHasUnsafeBatchSegment(input.endpoint.path)) return 'single_alias_path';
+  if (input.normalizedParameters.fetchAllPages === true) return 'single_alias_path';
+  return 'graph_batch_eligible_alias_fallback';
+}
+
 function digestInput(plan: Omit<BulkPlan, 'planDigest' | 'executionParameters'>): unknown {
   return {
     version: plan.version,
@@ -422,6 +457,13 @@ export function buildBulkPlan(
       readOnly: config?.readOnly,
     });
     const validation = normalizeParameters(endpoint, config, rawItem.parameters ?? {});
+    const batchStrategy = validation.ok
+      ? batchStrategyFor({
+          endpoint,
+          config,
+          normalizedParameters: validation.normalizedParameters,
+        })
+      : 'single_alias_path';
     const base = {
       id,
       toolName: endpoint.alias,
@@ -434,7 +476,7 @@ export function buildBulkPlan(
       readOnly: risk.readOnly,
       destructive: risk.destructive,
       openWorld: risk.openWorld || isProductPrefix(endpoint.alias),
-      batchStrategy: 'single_alias_path' as const,
+      batchStrategy,
     };
 
     if (!validation.ok)

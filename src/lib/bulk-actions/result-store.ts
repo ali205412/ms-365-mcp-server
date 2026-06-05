@@ -137,6 +137,7 @@ export function readBulkResult(input: {
   let offset = 0;
   if (input.cursor) {
     const cursorState = cursors.get(input.cursor);
+    cursors.delete(input.cursor);
     if (
       !cursorState ||
       cursorState.resultId !== input.resultId ||

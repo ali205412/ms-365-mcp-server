@@ -85,6 +85,53 @@ describe('bulk action planner', () => {
     expect(plan.items[0]).toMatchObject({ status: 'invalid', code: 'parameter_validation_failed' });
   });
 
+  it('marks safe v1 JSON aliases as batch-eligible while still routing through alias fallback', () => {
+    const plan = runWithTenant([BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'], () =>
+      buildBulkPlan(
+        {
+          mode: 'preview',
+          outputMode: 'summary',
+          items: [
+            {
+              id: 'read-1',
+              toolName: 'get-chat',
+              parameters: { chatId: 'secret-chat-id' },
+            },
+          ],
+        },
+        { readOnly: false, orgMode: true, now: new Date('2026-06-05T00:00:00Z') }
+      )
+    );
+    expect('error' in plan).toBe(false);
+    if ('error' in plan) return;
+    expect(plan.items[0]).toMatchObject({
+      status: 'allowed',
+      batchStrategy: 'graph_batch_eligible_alias_fallback',
+    });
+  });
+
+  it('keeps product, content, delta, and pagination plans on the single alias fallback', () => {
+    const plan = runWithTenant([BULK_ACTION_TOOL, 'get-meeting-transcript-content'], () =>
+      buildBulkPlan(
+        {
+          mode: 'preview',
+          outputMode: 'summary',
+          items: [
+            {
+              id: 'content-1',
+              toolName: 'get-meeting-transcript-content',
+              parameters: { meetingId: 'meeting', transcriptId: 'transcript' },
+            },
+          ],
+        },
+        { readOnly: false, orgMode: true, now: new Date('2026-06-05T00:00:00Z') }
+      )
+    );
+    expect('error' in plan).toBe(false);
+    if ('error' in plan) return;
+    expect(plan.items[0].batchStrategy).toBe('single_alias_path');
+  });
+
   it('previews generated aliases without exposing raw parameter values', () => {
     const plan = runWithTenant([BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'], () =>
       buildBulkPlan(

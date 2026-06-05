@@ -104,8 +104,18 @@ function retryAfterFromResult(result: CallToolResult): number | undefined {
 function shapeItemData(mode: BulkOutputMode, result: CallToolResult): unknown {
   const parsed = parseResultJson(result);
   if (mode === 'ids') return safeIdsPayload(parsed);
-  if (mode === 'full') return sanitizeValue(parsed);
-  return undefined;
+  if (mode !== 'full') return undefined;
+
+  const sanitized = sanitizeValue(parsed);
+  const bytes = byteLength(sanitized);
+  if (bytes <= BULK_LIMITS.maxFullItemBytes) return sanitized;
+
+  return {
+    truncated: true,
+    bytes,
+    maxBytes: BULK_LIMITS.maxFullItemBytes,
+    ids: safeIdsPayload(parsed),
+  };
 }
 
 function renderBulkOutput(input: {
