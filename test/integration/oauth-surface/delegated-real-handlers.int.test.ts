@@ -323,6 +323,91 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
     );
   });
 
+  it('/token rotates opaque gateway refresh handles without exposing upstream refresh tokens', async () => {
+    const mockAcquireByCode = vi.fn(async () => ({
+      accessToken: 'access-token-initial',
+      refreshToken: 'upstream-refresh-token-initial',
+      expiresOn: new Date(Date.now() + 3600 * 1000),
+      account: { homeAccountId: 'home-account-1' },
+    }));
+    const mockAcquireByRefreshToken = vi.fn(async () => ({
+      accessToken: 'access-token-rotated',
+      refreshToken: 'upstream-refresh-token-rotated',
+      expiresOn: new Date(Date.now() + 3600 * 1000),
+      account: { homeAccountId: 'home-account-1' },
+    }));
+    harness = await startApp({
+      msalClient: {
+        acquireTokenByCode: mockAcquireByCode,
+        acquireTokenByRefreshToken: mockAcquireByRefreshToken,
+      },
+    });
+    const pkce = newPkce();
+    await seedPkce(harness, pkce.verifier);
+
+    const codeRes = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: 'auth-code-for-refresh',
+        redirect_uri: 'http://localhost:3000/callback',
+        code_verifier: pkce.verifier,
+      }),
+    });
+    expect(codeRes.status).toBe(200);
+    const codeBody = (await codeRes.json()) as { refresh_token: string };
+    expect(codeBody.refresh_token).toEqual(expect.stringMatching(/^mcp_rt_/));
+    expect(JSON.stringify(codeBody)).not.toContain('upstream-refresh-token-initial');
+
+    const refreshRes = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: codeBody.refresh_token,
+        client_id: harness.tenant.client_id,
+      }),
+    });
+    expect(refreshRes.status).toBe(200);
+    const refreshBody = (await refreshRes.json()) as { access_token: string; refresh_token: string };
+    expect(refreshBody.access_token).toBe('access-token-rotated');
+    expect(refreshBody.refresh_token).toEqual(expect.stringMatching(/^mcp_rt_/));
+    expect(refreshBody.refresh_token).not.toBe(codeBody.refresh_token);
+    expect(JSON.stringify(refreshBody)).not.toContain('upstream-refresh-token-rotated');
+    expect(mockAcquireByRefreshToken).toHaveBeenCalledWith({
+      refreshToken: 'upstream-refresh-token-initial',
+      scopes: ['User.Read'],
+    });
+  });
+
+  it('/token rejects refresh requests without a valid opaque gateway refresh handle', async () => {
+    harness = await startApp({});
+
+    const missing = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'refresh_token' }),
+    });
+    expect(missing.status).toBe(400);
+    const missingBody = (await missing.json()) as { error: string; error_description: string };
+    expect(missingBody.error).toBe('invalid_request');
+    expect(missingBody.error_description).toBe('refresh_token required');
+
+    const invalid = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: 'mcp_rt_invalid',
+        client_id: harness.tenant.client_id,
+      }),
+    });
+    expect(invalid.status).toBe(400);
+    const invalidBody = (await invalid.json()) as { error: string };
+    expect(invalidBody.error).toBe('invalid_grant');
+  });
+
   it('/token rejects missing verifier, missing code, and PKCE misses before MSAL', async () => {
     harness = await startApp({});
 
