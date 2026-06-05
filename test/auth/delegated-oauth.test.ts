@@ -292,26 +292,36 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     expect(body.error).toBe('invalid_scope');
   });
 
-  it('preserves exact static redirect allowlist entries outside the public host policy', async () => {
-    const redirectUri = 'https://tenant-owned.example.org/oauth/callback';
-    harness = await startApp(
-      { redirect_uri_allowlist: [redirectUri] },
-      { publicUrlHost: 'mcp.example.com' }
-    );
+  it('preserves exact static redirect allowlist entries outside the production public host policy', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      const redirectUri = 'https://tenant-owned.example.org/oauth/callback';
+      harness = await startApp(
+        { redirect_uri_allowlist: [redirectUri] },
+        { publicUrlHost: 'mcp.example.com' }
+      );
 
-    const clientVerifier = crypto.randomBytes(32).toString('base64url');
-    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
-    const params = new URLSearchParams({
-      redirect_uri: redirectUri,
-      code_challenge: clientChallenge,
-      code_challenge_method: 'S256',
-      state: 'static-allowlist-test',
-      client_id: harness.tenant.client_id,
-    });
+      const clientVerifier = crypto.randomBytes(32).toString('base64url');
+      const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
+      const params = new URLSearchParams({
+        redirect_uri: redirectUri,
+        code_challenge: clientChallenge,
+        code_challenge_method: 'S256',
+        state: 'static-allowlist-test',
+        client_id: harness.tenant.client_id,
+      });
 
-    const res = await fetch(`${harness.url}/authorize?${params}`, { redirect: 'manual' });
+      const res = await fetch(`${harness.url}/authorize?${params}`, { redirect: 'manual' });
 
-    expect(res.status).toBe(302);
+      expect(res.status).toBe(302);
+    } finally {
+      if (originalNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = originalNodeEnv;
+      }
+    }
   });
 
   it('Test 2: /authorize with redirect_uri NOT in allowlist → 400 invalid_redirect_uri', async () => {

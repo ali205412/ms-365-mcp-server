@@ -60,11 +60,9 @@ function scopesAllowedByTenant(
   return scopes.every((scope) => tenantScopeSatisfies(allowedScopes, scope));
 }
 
-function redirectPolicyForStaticClient(args: { basePolicy: RedirectUriPolicy }): RedirectUriPolicy {
-  if (args.basePolicy.mode !== 'prod') {
-    return { mode: 'dev', publicUrlHost: null };
-  }
-  return args.basePolicy;
+function redirectSafetyPolicyForStaticClient(): RedirectUriPolicy {
+  // Exact tenant allowlists remain authoritative; still reject unsafe schemes and non-loopback HTTP.
+  return { mode: 'dev', publicUrlHost: null };
 }
 
 export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
@@ -114,9 +112,7 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
       };
       const schemeCheck = validateRedirectUri(
         redirectUri,
-        allowedByStaticClient
-          ? redirectPolicyForStaticClient({ basePolicy: baseRedirectPolicy })
-          : baseRedirectPolicy
+        allowedByStaticClient ? redirectSafetyPolicyForStaticClient() : baseRedirectPolicy
       );
       if (!schemeCheck.ok) {
         emitAudit(
