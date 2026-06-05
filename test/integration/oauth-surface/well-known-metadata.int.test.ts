@@ -17,7 +17,8 @@
  * known contract is regression-guarded even if the inline handlers get
  * refactored. The D-10 coverage number is driven mainly by createRegister
  * + createToken + createAuthorize + createTenantToken tests; .well-known
- * handler lines are a small fraction of the OAuth surface.
+ * handler lines are covered by this contract test rather than by the numeric
+ * OAuth handler gate.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import express from 'express';
