@@ -253,6 +253,47 @@ describe('bulk action planner', () => {
     expect(plan.items[0]).toMatchObject({ status: 'blocked', code: 'read_only_violation' });
   });
 
+  it('keeps preview and execute digest stable when execute omits optional confirmation expiry', () => {
+    const previewInput: BulkActionInput = {
+      mode: 'preview',
+      outputMode: 'summary',
+      items: [
+        {
+          id: 'write-1',
+          toolName: 'delete-onedrive-file',
+          parameters: { driveId: 'drive', driveItemId: 'item' },
+        },
+      ],
+    };
+    const preview = runWithTenant([BULK_ACTION_TOOL, 'delete-onedrive-file'], () =>
+      buildBulkPlan(previewInput, {
+        readOnly: false,
+        orgMode: true,
+        now: new Date('2026-06-05T00:00:00Z'),
+      })
+    );
+    expect('error' in preview).toBe(false);
+    if ('error' in preview) return;
+    expect(preview.requiresConfirmation).toBe(true);
+
+    const execute = runWithTenant([BULK_ACTION_TOOL, 'delete-onedrive-file'], () =>
+      buildBulkPlan(
+        {
+          ...previewInput,
+          mode: 'execute',
+          confirmation: {
+            planDigest: preview.planDigest,
+            confirmed: true,
+          },
+        },
+        { readOnly: false, orgMode: true, now: new Date('2026-06-05T00:01:00Z') }
+      )
+    );
+    expect('error' in execute).toBe(false);
+    if ('error' in execute) return;
+    expect(execute.planDigest).toBe(preview.planDigest);
+  });
+
   it('keeps preview and execute digest stable when execute reuses preview expiry', () => {
     const previewInput: BulkActionInput = {
       mode: 'preview',

@@ -666,6 +666,76 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     expect(harness.mockMsalAcquireSilent).toHaveBeenCalledTimes(1);
   });
 
+  it('retains refreshed session when upstream returns the same access token', async () => {
+    harness = await startApp();
+    harness.mockMsalAcquireSilent.mockResolvedValue({
+      accessToken: 'access-token-abc',
+      expiresOn: new Date(Date.now() + 3600 * 1000),
+      account: { homeAccountId: 'home-1', username: 'user@example.com' },
+    });
+    const clientVerifier = crypto.randomBytes(32).toString('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
+
+    await harness.pkceStore.put(harness.tenant.id, {
+      state: 'state',
+      clientCodeChallenge: clientChallenge,
+      clientCodeChallengeMethod: 'S256',
+      serverCodeVerifier: 'server-verifier-xyz',
+      clientId: harness.tenant.client_id,
+      redirectUri: 'http://localhost:3000/callback',
+      tenantId: harness.tenant.id,
+      createdAt: Date.now(),
+    });
+
+    const codeRes = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: 'the-auth-code',
+        redirect_uri: 'http://localhost:3000/callback',
+        code_verifier: clientVerifier,
+      }),
+    });
+    const codeBody = (await codeRes.json()) as { refresh_token: string };
+
+    const firstRefresh = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: codeBody.refresh_token,
+        client_id: harness.tenant.client_id,
+      }),
+    });
+    expect(firstRefresh.status).toBe(200);
+    const firstRefreshBody = (await firstRefresh.json()) as {
+      access_token: string;
+      refresh_token: string;
+    };
+    expect(firstRefreshBody.access_token).toBe('access-token-abc');
+    expect(firstRefreshBody.refresh_token).not.toBe(codeBody.refresh_token);
+
+    const secondRefresh = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: firstRefreshBody.refresh_token,
+        client_id: harness.tenant.client_id,
+      }),
+    });
+    expect(secondRefresh.status).toBe(200);
+    await expect(
+      hasDelegatedAccessToken({
+        redis: harness.redis,
+        tenantId: harness.tenant.id,
+        accessToken: 'access-token-abc',
+      })
+    ).resolves.toBe(true);
+    expect(harness.mockMsalAcquireSilent).toHaveBeenCalledTimes(2);
+  });
+
   it('does not burn refresh handle when client binding fails', async () => {
     harness = await startApp();
     const clientVerifier = crypto.randomBytes(32).toString('base64url');

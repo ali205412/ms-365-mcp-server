@@ -255,6 +255,45 @@ describe('generic bulk-action tool', () => {
     });
   });
 
+  it('accepts plan-bound confirmation without optional expiry during execution', async () => {
+    resetBulkResultStoreForTesting();
+    const { server, handlers } = makeServer();
+    const executeToolAlias = vi.fn(async () => ({
+      content: [{ type: 'text', text: JSON.stringify({ id: 'deleted-id' }) }],
+    }));
+    registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias,
+    });
+
+    const items = [
+      {
+        id: 'delete-1',
+        toolName: 'delete-onedrive-file',
+        parameters: { driveId: 'drive', driveItemId: 'item' },
+      },
+    ];
+    const preview = await withTenant([BULK_ACTION_TOOL, 'delete-onedrive-file'], async () =>
+      handlers.get(BULK_ACTION_TOOL)!({ mode: 'preview', outputMode: 'summary', items })
+    );
+    const confirmation = asRecord(dataFrom(preview)).confirmation as Record<string, unknown>;
+
+    const result = await withTenant([BULK_ACTION_TOOL, 'delete-onedrive-file'], async () =>
+      handlers.get(BULK_ACTION_TOOL)!({
+        mode: 'execute',
+        outputMode: 'summary',
+        confirmation: { planDigest: confirmation.planDigest, confirmed: true },
+        items,
+      })
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(JSON.stringify(dataFrom(result))).not.toContain('confirmation_mismatch');
+    expect(executeToolAlias).toHaveBeenCalledTimes(1);
+  });
+
   it('stores and reads sanitized full results without leaking unsafe fields', async () => {
     resetBulkResultStoreForTesting();
     const { server, handlers } = makeServer();

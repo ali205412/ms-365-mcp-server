@@ -352,7 +352,6 @@ function digestInput(plan: Omit<BulkPlan, 'planDigest' | 'executionParameters'>)
     readOnly: plan.readOnly,
     orgMode: plan.orgMode,
     outputMode: plan.outputMode,
-    expiresAt: plan.expiresAt,
     highVolume: plan.highVolume,
     requiresConfirmation: plan.requiresConfirmation,
     items: plan.items.map((item) => ({

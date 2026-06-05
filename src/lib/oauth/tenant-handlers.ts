@@ -18,7 +18,7 @@ import {
   forgetDelegatedAccessToken,
   rememberDelegatedAccessToken,
 } from '../delegated-access-tokens.js';
-import { SessionStore } from '../session-store.js';
+import { hashAccessToken, SessionStore } from '../session-store.js';
 import {
   consumeGatewayRefreshSession,
   lookupGatewayRefreshSession,
@@ -536,7 +536,10 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
           refreshToken: nextRefreshToken,
           accessToken: fresh.accessToken,
         });
-        await sessionStore.deleteByAccessTokenHash(tenant.id, session.accessTokenHash);
+        const freshAccessTokenHash = hashAccessToken(fresh.accessToken);
+        if (session.accessTokenHash !== freshAccessTokenHash) {
+          await sessionStore.deleteByAccessTokenHash(tenant.id, session.accessTokenHash);
+        }
         await rememberDelegatedAccessToken({
           redis,
           tenantId: tenant.id,
