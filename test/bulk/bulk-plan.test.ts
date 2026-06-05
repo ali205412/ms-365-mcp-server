@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { requestContext } from '../../src/request-context.js';
 import { buildBulkPlan, bulkPlanPublicSummary } from '../../src/lib/bulk-actions/plan.js';
 import {
@@ -6,6 +6,56 @@ import {
   READ_BULK_RESULT_TOOL,
   type BulkActionInput,
 } from '../../src/lib/bulk-actions/schema.js';
+
+vi.mock('../../src/generated/client.js', async () => {
+  const { z } = await import('zod');
+  return {
+    api: {
+      endpoints: [
+        {
+          alias: 'get-chat',
+          method: 'GET',
+          path: '/chats/:chatId',
+          parameters: [
+            { name: 'chatId', type: 'Path', schema: z.string() },
+            {
+              name: 'select',
+              type: 'Query',
+              schema: z.union([z.string(), z.array(z.string())]).optional(),
+            },
+          ],
+        },
+        {
+          alias: 'list-chats',
+          method: 'GET',
+          path: '/chats',
+          parameters: [
+            { name: 'top', type: 'Query', schema: z.number().optional() },
+            { name: 'count', type: 'Query', schema: z.boolean().optional() },
+          ],
+        },
+        {
+          alias: 'get-meeting-transcript-content',
+          method: 'GET',
+          path: '/me/onlineMeetings/:meetingId/transcripts/:transcriptId/content',
+          parameters: [
+            { name: 'meetingId', type: 'Path', schema: z.string() },
+            { name: 'transcriptId', type: 'Path', schema: z.string() },
+          ],
+        },
+        {
+          alias: 'delete-onedrive-file',
+          method: 'DELETE',
+          path: '/drives/:driveId/items/:driveItemId',
+          parameters: [
+            { name: 'driveId', type: 'Path', schema: z.string() },
+            { name: 'driveItemId', type: 'Path', schema: z.string() },
+          ],
+        },
+      ],
+    },
+  };
+});
 
 function runWithTenant<T>(enabled: string[], fn: () => T): T {
   return requestContext.run(
