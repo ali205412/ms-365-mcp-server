@@ -20,6 +20,7 @@ export interface ConnectorMetadataInput {
 export interface OAuthMetadataInput extends ConnectorMetadataInput {
   scopes: readonly string[];
   dynamicRegistration?: boolean;
+  grantTypesSupported?: readonly string[];
 }
 
 export interface WwwAuthenticateMetadataInput {
@@ -132,7 +133,7 @@ export function buildOAuthAuthorizationServerMetadata(
     token_endpoint: `${urls.tenantBaseUrl}/token`,
     response_types_supported: ['code'],
     response_modes_supported: ['query'],
-    grant_types_supported: ['authorization_code', 'refresh_token'],
+    grant_types_supported: input.grantTypesSupported ?? ['authorization_code', 'refresh_token'],
     token_endpoint_auth_methods_supported: ['none'],
     code_challenge_methods_supported: ['S256'],
     scopes_supported: input.scopes,

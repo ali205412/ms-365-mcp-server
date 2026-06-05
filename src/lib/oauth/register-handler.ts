@@ -33,7 +33,7 @@ export function createRegisterHandler(
 ) {
   return async (req: Request, res: Response): Promise<void> => {
     const body = (req.body as Record<string, unknown>) ?? {};
-    const grantTypes = stringList(body.grant_types, ['authorization_code']);
+    const grantTypes = stringList(body.grant_types, ['authorization_code', 'refresh_token']);
     const responseTypes = stringList(body.response_types, ['code']);
     const tokenEndpointAuthMethod =
       typeof body.token_endpoint_auth_method === 'string'
@@ -67,8 +67,9 @@ export function createRegisterHandler(
     logger.info(
       {
         durable: Boolean(options.pgPool && options.tenantId),
-        client_name: clientName,
-        grant_types: grantTypes,
+        clientNamePresent: Boolean(clientName),
+        clientNameHash: hashOpaqueValue(clientName).slice(0, 16),
+        clientNameLength: clientName.length,
         grantTypeCount: grantTypes.length,
         redirectUriCount: Array.isArray(body.redirect_uris) ? body.redirect_uris.length : 0,
         redirect_uri_count: Array.isArray(body.redirect_uris) ? body.redirect_uris.length : 0,
@@ -107,7 +108,7 @@ export function createRegisterHandler(
         tenantId: options.tenantId,
         clientName,
         redirectUris: validatedRedirectUris,
-        grantTypes: grantTypes.length ? grantTypes : ['authorization_code'],
+        grantTypes: grantTypes.length ? grantTypes : ['authorization_code', 'refresh_token'],
         responseTypes: responseTypes.length ? responseTypes : ['code'],
         tokenEndpointAuthMethod,
       });
@@ -129,7 +130,7 @@ export function createRegisterHandler(
       client_id: clientId,
       client_id_issued_at: Math.floor(Date.now() / 1000),
       redirect_uris: validatedRedirectUris,
-      grant_types: grantTypes.length ? grantTypes : ['authorization_code'],
+      grant_types: grantTypes.length ? grantTypes : ['authorization_code', 'refresh_token'],
       response_types: responseTypes.length ? responseTypes : ['code'],
       token_endpoint_auth_method: tokenEndpointAuthMethod,
       client_name: clientName,

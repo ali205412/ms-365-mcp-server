@@ -62,6 +62,7 @@ interface AppHarness {
   tenant: TenantRow;
   pkceStore: RedisPkceStore;
   mockMsalAcquireByCode: ReturnType<typeof vi.fn>;
+  mockMsalAcquireSilent: ReturnType<typeof vi.fn>;
 }
 
 async function startApp(
@@ -78,10 +79,24 @@ async function startApp(
     expiresOn: new Date(Date.now() + 3600 * 1000),
     account: { homeAccountId: 'home-1', username: 'user@example.com' },
   }));
+  const mockMsalAcquireSilent = vi.fn(async () => ({
+    accessToken: 'access-token-refreshed',
+    expiresOn: new Date(Date.now() + 3600 * 1000),
+    account: { homeAccountId: 'home-1', username: 'user@example.com' },
+  }));
+  const tokenCache = {
+    serialize: vi.fn(() => '{"cache":"serialized"}'),
+    deserialize: vi.fn(),
+    getAccountByHomeId: vi.fn(async (homeAccountId: string) =>
+      homeAccountId === 'home-1' ? { homeAccountId: 'home-1' } : null
+    ),
+  };
 
   const mockTenantPool = {
     acquire: vi.fn(async () => ({
       acquireTokenByCode: mockMsalAcquireByCode,
+      acquireTokenSilent: mockMsalAcquireSilent,
+      getTokenCache: () => tokenCache,
     })),
     buildCachePlugin: vi.fn(),
     evict: vi.fn(),
@@ -130,6 +145,7 @@ async function startApp(
         tenant,
         pkceStore,
         mockMsalAcquireByCode,
+        mockMsalAcquireSilent,
         close: () =>
           new Promise<void>((r) => {
             server.close(() => r());
@@ -531,10 +547,12 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
       access_token: string;
       token_type: string;
       expires_in: number;
+      refresh_token: string;
     };
     expect(body.access_token).toBe('access-token-abc');
     expect(body.token_type).toBe('Bearer');
     expect(body.expires_in).toBeGreaterThan(0);
+    expect(body.refresh_token).toMatch(/^mcp_rt_/);
     await expect(
       hasDelegatedAccessToken({
         redis: harness.redis,
@@ -554,6 +572,80 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     expect(callArgs.code).toBe('the-auth-code');
     expect(callArgs.codeVerifier).toBe('server-verifier-xyz');
     expect(callArgs.redirectUri).toBe('http://localhost:3000/callback');
+
+    const refreshRes = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: body.refresh_token,
+        client_id: harness.tenant.client_id,
+      }),
+    });
+    expect(refreshRes.status).toBe(200);
+    const refreshBody = (await refreshRes.json()) as {
+      access_token: string;
+      token_type: string;
+      expires_in: number;
+      refresh_token: string;
+    };
+    expect(refreshBody.access_token).toBe('access-token-refreshed');
+    expect(refreshBody.token_type).toBe('Bearer');
+    expect(refreshBody.expires_in).toBeGreaterThan(0);
+    expect(refreshBody.refresh_token).toMatch(/^mcp_rt_/);
+    expect(refreshBody.refresh_token).not.toBe(body.refresh_token);
+    expect(harness.mockMsalAcquireSilent).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not burn refresh handle when client binding fails', async () => {
+    harness = await startApp();
+    const clientVerifier = crypto.randomBytes(32).toString('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
+
+    await harness.pkceStore.put(harness.tenant.id, {
+      state: 'state',
+      clientCodeChallenge: clientChallenge,
+      clientCodeChallengeMethod: 'S256',
+      serverCodeVerifier: 'server-verifier-xyz',
+      clientId: harness.tenant.client_id,
+      redirectUri: 'http://localhost:3000/callback',
+      tenantId: harness.tenant.id,
+      createdAt: Date.now(),
+    });
+
+    const codeRes = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: 'the-auth-code',
+        redirect_uri: 'http://localhost:3000/callback',
+        code_verifier: clientVerifier,
+      }),
+    });
+    const codeBody = (await codeRes.json()) as { refresh_token: string };
+
+    const badRes = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: codeBody.refresh_token,
+        client_id: 'wrong-client',
+      }),
+    });
+    expect(badRes.status).toBe(400);
+
+    const goodRes = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: codeBody.refresh_token,
+        client_id: harness.tenant.client_id,
+      }),
+    });
+    expect(goodRes.status).toBe(200);
   });
 
   it('Test 6: /token with PKCE miss → 400 invalid_grant', async () => {

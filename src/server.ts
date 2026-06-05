@@ -1119,6 +1119,10 @@ class MicrosoftGraphServer {
               scopes,
               version: this.version,
               dynamicRegistration: this.options.enableDynamicRegistration,
+              grantTypesSupported:
+                process.env.MS365_MCP_LEGACY_OAUTH_REFRESH === '1'
+                  ? ['authorization_code', 'refresh_token']
+                  : ['authorization_code'],
             })
           );
         }

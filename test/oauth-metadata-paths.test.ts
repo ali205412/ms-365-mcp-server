@@ -31,6 +31,18 @@ describe('OAuth and connector metadata identity projection', () => {
     expect(JSON.stringify(metadata)).not.toContain('ToolHub');
   });
 
+  it('can omit refresh grant support for root legacy OAuth metadata', () => {
+    const metadata = buildOAuthAuthorizationServerMetadata({
+      publicBaseUrl,
+      scopes,
+      version: '1.2.3',
+      grantTypesSupported: ['authorization_code'],
+    });
+
+    expect(metadata.issuer).toBe(publicBaseUrl);
+    expect(metadata.grant_types_supported).toEqual(['authorization_code']);
+  });
+
   it('builds protected-resource metadata with the canonical tenant MCP endpoint', () => {
     const metadata = buildOAuthProtectedResourceMetadata({
       publicBaseUrl,

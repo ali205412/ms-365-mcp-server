@@ -216,13 +216,12 @@ describe('POST /register — scrubbed info log (AUTH-06 T-01-06c)', () => {
     await postJson(`${server.url}/register`, {
       redirect_uris: ['http://localhost:3000/cb', 'http://127.0.0.1:5000/cb'],
       client_name: 'Secret Internal App',
-      grant_types: ['authorization_code'],
+      grant_types: ['authorization_code', 'refresh_token'],
       token_endpoint_auth_method: 'none',
     });
 
-    // Find the /register info log — its meta object must NOT contain `body`,
-    // `redirect_uris`, `token_endpoint_auth_method`, and MUST contain
-    // `client_name`, `grant_types`, `redirect_uri_count`.
+    // Find the /register info log — its meta object must NOT contain raw request
+    // body or user-controlled names, and MUST contain bounded metadata.
     const registerCalls = (loggerMock.info as ReturnType<typeof vi.fn>).mock.calls.filter(
       (call: unknown[]) => {
         // Canonical pino order: (meta, message). Message is second arg.
@@ -234,10 +233,13 @@ describe('POST /register — scrubbed info log (AUTH-06 T-01-06c)', () => {
 
     const meta = registerCalls[0][0] as Record<string, unknown>;
     // Required scrubbed fields:
-    expect(meta).toHaveProperty('client_name', 'Secret Internal App');
-    expect(meta).toHaveProperty('grant_types');
+    expect(meta).toHaveProperty('clientNameHash');
+    expect(meta).toHaveProperty('clientNameLength', 'Secret Internal App'.length);
+    expect(meta).toHaveProperty('grantTypeCount', 2);
     expect(meta).toHaveProperty('redirect_uri_count', 2);
     // Forbidden leaks:
+    expect(meta).not.toHaveProperty('client_name');
+    expect(JSON.stringify(meta)).not.toContain('Secret Internal App');
     expect(meta).not.toHaveProperty('body');
     expect(meta).not.toHaveProperty('redirect_uris');
     expect(meta).not.toHaveProperty('token_endpoint_auth_method');

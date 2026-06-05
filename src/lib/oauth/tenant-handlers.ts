@@ -19,6 +19,7 @@ import {
 import { SessionStore } from '../session-store.js';
 import {
   consumeGatewayRefreshSession,
+  lookupGatewayRefreshSession,
   mintGatewayRefreshToken,
   storeGatewayRefreshToken,
 } from './refresh-handles.js';
@@ -231,13 +232,31 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
   };
 }
 
+interface RefreshResult {
+  accessToken?: string;
+  refreshToken?: string;
+  expiresOn?: Date | null;
+  account?: { homeAccountId?: string; username?: string } | null;
+}
+
 interface RefreshMsalClient {
-  acquireTokenByRefreshToken: (config: { refreshToken: string; scopes: string[] }) => Promise<{
-    accessToken?: string;
-    refreshToken?: string;
-    expiresOn?: Date | null;
-    account?: { homeAccountId?: string; username?: string } | null;
-  } | null>;
+  acquireTokenByRefreshToken: (config: {
+    refreshToken: string;
+    scopes: string[];
+  }) => Promise<RefreshResult | null>;
+}
+
+interface SilentMsalClient {
+  acquireTokenSilent: (config: {
+    account: unknown;
+    scopes: string[];
+    forceRefresh?: boolean;
+  }) => Promise<RefreshResult | null>;
+  getTokenCache: () => {
+    getAccountByHomeId: (homeAccountId: string) => Promise<unknown | null>;
+    deserialize?: (cache: string) => void;
+    serialize?: () => string;
+  };
 }
 
 interface DelegatedMsalClient {
@@ -246,12 +265,7 @@ interface DelegatedMsalClient {
     scopes: string[];
     redirectUri: string;
     codeVerifier: string;
-  }) => Promise<{
-    accessToken?: string;
-    refreshToken?: string;
-    expiresOn?: Date | null;
-    account?: { homeAccountId?: string; username?: string } | null;
-  } | null>;
+  }) => Promise<RefreshResult | null>;
 }
 
 function isRefreshMsalClient(client: unknown): client is RefreshMsalClient {
@@ -273,6 +287,17 @@ function isDelegatedMsalClient(client: unknown): client is DelegatedMsalClient {
   );
 }
 
+function isSilentMsalClient(client: unknown): client is SilentMsalClient {
+  return (
+    typeof client === 'object' &&
+    client !== null &&
+    'acquireTokenSilent' in client &&
+    typeof (client as { acquireTokenSilent: unknown }).acquireTokenSilent === 'function' &&
+    'getTokenCache' in client &&
+    typeof (client as { getTokenCache: unknown }).getTokenCache === 'function'
+  );
+}
+
 function serializeMsalCache(client: unknown): string | undefined {
   if (
     typeof client !== 'object' ||
@@ -284,6 +309,34 @@ function serializeMsalCache(client: unknown): string | undefined {
   }
   const cache = (client as { getTokenCache: () => { serialize?: () => string } }).getTokenCache();
   return typeof cache.serialize === 'function' ? cache.serialize() : undefined;
+}
+
+async function refreshDelegatedSession(
+  msal: unknown,
+  record: { refreshToken?: string; accountHomeId?: string; msalCache?: string; scopes: string[] }
+): Promise<RefreshResult | null> {
+  if (record.refreshToken && isRefreshMsalClient(msal)) {
+    return await msal.acquireTokenByRefreshToken({
+      refreshToken: record.refreshToken,
+      scopes: record.scopes,
+    });
+  }
+
+  if (record.accountHomeId && isSilentMsalClient(msal)) {
+    const tokenCache = msal.getTokenCache();
+    if (record.msalCache && typeof tokenCache.deserialize === 'function') {
+      tokenCache.deserialize(record.msalCache);
+    }
+    const account = await tokenCache.getAccountByHomeId(record.accountHomeId);
+    if (!account) return null;
+    return await msal.acquireTokenSilent({
+      account,
+      scopes: record.scopes,
+      forceRefresh: true,
+    });
+  }
+
+  return null;
 }
 
 export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
@@ -333,13 +386,13 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
       try {
         const dek = tenantPool.getDekForTenant(tenant.id);
         const sessionStore = new SessionStore(redis, dek);
-        const session = await consumeGatewayRefreshSession({
+        const session = await lookupGatewayRefreshSession({
           redis,
           sessionStore,
           tenantId: tenant.id,
           refreshToken: submittedRefreshToken,
         });
-        if (!session?.record.refreshToken) {
+        if (!session) {
           res.status(400).json({ error: 'invalid_grant' });
           return;
         }
@@ -366,22 +419,29 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
         }
 
         const msal = await tenantPool.acquire(tenant);
-        if (!isRefreshMsalClient(msal)) {
-          res.status(400).json({ error: 'unsupported_grant_type' });
-          return;
-        }
-        const fresh = await msal.acquireTokenByRefreshToken({
-          refreshToken: session.record.refreshToken,
-          scopes: session.record.scopes,
-        });
+        const fresh = await refreshDelegatedSession(msal, session.record);
         if (!fresh?.accessToken) {
           res.status(400).json({ error: 'invalid_grant' });
           return;
         }
+
+        const consumed = await consumeGatewayRefreshSession({
+          redis,
+          sessionStore,
+          tenantId: tenant.id,
+          refreshToken: submittedRefreshToken,
+        });
+        if (consumed?.accessTokenHash !== session.accessTokenHash) {
+          res.status(400).json({ error: 'invalid_grant' });
+          return;
+        }
+
+        const nextMsalCache = serializeMsalCache(msal) ?? session.record.msalCache;
         await sessionStore.put(tenant.id, fresh.accessToken, {
           ...session.record,
           refreshToken: fresh.refreshToken ?? session.record.refreshToken,
           accountHomeId: fresh.account?.homeAccountId ?? session.record.accountHomeId,
+          msalCache: nextMsalCache,
           graphAccessToken: fresh.accessToken,
           graphAccessTokenExpiresOn: fresh.expiresOn?.toISOString(),
           createdAt: Date.now(),
