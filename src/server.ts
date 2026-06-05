@@ -48,6 +48,8 @@ import {
 } from './lib/oauth/authorize-request-identity.js';
 import { createRegisterHandler } from './lib/oauth/register-handler.js';
 import { createAuthorizeHandler, createTenantTokenHandler } from './lib/oauth/tenant-handlers.js';
+import { isOAuthClientStoreAvailable } from './lib/oauth/client-store.js';
+import { buildWwwAuthenticate } from './lib/www-authenticate.js';
 import { createTokenHandler } from './lib/oauth/token-handler.js';
 export { createRegisterHandler } from './lib/oauth/register-handler.js';
 export { createAuthorizeHandler, createTenantTokenHandler } from './lib/oauth/tenant-handlers.js';
@@ -439,6 +441,7 @@ class MicrosoftGraphServer {
     const { createPerTenantCorsMiddleware } = await import('./lib/cors.js');
 
     const loadTenant = createLoadTenantMiddleware({ pool: pg });
+    const durableDcrAvailable = await isOAuthClientStoreAvailable(pg);
     const resourceSubscriptions = new RedisResourceSubscriptionStore(redis);
     this.resourceSubscriptions = resourceSubscriptions;
     mcpSessionRegistry.setResourceSubscriptionChecker((tenantId, sessionId, uri) =>
@@ -626,7 +629,7 @@ class MicrosoftGraphServer {
         tenantDisplayName: tenant.slug,
         scopes: scopesForTenant(tenant),
         version: this.version,
-        dynamicRegistration: this.options.enableDynamicRegistration,
+        dynamicRegistration: this.options.enableDynamicRegistration && durableDcrAvailable,
       });
 
     const buildProtectedResourceMetadata = (
@@ -729,6 +732,24 @@ class MicrosoftGraphServer {
         extraAllowedHosts: oauthRedirectHosts,
       })
     );
+    if (this.options.enableDynamicRegistration && durableDcrAvailable) {
+      app.post('/t/:tenantId/register', tenantOauthRouteRateLimit, async (req, res, next) => {
+        const tenant = (req as Request & { tenant?: TenantRow }).tenant;
+        if (!tenant) {
+          res.status(404).json({ error: 'tenant_not_found' });
+          return;
+        }
+        return createRegisterHandler(
+          {
+            mode: isProdMode ? 'prod' : 'dev',
+            publicUrlHost: publicBase ? new URL(publicBase).hostname : null,
+            extraAllowedHosts: oauthRedirectHosts,
+          },
+          { pgPool: pg, tenantId: tenant.id }
+        )(req, res).catch(next);
+      });
+    }
+
     app.post(
       '/t/:tenantId/token',
       tenantOauthRouteRateLimit,
@@ -1298,6 +1319,14 @@ class MicrosoftGraphServer {
       ): Promise<void> => {
         const authHeader = req.headers.authorization;
         if (!authHeader || !authHeader.startsWith('Bearer ')) {
+          res.setHeader(
+            'WWW-Authenticate',
+            buildWwwAuthenticate({
+              req,
+              error: 'bearer_token_required',
+              errorDescription: 'Bearer token required',
+            })
+          );
           res.status(401).json({ error: 'Missing or invalid access token' });
           return;
         }
@@ -1313,10 +1342,18 @@ class MicrosoftGraphServer {
               cloudType: legacySecrets?.cloudType ?? 'global',
             });
             if (typeof payload.tid !== 'string') {
+              res.setHeader(
+                'WWW-Authenticate',
+                buildWwwAuthenticate({ req, error: 'invalid_token', errorDescription: 'Invalid token' })
+              );
               res.status(401).json({ error: 'invalid_token', detail: 'missing_tid_claim' });
               return;
             }
             if (payload.tid.toLowerCase() !== expectedTid.toLowerCase()) {
+              res.setHeader(
+                'WWW-Authenticate',
+                buildWwwAuthenticate({ req, error: 'invalid_token', errorDescription: 'Invalid token' })
+              );
               res.status(401).json({
                 error: 'tenant_mismatch',
                 detail: 'JWT tid does not match configured MS365_MCP_TENANT_ID',
@@ -1325,6 +1362,10 @@ class MicrosoftGraphServer {
             }
           } catch (err) {
             logger.info({ err: (err as Error).message }, 'legacy /mcp: JWT verification failed');
+            res.setHeader(
+              'WWW-Authenticate',
+              buildWwwAuthenticate({ req, error: 'invalid_token', errorDescription: 'Invalid token' })
+            );
             res.status(401).json({ error: 'invalid_token' });
             return;
           }

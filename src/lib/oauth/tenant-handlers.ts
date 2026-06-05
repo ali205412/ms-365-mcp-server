@@ -7,9 +7,21 @@ import { getRequestTokens } from '../../request-context.js';
 import { isSameAuthorizeRequest } from './authorize-request-identity.js';
 import { validateRedirectUri } from '../redirect-uri.js';
 import {
+  getActiveOAuthClientRegistration,
+  hasExactRedirectUri,
+  touchOAuthClientRegistration,
+} from './client-store.js';
+import {
   delegatedAccessTokenTtlSeconds,
   rememberDelegatedAccessToken,
 } from '../delegated-access-tokens.js';
+import { SessionStore } from '../session-store.js';
+import {
+  lookupGatewayRefreshSession,
+  mintGatewayRefreshToken,
+  rotateGatewayRefreshToken,
+  storeGatewayRefreshToken,
+} from './refresh-handles.js';
 import type { RedisClient } from '../redis.js';
 import type { PkceEntry, PkceStore } from '../pkce-store/pkce-store.js';
 import type { TenantRow } from '../tenant/tenant-row.js';
@@ -86,8 +98,23 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
       return;
     }
 
-    const allowedByTenant = tenant.redirect_uri_allowlist.includes(redirectUri);
-    if (!allowedByTenant) {
+    const clientId = String(req.query.client_id ?? tenant.client_id);
+    const allowedByStaticClient =
+      clientId === tenant.client_id && tenant.redirect_uri_allowlist.includes(redirectUri);
+    let allowedByDynamicClient = false;
+    if (!allowedByStaticClient && pgPool) {
+      const registration = await getActiveOAuthClientRegistration(pgPool, tenant.id, clientId);
+      allowedByDynamicClient = Boolean(
+        registration &&
+          hasExactRedirectUri(registration, redirectUri) &&
+          registration.grantTypes.includes('authorization_code') &&
+          registration.responseTypes.includes('code')
+      );
+      if (allowedByDynamicClient) {
+        await touchOAuthClientRegistration(pgPool, tenant.id, clientId);
+      }
+    }
+    if (!allowedByStaticClient && !allowedByDynamicClient) {
       emitAudit(tenant.id, 'failure', redirectUri, { error: 'invalid_redirect_uri' }, req);
       res.status(400).json({ error: 'invalid_redirect_uri' });
       return;
@@ -100,8 +127,12 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
       return;
     }
     const clientCodeChallengeMethod = String(req.query.code_challenge_method ?? 'S256');
+    if (clientCodeChallengeMethod !== 'S256') {
+      emitAudit(tenant.id, 'failure', redirectUri, { error: 'invalid_code_challenge_method' }, req);
+      res.status(400).json({ error: 'invalid_code_challenge_method' });
+      return;
+    }
     const state = String(req.query.state ?? crypto.randomBytes(16).toString('base64url'));
-    const clientId = String(req.query.client_id ?? tenant.client_id);
     const tenantKey = tenant.id;
 
     const serverCodeVerifier = crypto.randomBytes(32).toString('base64url');
@@ -180,6 +211,15 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
   };
 }
 
+interface RefreshMsalClient {
+  acquireTokenByRefreshToken: (config: { refreshToken: string; scopes: string[] }) => Promise<{
+    accessToken?: string;
+    refreshToken?: string;
+    expiresOn?: Date | null;
+    account?: { homeAccountId?: string; username?: string } | null;
+  } | null>;
+}
+
 interface DelegatedMsalClient {
   acquireTokenByCode: (config: {
     code: string;
@@ -192,6 +232,15 @@ interface DelegatedMsalClient {
     expiresOn?: Date | null;
     account?: { homeAccountId?: string; username?: string } | null;
   } | null>;
+}
+
+function isRefreshMsalClient(client: unknown): client is RefreshMsalClient {
+  return (
+    typeof client === 'object' &&
+    client !== null &&
+    'acquireTokenByRefreshToken' in client &&
+    typeof (client as { acquireTokenByRefreshToken: unknown }).acquireTokenByRefreshToken === 'function'
+  );
 }
 
 function isDelegatedMsalClient(client: unknown): client is DelegatedMsalClient {
@@ -251,6 +300,79 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
     }
 
     const body = req.body as Record<string, unknown> | undefined;
+    const grantType = String(body?.grant_type ?? 'authorization_code');
+    if (grantType === 'refresh_token') {
+      const submittedRefreshToken = String(body?.refresh_token ?? '');
+      if (!submittedRefreshToken) {
+        res.status(400).json({ error: 'invalid_request', error_description: 'refresh_token required' });
+        return;
+      }
+      try {
+        const dek = tenantPool.getDekForTenant(tenant.id);
+        const sessionStore = new SessionStore(redis, dek);
+        const session = await lookupGatewayRefreshSession({
+          redis,
+          sessionStore,
+          tenantId: tenant.id,
+          refreshToken: submittedRefreshToken,
+        });
+        if (!session?.record.refreshToken) {
+          res.status(400).json({ error: 'invalid_grant' });
+          return;
+        }
+        const msal = await tenantPool.acquire(tenant);
+        if (!isRefreshMsalClient(msal)) {
+          res.status(400).json({ error: 'unsupported_grant_type' });
+          return;
+        }
+        const fresh = await msal.acquireTokenByRefreshToken({
+          refreshToken: session.record.refreshToken,
+          scopes: session.record.scopes,
+        });
+        if (!fresh?.accessToken) {
+          res.status(400).json({ error: 'invalid_grant' });
+          return;
+        }
+        await sessionStore.put(tenant.id, fresh.accessToken, {
+          ...session.record,
+          refreshToken: fresh.refreshToken ?? session.record.refreshToken,
+          accountHomeId: fresh.account?.homeAccountId ?? session.record.accountHomeId,
+          graphAccessToken: fresh.accessToken,
+          graphAccessTokenExpiresOn: fresh.expiresOn?.toISOString(),
+          createdAt: Date.now(),
+        });
+        const nextRefreshToken = mintGatewayRefreshToken();
+        const rotated = await rotateGatewayRefreshToken({
+          redis,
+          tenantId: tenant.id,
+          oldRefreshToken: submittedRefreshToken,
+          newRefreshToken: nextRefreshToken,
+          accessToken: fresh.accessToken,
+        });
+        if (!rotated) {
+          res.status(400).json({ error: 'invalid_grant' });
+          return;
+        }
+        await sessionStore.delete(tenant.id, session.accessToken);
+        await rememberDelegatedAccessToken({
+          redis,
+          tenantId: tenant.id,
+          accessToken: fresh.accessToken,
+          expiresOn: fresh.expiresOn,
+        });
+        res.json({
+          access_token: fresh.accessToken,
+          token_type: 'Bearer',
+          expires_in: delegatedAccessTokenTtlSeconds(),
+          refresh_token: nextRefreshToken,
+        });
+      } catch (err) {
+        logger.error({ err: (err as Error).message, tenantId: tenant.id }, '/token refresh failed');
+        res.status(503).json({ error: 'temporarily_unavailable' });
+      }
+      return;
+    }
+
     const clientVerifier = String(body?.code_verifier ?? '');
     if (!clientVerifier) {
       emitTokenAudit(
@@ -291,6 +413,19 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
       return;
     }
 
+    const submittedClientId = String(body?.client_id ?? tenant.client_id);
+    const submittedRedirectUri = String(body?.redirect_uri ?? entry.redirectUri);
+    if (
+      entry.tenantId !== tenant.id ||
+      entry.clientId !== submittedClientId ||
+      entry.redirectUri !== submittedRedirectUri ||
+      entry.clientCodeChallengeMethod !== 'S256'
+    ) {
+      emitTokenAudit(tenant.id, 'failure', { error: 'invalid_grant', reason: 'binding mismatch' }, req);
+      res.status(400).json({ error: 'invalid_grant', error_description: 'binding mismatch' });
+      return;
+    }
+
     try {
       const msal = await tenantPool.acquire(tenant);
       if (!isDelegatedMsalClient(msal)) {
@@ -314,9 +449,9 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
       }
 
       const refreshTokenFromAuthority = (result as { refreshToken?: string }).refreshToken;
+      const gatewayRefreshToken = mintGatewayRefreshToken();
       try {
         const dek = tenantPool.getDekForTenant(tenant.id);
-        const { SessionStore } = await import('../session-store.js');
         const sessionStore = new SessionStore(redis, dek);
         await sessionStore.put(tenant.id, result.accessToken, {
           tenantId: tenant.id,
@@ -325,10 +460,16 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
           msalCache: serializeMsalCache(msal),
           graphAccessToken: result.accessToken,
           graphAccessTokenExpiresOn: result.expiresOn?.toISOString(),
-          clientId: tenant.client_id,
+          clientId: submittedClientId,
           scopes,
           ownerSubject: result.account?.homeAccountId ?? result.account?.username,
           createdAt: Date.now(),
+        });
+        await storeGatewayRefreshToken({
+          redis,
+          tenantId: tenant.id,
+          refreshToken: gatewayRefreshToken,
+          accessToken: result.accessToken,
         });
       } catch (sessionErr) {
         logger.error(
@@ -359,12 +500,13 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
         return;
       }
 
-      emitTokenAudit(tenant.id, 'success', { clientId: tenant.client_id, scopes }, req);
+      emitTokenAudit(tenant.id, 'success', { clientId: submittedClientId, scopes }, req);
 
       res.json({
         access_token: result.accessToken,
         token_type: 'Bearer',
         expires_in: expiresIn,
+        refresh_token: gatewayRefreshToken,
       });
     } catch (err) {
       logger.error({ err: (err as Error).message, tenantId: tenant.id }, '/token exchange failed');

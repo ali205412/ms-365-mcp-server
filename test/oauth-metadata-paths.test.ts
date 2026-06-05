@@ -23,7 +23,7 @@ describe('OAuth and connector metadata identity projection', () => {
     expect(metadata.issuer).toBe(`${publicBaseUrl}/t/${tenantId}`);
     expect(metadata.authorization_endpoint).toBe(`${publicBaseUrl}/t/${tenantId}/authorize`);
     expect(metadata.token_endpoint).toBe(`${publicBaseUrl}/t/${tenantId}/token`);
-    expect(metadata.registration_endpoint).toBe(`${publicBaseUrl}/register`);
+    expect(metadata.registration_endpoint).toBe(`${publicBaseUrl}/t/${tenantId}/register`);
     expect(metadata.client_name).toBe('Microsoft 365 MCP Gateway');
     expect(metadata.display_name).toBe('Microsoft 365 MCP Gateway');
     expect(metadata.server_info).toEqual({ name: 'Microsoft365MCP', version: '1.2.3' });

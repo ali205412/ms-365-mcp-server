@@ -90,7 +90,7 @@ function buildUrls(input: { publicBaseUrl: string; tenantId?: string | null }): 
     oauthProtectedResource: `${tenantBaseUrl}/.well-known/oauth-protected-resource`,
     oauthProtectedResourceRfc8414: `${publicBaseUrl}/.well-known/oauth-protected-resource${tenantSuffix}`,
     connectorWellKnown: `${tenantBaseUrl}/.well-known/mcp-connector`,
-    dynamicClientRegistration: `${publicBaseUrl}/register`,
+    dynamicClientRegistration: input.tenantId ? `${tenantBaseUrl}/register` : `${publicBaseUrl}/register`,
   };
 }
 
