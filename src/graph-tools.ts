@@ -438,13 +438,27 @@ function usesAdvancedDirectoryQuery(
   );
 }
 
+function isAdvancedDirectoryQueryPath(requestPath: string): boolean {
+  const path = pathWithoutQuery(requestPath).toLowerCase();
+  return [
+    '/users',
+    '/groups',
+    '/directoryobjects',
+    '/serviceprincipals',
+    '/applications',
+    '/devices',
+    '/contacts',
+    '/me/people',
+  ].some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
 function applyAdvancedDirectoryQueryHeaders(
   tool: Pick<(typeof api.endpoints)[0], 'parameters'>,
   requestPath: string,
   queryParams: Record<string, string>,
   headers: Record<string, string>
 ): void {
-  if (!supportsConsistencyLevelHeader(tool)) return;
+  if (!supportsConsistencyLevelHeader(tool) && !isAdvancedDirectoryQueryPath(requestPath)) return;
   if (!usesAdvancedDirectoryQuery(requestPath, queryParams)) return;
   if (hasHeaderCaseInsensitive(headers, CONSISTENCY_LEVEL_HEADER)) return;
   headers[CONSISTENCY_LEVEL_HEADER] = CONSISTENCY_LEVEL_EVENTUAL;

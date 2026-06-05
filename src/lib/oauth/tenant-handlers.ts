@@ -60,11 +60,6 @@ function scopesAllowedByTenant(
   return scopes.every((scope) => tenantScopeSatisfies(allowedScopes, scope));
 }
 
-function redirectSafetyPolicyForStaticClient(): RedirectUriPolicy {
-  // Exact tenant allowlists remain authoritative; still reject unsafe schemes and non-loopback HTTP.
-  return { mode: 'dev', publicUrlHost: null };
-}
-
 export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
   const { pkceStore, pgPool, publicUrlHost, extraAllowedHosts } = config;
 
@@ -110,10 +105,7 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
         publicUrlHost: publicUrlHost ?? null,
         extraAllowedHosts,
       };
-      const schemeCheck = validateRedirectUri(
-        redirectUri,
-        allowedByStaticClient ? redirectSafetyPolicyForStaticClient() : baseRedirectPolicy
-      );
+      const schemeCheck = validateRedirectUri(redirectUri, baseRedirectPolicy);
       if (!schemeCheck.ok) {
         emitAudit(
           tenant.id,

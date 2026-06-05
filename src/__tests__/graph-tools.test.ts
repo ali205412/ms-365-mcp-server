@@ -197,13 +197,9 @@ describe('graph-tools', () => {
 
   // ---- 1. $count advanced query mode ----
   describe('$count advanced query mode', () => {
-    it('sets ConsistencyLevel: eventual for directory $count=true when endpoint supports it', async () => {
+    it('sets ConsistencyLevel: eventual for directory $count=true without generated header metadata', async () => {
       const endpoint = makeEndpoint({
         path: '/users',
-        parameters: [
-          ...makeEndpoint().parameters,
-          { name: 'ConsistencyLevel', type: 'Header', schema: z.string().optional() },
-        ],
       });
       const config = makeConfig({ pathPattern: '/users', scopes: ['User.Read.All'] });
       mockEndpoints.push(endpoint);
@@ -228,13 +224,9 @@ describe('graph-tools', () => {
       expect(options.headers).toMatchObject({ ConsistencyLevel: 'eventual' });
     });
 
-    it('sets ConsistencyLevel: eventual for directory /$count segment requests', async () => {
+    it('sets ConsistencyLevel: eventual for directory /$count segment requests without generated header metadata', async () => {
       const endpoint = makeEndpoint({
         path: '/users/$count',
-        parameters: [
-          ...makeEndpoint().parameters,
-          { name: 'ConsistencyLevel', type: 'Header', schema: z.string().optional() },
-        ],
       });
       const config = makeConfig({ pathPattern: '/users/$count', scopes: ['User.Read.All'] });
       mockEndpoints.push(endpoint);
@@ -259,13 +251,9 @@ describe('graph-tools', () => {
       expect(options.headers).toMatchObject({ ConsistencyLevel: 'eventual' });
     });
 
-    it('sets ConsistencyLevel: eventual for directory $search when endpoint supports it', async () => {
+    it('sets ConsistencyLevel: eventual for directory $search without generated header metadata', async () => {
       const endpoint = makeEndpoint({
         path: '/groups',
-        parameters: [
-          ...makeEndpoint().parameters,
-          { name: 'ConsistencyLevel', type: 'Header', schema: z.string().optional() },
-        ],
       });
       const config = makeConfig({ pathPattern: '/groups', scopes: ['Group.Read.All'] });
       mockEndpoints.push(endpoint);

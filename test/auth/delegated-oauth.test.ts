@@ -292,7 +292,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     expect(body.error).toBe('invalid_scope');
   });
 
-  it('preserves exact static redirect allowlist entries outside the production public host policy', async () => {
+  it('rejects exact static redirect allowlist entries outside the production public host policy', async () => {
     const originalNodeEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
     try {
@@ -303,7 +303,10 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
       );
 
       const clientVerifier = crypto.randomBytes(32).toString('base64url');
-      const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
+      const clientChallenge = crypto
+        .createHash('sha256')
+        .update(clientVerifier)
+        .digest('base64url');
       const params = new URLSearchParams({
         redirect_uri: redirectUri,
         code_challenge: clientChallenge,
@@ -314,7 +317,10 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
 
       const res = await fetch(`${harness.url}/authorize?${params}`, { redirect: 'manual' });
 
-      expect(res.status).toBe(302);
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: string; reason: string };
+      expect(body.error).toBe('invalid_redirect_uri');
+      expect(body.reason).toContain('host not in allowlist');
     } finally {
       if (originalNodeEnv === undefined) {
         delete process.env.NODE_ENV;

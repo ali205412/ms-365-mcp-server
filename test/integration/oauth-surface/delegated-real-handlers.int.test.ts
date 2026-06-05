@@ -13,6 +13,7 @@ import type { AddressInfo } from 'node:net';
 import crypto from 'node:crypto';
 import { MemoryRedisFacade } from '../../../src/lib/redis-facade.js';
 import { RedisPkceStore } from '../../../src/lib/pkce-store/redis-store.js';
+import type { AuthorizeHandlerConfig } from '../../../src/lib/oauth/tenant-handlers.js';
 import type { TenantRow } from '../../../src/lib/tenant/tenant-row.js';
 import { newPkce } from '../../setup/pkce-fixture.js';
 
@@ -69,6 +70,7 @@ function makeTenant(overrides: Partial<TenantRow> = {}): TenantRow {
 async function startApp(options: {
   tenant?: Partial<TenantRow>;
   msalClient?: unknown;
+  authorizeConfig?: Partial<Omit<AuthorizeHandlerConfig, 'pkceStore'>>;
 }): Promise<Harness> {
   const redis = new MemoryRedisFacade();
   const pkceStore = new RedisPkceStore(redis);
@@ -97,7 +99,11 @@ async function startApp(options: {
     next();
   };
 
-  app.get('/authorize', loadTenantStub, createAuthorizeHandler({ pkceStore }));
+  app.get(
+    '/authorize',
+    loadTenantStub,
+    createAuthorizeHandler({ pkceStore, ...options.authorizeConfig })
+  );
   app.post(
     '/token',
     loadTenantStub,
@@ -245,6 +251,40 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
     expect(second.status).toBe(400);
     const body = (await second.json()) as { error: string };
     expect(body.error).toBe('pkce_challenge_collision');
+  });
+
+  it('/authorize applies production host policy even for static exact redirect allowlists', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      harness = await startApp({
+        tenant: { redirect_uri_allowlist: ['https://hosted.example/callback'] },
+        authorizeConfig: { publicUrlHost: 'mcp.example.com', extraAllowedHosts: [] },
+      });
+      const pkce = newPkce();
+
+      const res = await fetch(
+        `${harness.url}/authorize?` +
+          new URLSearchParams({
+            redirect_uri: 'https://hosted.example/callback',
+            code_challenge: pkce.challenge,
+            code_challenge_method: 'S256',
+            client_id: harness.tenant.client_id,
+          }),
+        { redirect: 'manual' }
+      );
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: string; reason: string };
+      expect(body.error).toBe('invalid_redirect_uri');
+      expect(body.reason).toContain('host not in allowlist');
+    } finally {
+      if (originalNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = originalNodeEnv;
+      }
+    }
   });
 
   it('/authorize rejects forbidden schemes, allowlist misses, and malformed challenges', async () => {
