@@ -521,10 +521,10 @@ async function main(): Promise<void> {
     //
     //   --tenant-id set: load the row from Postgres (already done at line
     //     371-403 above) and compute enabled_tools_set via the parser.
-    //   --tenant-id absent (legacy stdio): register a permissive fallback
-    //     that mirrors the full registered tool surface — the v1-era
-    //     `--enabled-tools` regex filter at registerGraphTools time is the
-    //     sole source of truth in legacy mode. This preserves backwards
+    //   --tenant-id absent (legacy stdio): register a fallback mirroring the
+    //     effectively registered tool surface. The v1-era `--enabled-tools`
+    //     regex narrows both registration and this fallback so discovery
+    //     handlers cannot re-open excluded aliases. This preserves backwards
     //     compatibility without falling open on HTTP mode (HTTP mode always
     //     populates ALS via loadTenant + seedTenantContext).
     if (!isHttpMode) {
@@ -565,17 +565,26 @@ async function main(): Promise<void> {
           );
         }
       }
-      // Legacy mode (or tenant-id row load failed): register a permissive
-      // fallback covering the full registry. The existing --enabled-tools
-      // regex filter at registerGraphTools time already narrows the surface.
+      // Legacy mode (or tenant-id row load failed): register a fallback
+      // covering the same surface native/discovery registration exposes after
+      // the optional --enabled-tools regex is applied.
       const { api } = await import('./generated/client.js');
       const { setStdioFallback: setFallback } =
         await import('./lib/tool-selection/dispatch-guard.js');
       if (!tenantIdArg || !process.env.MS365_MCP_DATABASE_URL) {
+        const enabledToolsRegex = args.enabledTools
+          ? new RegExp(args.enabledTools, 'i')
+          : undefined;
+        const allowsAlias = (alias: string): boolean => {
+          if (!enabledToolsRegex) return true;
+          enabledToolsRegex.lastIndex = 0;
+          return enabledToolsRegex.test(alias);
+        };
         const allAliases = new Set<string>(
           api.endpoints
             .map((e) => e.alias)
             .filter((a): a is string => typeof a === 'string' && a.length > 0)
+            .filter(allowsAlias)
         );
         // Add the synthetic tools registered beyond api.endpoints. These are
         // also filtered by the v1 --enabled-tools regex at registration time;
@@ -591,7 +600,7 @@ async function main(): Promise<void> {
           BULK_ACTION_TOOL,
           READ_BULK_RESULT_TOOL,
         ]) {
-          allAliases.add(synthetic);
+          if (allowsAlias(synthetic)) allAliases.add(synthetic);
         }
         setFallback({
           enabledToolsSet: Object.freeze(allAliases),

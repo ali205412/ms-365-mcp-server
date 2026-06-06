@@ -1333,15 +1333,7 @@ export function registerGraphTools(
    */
   enabledToolsSet?: ReadonlySet<string>
 ): number {
-  let enabledToolsRegex: RegExp | undefined;
-  if (enabledToolsPattern) {
-    try {
-      enabledToolsRegex = new RegExp(enabledToolsPattern, 'i');
-      logger.info(`Tool filtering enabled with pattern: ${enabledToolsPattern}`);
-    } catch {
-      logger.error(`Invalid tool filter regex pattern: ${enabledToolsPattern}. Ignoring filter.`);
-    }
-  }
+  const enabledToolsRegex = compileEnabledToolsRegex(enabledToolsPattern);
 
   const useSetFilter = enabledToolsSet !== undefined && enabledToolsSet.size > 0;
   if (useSetFilter) {
@@ -1384,7 +1376,7 @@ export function registerGraphTools(
       }
     }
 
-    if (enabledToolsRegex && !enabledToolsRegex.test(tool.alias)) {
+    if (!aliasMatchesEnabledToolsRegex(enabledToolsRegex, tool.alias)) {
       logger.info(`Skipping tool ${tool.alias} - doesn't match filter pattern`);
       skippedCount++;
       continue;
@@ -1621,7 +1613,8 @@ export function registerGraphTools(
     readOnly,
     orgMode,
     executeToolAlias,
-    createToolAliasExecutor: () => createExecuteToolAliasForCurrentContext(readOnly, orgMode),
+    createToolAliasExecutor: () =>
+      createExecuteToolAliasForCurrentContext(readOnly, orgMode, enabledToolsRegex),
     enabledToolsPattern: enabledToolsRegex,
     enabledToolsSet,
   });
@@ -1954,6 +1947,36 @@ export function buildToolsRegistry(
   return toolsMap;
 }
 
+function compileEnabledToolsRegex(enabledToolsPattern: string | undefined): RegExp | undefined {
+  if (!enabledToolsPattern) return undefined;
+  try {
+    const regex = new RegExp(enabledToolsPattern, 'i');
+    logger.info(`Tool filtering enabled with pattern: ${enabledToolsPattern}`);
+    return regex;
+  } catch {
+    logger.error(`Invalid tool filter regex pattern: ${enabledToolsPattern}. Ignoring filter.`);
+    return undefined;
+  }
+}
+
+function aliasMatchesEnabledToolsRegex(regex: RegExp | undefined, alias: string): boolean {
+  if (!regex) return true;
+  regex.lastIndex = 0;
+  return regex.test(alias);
+}
+
+function filterToolsRegistryByPattern(
+  toolsRegistry: ReturnType<typeof buildToolsRegistry>,
+  enabledToolsRegex: RegExp | undefined
+): ReturnType<typeof buildToolsRegistry> {
+  if (!enabledToolsRegex) return toolsRegistry;
+  const filtered: ReturnType<typeof buildToolsRegistry> = new Map();
+  for (const [alias, entry] of toolsRegistry) {
+    if (aliasMatchesEnabledToolsRegex(enabledToolsRegex, alias)) filtered.set(alias, entry);
+  }
+  return filtered;
+}
+
 export interface ExecuteToolAliasArgs {
   toolName: string;
   parameters?: Record<string, unknown>;
@@ -1961,11 +1984,13 @@ export interface ExecuteToolAliasArgs {
   authManager?: AuthManager;
   readOnly?: boolean;
   orgMode?: boolean;
+  enabledToolsPattern?: RegExp;
 }
 
 export function createExecuteToolAliasForCurrentContext(
   readOnly = false,
-  orgMode = false
+  orgMode = false,
+  enabledToolsRegex?: RegExp
 ): (args: ExecuteToolAliasArgs) => Promise<CallToolResult> {
   const tenant = resolveTenantForDiscovery();
   if (!tenant) {
@@ -1986,7 +2011,10 @@ export function createExecuteToolAliasForCurrentContext(
     };
   }
 
-  const toolsRegistry = buildToolsRegistry(readOnly, orgMode);
+  const toolsRegistry = filterToolsRegistryByPattern(
+    buildToolsRegistry(readOnly, orgMode),
+    enabledToolsRegex
+  );
   const catalog = resolveDiscoveryCatalog({
     presetVersion: tenant.presetVersion,
     enabledToolsSet: tenant.enabledToolsSet,
@@ -2060,7 +2088,11 @@ export function createExecuteToolAliasForCurrentContext(
 }
 
 export async function executeToolAlias(args: ExecuteToolAliasArgs): Promise<CallToolResult> {
-  const runner = createExecuteToolAliasForCurrentContext(args.readOnly, args.orgMode);
+  const runner = createExecuteToolAliasForCurrentContext(
+    args.readOnly,
+    args.orgMode,
+    args.enabledToolsPattern
+  );
   return runner(args);
 }
 
@@ -2195,7 +2227,11 @@ export function registerDiscoveryTools(
   enabledToolsPattern?: string,
   enabledToolsSet?: ReadonlySet<string>
 ): void {
-  const toolsRegistry = buildToolsRegistry(readOnly, orgMode);
+  const enabledToolsRegex = compileEnabledToolsRegex(enabledToolsPattern);
+  const toolsRegistry = filterToolsRegistryByPattern(
+    buildToolsRegistry(readOnly, orgMode),
+    enabledToolsRegex
+  );
   // Plan 05-06: project down to the shape the per-tenant BM25 cache
   // consumes. Built once per registerDiscoveryTools call; reused for every
   // search-tools / get-tool-schema invocation.
@@ -2451,6 +2487,7 @@ export function registerDiscoveryTools(
         authManager,
         readOnly,
         orgMode,
+        enabledToolsPattern: enabledToolsRegex,
       });
       if (result.isError) return result;
       if (isTranscriptContentAlias(tool_name)) {
@@ -2492,22 +2529,14 @@ export function registerDiscoveryTools(
     }
   );
 
-  let enabledToolsRegex: RegExp | undefined;
-  if (enabledToolsPattern) {
-    try {
-      enabledToolsRegex = new RegExp(enabledToolsPattern, 'i');
-    } catch {
-      logger.error(`Invalid tool filter regex pattern: ${enabledToolsPattern}. Ignoring filter.`);
-    }
-  }
-
   registerBulkActionTools(server, {
     graphClient,
     authManager,
     readOnly,
     orgMode,
     executeToolAlias,
-    createToolAliasExecutor: () => createExecuteToolAliasForCurrentContext(readOnly, orgMode),
+    createToolAliasExecutor: () =>
+      createExecuteToolAliasForCurrentContext(readOnly, orgMode, enabledToolsRegex),
     enabledToolsPattern: enabledToolsRegex,
     enabledToolsSet,
   });

@@ -405,6 +405,65 @@ describe('Phase 7 Plan 07-02 — discovery catalog separation', () => {
     expect(graphClient.graphRequest).not.toHaveBeenCalled();
   });
 
+  it('enabled-tools regex filters discovery search, schema, and execute-tool dispatch', async () => {
+    const server = new McpServer({ name: 'test', version: '0.0.0' });
+    const graphClient = {
+      graphRequest: vi.fn().mockResolvedValue({
+        content: [{ type: 'text', text: JSON.stringify({ ok: true }) }],
+      }),
+    };
+    registerDiscoveryTools(
+      server,
+      graphClient as unknown as Parameters<typeof registerDiscoveryTools>[1],
+      false,
+      true,
+      undefined,
+      false,
+      '^me\\.ListMessages$'
+    );
+
+    const ctx = {
+      tenantId: '11111111-1111-4111-8111-222222222222',
+      enabledToolsSet: DISCOVERY_META_TOOL_NAMES,
+      presetVersion: DISCOVERY_PRESET_VERSION,
+    };
+
+    const search = await requestContext.run(ctx, () =>
+      callDiscoveryTool(server, 'search-tools', { limit: 10 })
+    );
+    const searchBody = JSON.parse(search.content[0].text) as {
+      tools: Array<{ name: string }>;
+      total: number;
+    };
+    expect(searchBody.total).toBe(1);
+    expect(searchBody.tools.map((tool) => tool.name)).toEqual(['me.ListMessages']);
+
+    const excludedSchema = await requestContext.run(ctx, () =>
+      callDiscoveryTool(server, 'get-tool-schema', { tool_name: 'me.sendMail' })
+    );
+    expect(excludedSchema.isError).toBe(true);
+    expect(excludedSchema.content[0].text).toContain('Tool not enabled for tenant');
+
+    const includedSchema = await requestContext.run(ctx, () =>
+      callDiscoveryTool(server, 'get-tool-schema', { tool_name: 'me.ListMessages' })
+    );
+    expect(includedSchema.isError).toBeFalsy();
+    expect(includedSchema.content[0].text).toContain('me.ListMessages');
+
+    const excludedExecute = await requestContext.run(ctx, () =>
+      callDiscoveryTool(server, 'execute-tool', { tool_name: 'me.sendMail', parameters: {} })
+    );
+    expect(excludedExecute.isError).toBe(true);
+    expect(excludedExecute.content[0].text).toContain('Tool not enabled for tenant');
+    expect(graphClient.graphRequest).not.toHaveBeenCalled();
+
+    const includedExecute = await requestContext.run(ctx, () =>
+      callDiscoveryTool(server, 'execute-tool', { tool_name: 'me.ListMessages', parameters: {} })
+    );
+    expect(includedExecute.isError).toBeFalsy();
+    expect(graphClient.graphRequest).toHaveBeenCalledTimes(1);
+  });
+
   it('discovery tools enforce explicit tenant allowlists before schema or execution', async () => {
     const server = new McpServer({ name: 'test', version: '0.0.0' });
     const graphClient = {
