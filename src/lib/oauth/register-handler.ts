@@ -117,6 +117,19 @@ export function createRegisterHandler(
       validatedRedirectUris.push(uri);
     }
 
+    if (
+      options.pgPool &&
+      options.tenantId &&
+      grantTypes.includes('authorization_code') &&
+      validatedRedirectUris.length === 0
+    ) {
+      res.status(400).json({
+        error: 'invalid_client_metadata',
+        error_description: 'Durable authorization_code clients require at least one redirect_uri.',
+      });
+      return;
+    }
+
     if (options.pgPool && options.tenantId) {
       const registration = await createOAuthClientRegistration(options.pgPool, {
         tenantId: options.tenantId,

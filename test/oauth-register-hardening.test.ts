@@ -54,6 +54,7 @@ async function startMiniServer(opts: {
   mode: 'prod' | 'dev';
   publicUrlHost: string | null;
   supportedGrantTypes?: readonly string[];
+  durableTenantId?: string;
 }): Promise<{ url: string; close: () => Promise<void> }> {
   // Dynamic import so module loading is lazy and picks up mocks correctly.
   const { createRegisterHandler } = await import('../src/lib/oauth/register-handler.js');
@@ -66,7 +67,10 @@ async function startMiniServer(opts: {
         mode: opts.mode,
         publicUrlHost: opts.publicUrlHost,
       },
-      opts.supportedGrantTypes ? { supportedGrantTypes: opts.supportedGrantTypes } : {}
+      {
+        ...(opts.supportedGrantTypes ? { supportedGrantTypes: opts.supportedGrantTypes } : {}),
+        ...(opts.durableTenantId ? { pgPool: {} as never, tenantId: opts.durableTenantId } : {}),
+      }
     )
   );
 
@@ -168,6 +172,19 @@ describe('POST /register — redirect_uri allowlist (AUTH-06, T-01-06)', () => {
     server = await startMiniServer({ mode: 'prod', publicUrlHost: null });
     const res = await postJson(`${server.url}/register`, { redirect_uris: [] });
     expect(res.status).toBe(201);
+  });
+
+  it('rejects durable authorization_code clients without redirect URIs', async () => {
+    server = await startMiniServer({
+      mode: 'prod',
+      publicUrlHost: null,
+      durableTenantId: 'tenant-a',
+    });
+
+    const res = await postJson(`${server.url}/register`, { redirect_uris: [] });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: 'invalid_client_metadata' });
   });
 
   it('defaults and validates grant types against the mount policy', async () => {

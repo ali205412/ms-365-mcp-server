@@ -3,8 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type GraphClient from '../../src/graph-client.js';
 import { requestContext } from '../../src/request-context.js';
 import { registerBulkActionTools } from '../../src/lib/bulk-actions/register.js';
-import { BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL } from '../../src/lib/bulk-actions/schema.js';
-import { resetBulkResultStoreForTesting } from '../../src/lib/bulk-actions/result-store.js';
+import {
+  BULK_ACTION_TOOL,
+  BULK_LIMITS,
+  READ_BULK_RESULT_TOOL,
+} from '../../src/lib/bulk-actions/schema.js';
+import {
+  resetBulkResultStoreForTesting,
+  storeBulkResult,
+} from '../../src/lib/bulk-actions/result-store.js';
 
 vi.mock('../../src/generated/client.js', async () => {
   const { z } = await import('zod');
@@ -228,6 +235,21 @@ describe('generic bulk-action tool', () => {
     expect(result.isError).toBe(true);
     expect(JSON.stringify(dataFrom(result))).toContain('result_store_unavailable');
     expect(executeToolAlias).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversized stored bulk results instead of truncating them', async () => {
+    resetBulkResultStoreForTesting();
+    const items = Array.from({ length: BULK_LIMITS.maxStoredItems + 1 }, (_, index) => ({
+      id: `item-${index}`,
+      toolName: 'get-chat',
+      status: 'succeeded',
+    }));
+
+    const result = await withTenant([BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL], async () =>
+      storeBulkResult({ digest: 'digest', items, summary: {} })
+    );
+
+    expect(result).toMatchObject({ error: 'output_budget_exceeded' });
   });
 
   it('requires plan-bound confirmation before high-risk writes and injects internal static confirmation only after match', async () => {

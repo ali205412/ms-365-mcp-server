@@ -136,6 +136,14 @@ function discoveryTenant() {
   };
 }
 
+function restrictedDashboardTenant() {
+  return {
+    ...discoveryTenant(),
+    enabled_tools: 'connector-diagnostics',
+    enabled_tools_set: Object.freeze(new Set(['connector-diagnostics'])),
+  };
+}
+
 describe('Phase 7 Plan 07-11 Task 2 - MCP resource read dispatch', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -272,6 +280,26 @@ describe('Phase 7 Plan 07-11 Task 2 - MCP resource read dispatch', () => {
       )
     ).rejects.toMatchObject({
       data: { code: 'tenant_resource_mismatch' },
+    });
+  });
+
+  it('rejects dashboard resources when the backing dashboard tool is disabled', async () => {
+    const tenant = restrictedDashboardTenant();
+
+    await expect(
+      requestContext.run(
+        {
+          ...discoveryContext(),
+          enabledToolsSet: tenant.enabled_tools_set,
+          enabledToolsExplicit: true,
+        },
+        () =>
+          readMcpResource(`mcp://tenant/${TENANT_A}/dashboards/inbox-triage.json`, {
+            tenant,
+          })
+      )
+    ).rejects.toMatchObject({
+      data: { code: 'invalid_resource_uri' },
     });
   });
 
@@ -458,6 +486,21 @@ describe('Phase 7 Plan 07-11 Task 3 - MCP resource registration', () => {
     expect(list.resources.find((resource) => resource.uri.endsWith('/scopes.json'))?.mimeType).toBe(
       'application/json'
     );
+  });
+
+  it('filters dashboard resources by visible dashboard tools for explicit discovery tenants', async () => {
+    const server = new McpServer({ name: 'resources-test', version: '0.0.0' });
+    registerMcpResources(server, {
+      tenant: restrictedDashboardTenant(),
+      orgMode: true,
+    });
+
+    const list = await requestContext.run(discoveryContext(), () => invokeResourcesList(server));
+    const uris = list.resources.map((resource) => resource.uri).sort();
+
+    expect(uris).toContain(`m365://tenant/${TENANT_A}/dashboards/connector-diagnostics.json`);
+    expect(uris).not.toContain(`m365://tenant/${TENANT_A}/dashboards/inbox-triage.json`);
+    expect(uris).not.toContain(`mcp://tenant/${TENANT_A}/dashboards/inbox-triage.json`);
   });
 
   it('registers workload, endpoint schema, and editable skill resource templates', async () => {

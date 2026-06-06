@@ -449,6 +449,40 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     ]);
   });
 
+  it('rejects code exchange when tenant scopes were revoked after authorize', async () => {
+    harness = await startApp({ allowed_scopes: ['Mail.Read'] });
+
+    const clientVerifier = crypto.randomBytes(32).toString('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
+    const params = new URLSearchParams({
+      redirect_uri: 'http://localhost:3000/callback',
+      code_challenge: clientChallenge,
+      code_challenge_method: 'S256',
+      state: 'revoked-scope-test',
+      client_id: harness.tenant.client_id,
+      scope: 'Mail.Read',
+    });
+
+    const authorizeRes = await fetch(`${harness.url}/authorize?${params}`, { redirect: 'manual' });
+    expect(authorizeRes.status).toBe(302);
+    harness.tenant.allowed_scopes = ['User.Read'];
+
+    const tokenRes = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: 'the-auth-code',
+        redirect_uri: 'http://localhost:3000/callback',
+        code_verifier: clientVerifier,
+      }),
+    });
+
+    expect(tokenRes.status).toBe(400);
+    expect(await tokenRes.json()).toMatchObject({ error: 'invalid_grant' });
+    expect(harness.mockMsalAcquireByCode).not.toHaveBeenCalled();
+  });
+
   it('rejects requested scopes not permitted by the tenant', async () => {
     harness = await startApp({ allowed_scopes: ['User.Read'] });
 

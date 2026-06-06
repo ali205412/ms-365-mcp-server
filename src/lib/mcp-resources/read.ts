@@ -17,7 +17,11 @@ import {
   type McpTransportKind,
 } from '../mcp-capabilities/profile.js';
 import { resolveDiscoveryCatalog } from '../discovery-catalog/catalog.js';
-import { buildDashboardData, type DashboardTenantContext } from '../mcp-dashboards/data.js';
+import {
+  buildDashboardData,
+  dashboardToolName,
+  type DashboardTenantContext,
+} from '../mcp-dashboards/data.js';
 import { listBookmarks } from '../memory/bookmarks.js';
 import { recallFacts } from '../memory/facts.js';
 import { listRecipes } from '../memory/recipes.js';
@@ -401,6 +405,19 @@ function dashboardTenantContext(
   };
 }
 
+function isDashboardResourceVisible(
+  slug: DashboardMcpResourceUri['slug'],
+  deps: ReadMcpResourceDeps
+): boolean {
+  const tenant = tenantContextFromDeps(deps);
+  const toolName = dashboardToolName(slug);
+  if (tenant.presetVersion && !tenant.enabledToolsExplicit) return true;
+  if (tenant.presetVersion) {
+    return tenant.enabledToolsSet?.has(toolName) ?? false;
+  }
+  return tenant.enabledToolsSet?.has(toolName) ?? true;
+}
+
 function readDashboardTenantResource(
   uri: string,
   parsed: DashboardMcpResourceUri,
@@ -410,6 +427,12 @@ function readDashboardTenantResource(
   assertParsed(owned);
   if (owned.kind !== 'dashboard') {
     throw new McpError(ErrorCode.InvalidParams, 'Resource is not a dashboard URI.', {
+      code: 'invalid_resource_uri',
+    });
+  }
+
+  if (!isDashboardResourceVisible(owned.slug, deps)) {
+    throw new McpError(ErrorCode.InvalidParams, `Dashboard resource not found: ${owned.slug}`, {
       code: 'invalid_resource_uri',
     });
   }

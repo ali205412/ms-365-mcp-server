@@ -782,6 +782,16 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
 
       const scopes = entry.scopes ?? ['User.Read'];
       const tokenScopes = entry.tokenScopes ?? scopes;
+      if (!scopesAllowedByTenant(tenant, scopes)) {
+        emitTokenAudit(
+          tenant.id,
+          'failure',
+          { error: 'invalid_grant', reason: 'scope_revoked' },
+          req
+        );
+        res.status(400).json({ error: 'invalid_grant' });
+        return;
+      }
       const result = await msal.acquireTokenByCode({
         code: String(body?.code ?? ''),
         scopes: tokenScopes,

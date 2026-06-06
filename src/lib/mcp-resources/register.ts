@@ -2,7 +2,8 @@ import { ResourceTemplate, type McpServer } from '@modelcontextprotocol/sdk/serv
 import { MARKDOWN_MIME_TYPE, STATIC_CATALOG_RESOURCES, WORKLOAD_GUIDE_SLUGS } from './catalog.js';
 import { JSON_MIME_TYPE, readMcpResource, type ReadMcpResourceDeps } from './read.js';
 import { GRAPH_BACKED_RESOURCE_TEMPLATES } from './graph-backed.js';
-import { APP_DEFINITIONS } from '../mcp-apps/assets.js';
+import { APP_DEFINITIONS, type DashboardSlug } from '../mcp-apps/assets.js';
+import { dashboardToolName } from '../mcp-dashboards/data.js';
 import { registerResourceSubscriptionHandlers } from '../mcp-notifications/register-handlers.js';
 import type { RedisResourceSubscriptionStore } from '../mcp-notifications/resource-subscriptions.js';
 import {
@@ -220,15 +221,30 @@ function connectorResourceDefinitions(tenantId: string): ResourceDefinition[] {
   );
 }
 
-function dashboardResourceDefinitions(tenantId: string): ResourceDefinition[] {
-  return APP_DEFINITIONS.flatMap((app) =>
-    withLegacyAlias({
-      uri: `m365://tenant/${tenantId}/dashboards/${app.slug}.json`,
-      name: `tenant-dashboard-${app.slug}`,
-      title: `${app.title} Data`,
-      description: `Read-only JSON backing data for the ${app.title}.`,
-      mimeType: JSON_MIME_TYPE,
-    })
+function isDashboardResourceAllowed(slug: DashboardSlug, deps: RegisterMcpResourcesDeps): boolean {
+  const toolName = dashboardToolName(slug);
+  const explicitTools =
+    deps.tenant?.enabled_tools !== null && deps.tenant?.enabled_tools !== undefined;
+  if (isDiscoverySurface(deps.tenant?.preset_version) && !explicitTools) return true;
+  if (isDiscoverySurface(deps.tenant?.preset_version)) {
+    return deps.tenant?.enabled_tools_set?.has(toolName) ?? false;
+  }
+  return deps.tenant?.enabled_tools_set?.has(toolName) ?? true;
+}
+
+function dashboardResourceDefinitions(
+  tenantId: string,
+  deps: RegisterMcpResourcesDeps
+): ResourceDefinition[] {
+  return APP_DEFINITIONS.filter((app) => isDashboardResourceAllowed(app.slug, deps)).flatMap(
+    (app) =>
+      withLegacyAlias({
+        uri: `m365://tenant/${tenantId}/dashboards/${app.slug}.json`,
+        name: `tenant-dashboard-${app.slug}`,
+        title: `${app.title} Data`,
+        description: `Read-only JSON backing data for the ${app.title}.`,
+        mimeType: JSON_MIME_TYPE,
+      })
   );
 }
 
@@ -397,7 +413,7 @@ export function registerMcpResources(server: McpServer, deps: RegisterMcpResourc
     for (const resource of connectorResourceDefinitions(tenantId)) {
       registerStaticResource(server, resource, deps);
     }
-    for (const resource of dashboardResourceDefinitions(tenantId)) {
+    for (const resource of dashboardResourceDefinitions(tenantId, deps)) {
       registerStaticResource(server, resource, deps);
     }
     for (const resource of skillResourceDefinitions(tenantId)) {

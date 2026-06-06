@@ -86,7 +86,13 @@ export function storeBulkResult(input: {
   if (!currentTenant)
     return { error: 'tenant_context_unavailable', message: 'Tenant context unavailable.' };
   const ownerKey = bulkOwnerKey();
-  const items = input.items.slice(0, BULK_LIMITS.maxStoredItems);
+  if (input.items.length > BULK_LIMITS.maxStoredItems) {
+    return {
+      error: 'output_budget_exceeded',
+      message: `Bulk result contains ${input.items.length} items, exceeding the storage limit of ${BULK_LIMITS.maxStoredItems}.`,
+    };
+  }
+  const items = input.items;
   const payloadBytes = byteLength({ items, summary: input.summary });
   if (payloadBytes > BULK_LIMITS.maxStoredResultBytes) {
     return {
