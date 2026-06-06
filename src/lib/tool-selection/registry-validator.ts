@@ -40,7 +40,8 @@
 import { z } from 'zod';
 import { distance } from 'fastest-levenshtein';
 import { api } from '../../generated/client.js';
-import { DISCOVERY_V1_OPS, PRESET_VERSIONS } from '../../presets/generated-index.js';
+import { PRESET_VERSIONS } from '../../presets/generated-index.js';
+import { DISCOVERY_META_TOOL_NAMES } from '../tenant-surface/surface.js';
 import type { Selector } from './selector-ast.js';
 import { parseSelectorList } from './selector-ast.js';
 
@@ -84,7 +85,7 @@ const GRAPH_REGISTRY_ALIAS_SET: ReadonlySet<string> = Object.freeze(
 );
 
 const REGISTRY_ALIASES: ReadonlySet<string> = Object.freeze(
-  new Set([...GRAPH_REGISTRY_ALIASES, ...DISCOVERY_V1_OPS])
+  new Set([...GRAPH_REGISTRY_ALIASES, ...DISCOVERY_META_TOOL_NAMES])
 );
 
 const WORKLOAD_PREFIXES: ReadonlySet<string> = Object.freeze(

@@ -96,6 +96,26 @@ function resolveTenantAuthorizeScopes(
   };
 }
 
+async function isRedirectUriAllowedByDynamicClient(
+  pgPool: Pool,
+  tenant: Pick<TenantRow, 'id'>,
+  clientId: string,
+  redirectUri: string
+): Promise<boolean> {
+  if (!(await isOAuthClientStoreAvailable(pgPool))) return false;
+  const registration = await getActiveOAuthClientRegistration(pgPool, tenant.id, clientId);
+  const allowed = Boolean(
+    registration &&
+    hasExactRedirectUri(registration, redirectUri) &&
+    registration.grantTypes.includes('authorization_code') &&
+    registration.responseTypes.includes('code')
+  );
+  if (allowed) {
+    await touchOAuthClientRegistration(pgPool, tenant.id, clientId);
+  }
+  return allowed;
+}
+
 export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
   const { pkceStore, pgPool } = config;
 
@@ -150,17 +170,13 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
       }
     }
     let allowedByDynamicClient = false;
-    if (!allowedByStaticClient && pgPool && (await isOAuthClientStoreAvailable(pgPool))) {
-      const registration = await getActiveOAuthClientRegistration(pgPool, tenant.id, clientId);
-      allowedByDynamicClient = Boolean(
-        registration &&
-        hasExactRedirectUri(registration, redirectUri) &&
-        registration.grantTypes.includes('authorization_code') &&
-        registration.responseTypes.includes('code')
+    if (!allowedByStaticClient && pgPool) {
+      allowedByDynamicClient = await isRedirectUriAllowedByDynamicClient(
+        pgPool,
+        tenant,
+        clientId,
+        redirectUri
       );
-      if (allowedByDynamicClient) {
-        await touchOAuthClientRegistration(pgPool, tenant.id, clientId);
-      }
     }
     if (!allowedByStaticClient && !allowedByDynamicClient) {
       emitAudit(tenant.id, 'failure', redirectUri, { error: 'invalid_redirect_uri' }, req);
