@@ -675,6 +675,39 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
     expect(((await upstreamFailure.json()) as { error: string }).error).toBe('invalid_grant');
   });
 
+  it('/token keeps PKCE retryable when required binding fields are missing', async () => {
+    harness = await startApp({});
+    const pkce = newPkce();
+    await seedPkce(harness, pkce.verifier);
+
+    const malformed = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: 'auth-code-retryable',
+        redirect_uri: 'http://localhost:3000/callback',
+        code_verifier: pkce.verifier,
+      }),
+    });
+    expect(malformed.status).toBe(400);
+    expect(((await malformed.json()) as { error: string }).error).toBe('invalid_request');
+
+    const retry = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: 'auth-code-retryable',
+        redirect_uri: 'http://localhost:3000/callback',
+        client_id: harness.tenant.client_id,
+        code_verifier: pkce.verifier,
+      }),
+    });
+    expect(retry.status).toBe(200);
+    expect(harness.mockAcquireByCode).toHaveBeenCalledTimes(1);
+  });
+
   it('/token rejects missing verifier, missing code, and PKCE misses before MSAL', async () => {
     harness = await startApp({});
 
@@ -709,6 +742,8 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
       body: new URLSearchParams({
         grant_type: 'authorization_code',
         code: 'auth-code-1',
+        redirect_uri: 'http://localhost:3000/callback',
+        client_id: harness.tenant.client_id,
         code_verifier: pkce.verifier,
       }),
     });

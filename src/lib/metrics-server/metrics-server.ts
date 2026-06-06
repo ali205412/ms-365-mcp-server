@@ -146,13 +146,22 @@ export function isPublicMetricsBind(host: string): boolean {
       ? normalizedHost.slice(1, -1)
       : normalizedHost;
 
-  if (unbracketedHost === 'localhost' || unbracketedHost === '::1') {
-    return false;
-  }
+  return !isLoopbackMetricsHost(unbracketedHost);
+}
 
-  if (isIP(unbracketedHost) === 4 && unbracketedHost.startsWith('127.')) {
-    return false;
-  }
+function isLoopbackMetricsHost(host: string): boolean {
+  if (host === 'localhost' || host === '::1') return true;
 
-  return true;
+  if (isIP(host) === 4) return host.startsWith('127.');
+  if (isIP(host) !== 6) return false;
+
+  const mappedIpv4 = host.match(/^(?:::ffff:|0:0:0:0:0:ffff:)(\d+\.\d+\.\d+\.\d+)$/u);
+  if (mappedIpv4) return mappedIpv4[1].startsWith('127.');
+
+  const hextets = host.split(':');
+  return (
+    hextets.length === 8 &&
+    hextets.slice(0, 7).every((part) => Number.parseInt(part, 16) === 0) &&
+    Number.parseInt(hextets[7], 16) === 1
+  );
 }

@@ -176,6 +176,11 @@ describe('plan 06-03 — /metrics integration contract (OPS-07)', () => {
     expect(isPublicMetricsBind('LOCALHOST')).toBe(false);
     expect(isPublicMetricsBind('::1')).toBe(false);
     expect(isPublicMetricsBind('[::1]')).toBe(false);
+    expect(isPublicMetricsBind('0:0:0:0:0:0:0:1')).toBe(false);
+    expect(isPublicMetricsBind('[0:0:0:0:0:0:0:1]')).toBe(false);
+    expect(isPublicMetricsBind('::ffff:127.0.0.1')).toBe(false);
+    expect(isPublicMetricsBind('[::ffff:127.0.0.1]')).toBe(false);
+    expect(isPublicMetricsBind('0:0:0:0:0:ffff:127.0.0.2')).toBe(false);
 
     expect(isPublicMetricsBind('0.0.0.0')).toBe(true);
     expect(isPublicMetricsBind('::')).toBe(true);

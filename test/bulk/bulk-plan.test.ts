@@ -35,6 +35,12 @@ vi.mock('../../src/generated/client.js', async () => {
           ],
         },
         {
+          alias: 'list-user-messages',
+          method: 'GET',
+          path: '/users/:user-id/messages',
+          parameters: [],
+        },
+        {
           alias: 'get-meeting-transcript-content',
           method: 'GET',
           path: '/me/onlineMeetings/:meetingId/transcripts/:transcriptId/content',
@@ -160,6 +166,29 @@ describe('bulk action planner', () => {
     });
   });
 
+  it('accepts hyphenated path parameters extracted from generated path templates', () => {
+    const plan = runWithTenant([BULK_ACTION_TOOL, 'list-user-messages'], () =>
+      buildBulkPlan(
+        {
+          mode: 'preview',
+          outputMode: 'summary',
+          items: [
+            {
+              id: 'hyphen-1',
+              toolName: 'list-user-messages',
+              parameters: { 'user-id': 'user-id-value' },
+            },
+          ],
+        },
+        { readOnly: false, orgMode: true, now: new Date('2026-06-05T00:00:00Z') }
+      )
+    );
+    expect('error' in plan).toBe(false);
+    if ('error' in plan) return;
+    expect(plan.items[0]).toMatchObject({ status: 'allowed' });
+    expect(plan.executionParameters.get('hyphen-1')).toMatchObject({ 'user-id': 'user-id-value' });
+  });
+
   it('keeps product, content, delta, and pagination plans on the single alias fallback', () => {
     const plan = runWithTenant([BULK_ACTION_TOOL, 'get-meeting-transcript-content'], () =>
       buildBulkPlan(
@@ -251,6 +280,33 @@ describe('bulk action planner', () => {
     expect('error' in plan).toBe(false);
     if ('error' in plan) return;
     expect(plan.items[0]).toMatchObject({ status: 'blocked', code: 'read_only_violation' });
+  });
+
+  it('ignores caller-supplied confirmation expiry during preview', () => {
+    const plan = runWithTenant([BULK_ACTION_TOOL, 'delete-onedrive-file'], () =>
+      buildBulkPlan(
+        {
+          mode: 'preview',
+          outputMode: 'summary',
+          confirmation: {
+            planDigest: 'attacker-digest',
+            confirmed: true,
+            expiresAt: '2099-01-01T00:00:00.000Z',
+          },
+          items: [
+            {
+              id: 'write-1',
+              toolName: 'delete-onedrive-file',
+              parameters: { driveId: 'drive', driveItemId: 'item' },
+            },
+          ],
+        },
+        { readOnly: false, orgMode: true, now: new Date('2026-06-05T00:00:00Z') }
+      )
+    );
+    expect('error' in plan).toBe(false);
+    if ('error' in plan) return;
+    expect(plan.expiresAt).toBe('2026-06-05T00:10:00.000Z');
   });
 
   it('binds the confirmation expiry into the immutable plan digest', () => {

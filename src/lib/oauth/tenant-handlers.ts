@@ -737,17 +737,6 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
       .createHash('sha256')
       .update(clientVerifier)
       .digest('base64url');
-    const entry = await pkceStore.takeByChallenge(tenant.id, clientCodeChallenge);
-    if (!entry) {
-      emitTokenAudit(
-        tenant.id,
-        'failure',
-        { error: 'invalid_grant', reason: 'PKCE mismatch' },
-        req
-      );
-      res.status(400).json({ error: 'invalid_grant', error_description: 'PKCE mismatch' });
-      return;
-    }
 
     if (typeof body?.client_id !== 'string' || body.client_id.trim().length === 0) {
       emitTokenAudit(
@@ -774,6 +763,17 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
 
     const submittedClientId = body.client_id;
     const submittedRedirectUri = body.redirect_uri;
+    const entry = await pkceStore.getByChallenge(tenant.id, clientCodeChallenge);
+    if (!entry) {
+      emitTokenAudit(
+        tenant.id,
+        'failure',
+        { error: 'invalid_grant', reason: 'PKCE mismatch' },
+        req
+      );
+      res.status(400).json({ error: 'invalid_grant', error_description: 'PKCE mismatch' });
+      return;
+    }
     if (
       entry.tenantId !== tenant.id ||
       entry.clientId !== submittedClientId ||
@@ -787,6 +787,17 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
         req
       );
       res.status(400).json({ error: 'invalid_grant', error_description: 'binding mismatch' });
+      return;
+    }
+    const consumedEntry = await pkceStore.takeByChallenge(tenant.id, clientCodeChallenge);
+    if (!consumedEntry) {
+      emitTokenAudit(
+        tenant.id,
+        'failure',
+        { error: 'invalid_grant', reason: 'PKCE mismatch' },
+        req
+      );
+      res.status(400).json({ error: 'invalid_grant', error_description: 'PKCE mismatch' });
       return;
     }
 

@@ -160,7 +160,7 @@ function normalizeParameters(
   const normalized: Record<string, unknown> = {};
   const paramDefs = endpoint.parameters ?? [];
   const definitionNames = new Set(paramDefs.map((param) => param.name));
-  const pathParams = [...endpoint.path.matchAll(/:([a-zA-Z][a-zA-Z0-9]*)/g)].map(
+  const pathParams = [...endpoint.path.matchAll(/:([a-zA-Z][a-zA-Z0-9-]*)/g)].map(
     (match) => match[1]
   );
   for (const pathParam of pathParams) definitionNames.add(pathParam);
@@ -395,9 +395,11 @@ export function buildBulkPlan(
   });
 
   const now = options.now ?? new Date();
-  const expiresAt = input.confirmation?.expiresAt
-    ? new Date(input.confirmation.expiresAt)
-    : new Date(now.getTime() + BULK_LIMITS.planTtlMs);
+  const maxExpiresAt = new Date(now.getTime() + BULK_LIMITS.planTtlMs);
+  const expiresAt =
+    input.mode === 'execute' && input.confirmation?.expiresAt
+      ? new Date(Math.min(new Date(input.confirmation.expiresAt).getTime(), maxExpiresAt.getTime()))
+      : maxExpiresAt;
   if (!Number.isFinite(expiresAt.getTime())) {
     return { error: 'invalid_bulk_item', message: 'Bulk confirmation expiresAt is invalid.' };
   }
