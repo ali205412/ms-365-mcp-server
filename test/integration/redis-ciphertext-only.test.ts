@@ -222,6 +222,7 @@ describe('plan 03-07 Task 2 — SC#5: no plaintext MSAL secrets in Redis', () =>
 
     const body = new URLSearchParams({
       grant_type: 'authorization_code',
+      client_id: harness.tenant.client_id,
       code: 'auth-code-xyz',
       code_verifier: clientVerifier,
       redirect_uri: 'http://localhost:3000/callback',

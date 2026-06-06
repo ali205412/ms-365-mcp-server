@@ -476,7 +476,8 @@ describe('generic bulk-action tool', () => {
     );
 
     expect(result.isError).toBe(true);
-    expect(JSON.stringify(dataFrom(result))).toContain('confirmation_mismatch');
+    expect(result._meta?.errorCode).toBe('confirmation_mismatch');
+    expect(asRecord(dataFrom(result)).error).toMatchObject({ code: 'confirmation_mismatch' });
     expect(executeToolAlias).not.toHaveBeenCalled();
   });
 

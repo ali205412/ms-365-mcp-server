@@ -367,7 +367,8 @@ async function handleBulkAction(
     }
     if (
       input.confirmation.planDigest !== plan.planDigest ||
-      input.confirmation.confirmed !== true
+      input.confirmation.confirmed !== true ||
+      input.confirmation.expiresAt !== plan.expiresAt
     ) {
       auditBulk('bulk-action.confirmation_mismatch', 'failure', {
         digestPrefix: plan.planDigest.slice(0, 12),
