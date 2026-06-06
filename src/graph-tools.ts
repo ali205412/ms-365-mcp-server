@@ -1124,7 +1124,7 @@ async function executeGraphToolInner(
       `Making graph request to ${path} with options: ${JSON.stringify(loggableOptions)}${_redacted ? ' [accessToken=REDACTED]' : ''}`
     );
 
-    const cancelledGraphResponse = (): CallToolResult => ({
+    const cancelledGraphResponse = (): TextToolResult => ({
       content: [
         {
           type: 'text',
@@ -1137,15 +1137,13 @@ async function executeGraphToolInner(
       ],
       _meta: { cancelled: true },
     });
-    const isInitialAbortResponse = (
-      candidate: Awaited<ReturnType<GraphClient['graphRequest']>>
-    ): boolean =>
+    const isInitialAbortResponse = (candidate: TextToolResult): boolean =>
       candidate.isError === true &&
       operationWasRegistered &&
       operationController?.signal.aborted === true &&
       (candidate._meta?.errorCode === 'AbortError' || candidate._meta?.errorCode === 'cancelled');
 
-    let response: Awaited<ReturnType<GraphClient['graphRequest']>> | undefined;
+    let response: TextToolResult | undefined;
     try {
       try {
         response = await graphClient.graphRequest(path, options);
@@ -1159,7 +1157,7 @@ async function executeGraphToolInner(
           throw error;
         }
       }
-      if (isTranscriptContent) {
+      if (isTranscriptContent && response) {
         response = preserveRawTranscriptText(response);
       }
 

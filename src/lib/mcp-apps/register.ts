@@ -97,9 +97,9 @@ function registerAppResource(server: McpServer, app: AppDefinition): void {
       title: app.title,
       description: app.description,
       mimeType: APP_MIME_TYPE,
-      _meta: APP_UI_META,
+      _meta: APP_UI_META as unknown as Record<string, unknown>,
     },
-    (uri) => readMcpAppResource(uri.toString())
+    (uri: URL) => readMcpAppResource(uri.toString())
   );
 }
 
