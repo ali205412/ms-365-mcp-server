@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { MemoryRedisFacade } from '../../src/lib/redis-facade.js';
 import { SessionStore } from '../../src/lib/session-store.js';
 import {
+  acquireGatewayRefreshRotationLock,
   consumeGatewayRefreshSession,
   mintGatewayRefreshToken,
+  releaseGatewayRefreshRotationLock,
   storeGatewayRefreshToken,
 } from '../../src/lib/oauth/refresh-handles.js';
 
@@ -31,6 +33,53 @@ describe('opaque gateway refresh handles', () => {
     expect(raw).not.toContain(accessToken);
     expect(raw).not.toContain('microsoft-refresh-token-secret');
     expect(JSON.parse(raw!)).toEqual({ accessTokenHash: expect.any(String) });
+  });
+
+  it('serializes refresh rotation with a compare-on-release lock', async () => {
+    const redis = new MemoryRedisFacade();
+    const tenantId = 'tenant-refresh-lock';
+    const refreshToken = mintGatewayRefreshToken();
+
+    await expect(
+      acquireGatewayRefreshRotationLock({
+        redis,
+        tenantId,
+        refreshToken,
+        lockId: 'lock-a',
+        ttlMs: 60_000,
+      })
+    ).resolves.toBe(true);
+    await expect(
+      acquireGatewayRefreshRotationLock({
+        redis,
+        tenantId,
+        refreshToken,
+        lockId: 'lock-b',
+        ttlMs: 60_000,
+      })
+    ).resolves.toBe(false);
+
+    await releaseGatewayRefreshRotationLock({ redis, tenantId, refreshToken, lockId: 'lock-b' });
+    await expect(
+      acquireGatewayRefreshRotationLock({
+        redis,
+        tenantId,
+        refreshToken,
+        lockId: 'lock-c',
+        ttlMs: 60_000,
+      })
+    ).resolves.toBe(false);
+
+    await releaseGatewayRefreshRotationLock({ redis, tenantId, refreshToken, lockId: 'lock-a' });
+    await expect(
+      acquireGatewayRefreshRotationLock({
+        redis,
+        tenantId,
+        refreshToken,
+        lockId: 'lock-c',
+        ttlMs: 60_000,
+      })
+    ).resolves.toBe(true);
   });
 
   it('consumes a gateway refresh token exactly once', async () => {

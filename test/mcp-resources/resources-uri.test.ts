@@ -118,6 +118,12 @@ describe('Phase 8 Plan 08-10 - MCP resource URI parser', () => {
       ok: false,
       code: 'invalid_resource_uri',
     });
+    expect(
+      parseMcpResourceUri(`m365://tenant/${TENANT_A}/partial/request-1/progress-1.json`)
+    ).toMatchObject({
+      ok: false,
+      code: 'invalid_resource_uri',
+    });
   });
 
   it('enforces tenant URI ownership with one client-safe mismatch code', () => {

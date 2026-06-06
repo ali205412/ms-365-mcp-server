@@ -5,7 +5,7 @@ import logger from '../../logger.js';
 import { getCloudEndpoints } from '../../cloud-config.js';
 import { getRequestTokens } from '../../request-context.js';
 import { isSameAuthorizeRequest } from './authorize-request-identity.js';
-import { validateRedirectUri, type RedirectUriPolicy } from '../redirect-uri.js';
+import { validateRedirectUriSafety } from '../redirect-uri.js';
 import { tenantScopeSatisfies } from '../scope-satisfaction.js';
 import {
   getActiveOAuthClientRegistration,
@@ -20,9 +20,11 @@ import {
 } from '../delegated-access-tokens.js';
 import { hashAccessToken, SessionStore } from '../session-store.js';
 import {
-  consumeGatewayRefreshSession,
+  acquireGatewayRefreshRotationLock,
   lookupGatewayRefreshSession,
   mintGatewayRefreshToken,
+  releaseGatewayRefreshRotationLock,
+  revokeGatewayRefreshToken,
   storeGatewayRefreshToken,
 } from './refresh-handles.js';
 import type { RedisClient } from '../redis.js';
@@ -48,6 +50,12 @@ function pkceChallengeForVerifier(verifier: string): string {
   return crypto.createHash('sha256').update(verifier).digest('base64url');
 }
 
+const STANDARD_OAUTH_PROTOCOL_SCOPES = new Set(['openid', 'profile', 'email', 'offline_access']);
+
+function isStandardOAuthProtocolScope(scope: string): boolean {
+  return STANDARD_OAUTH_PROTOCOL_SCOPES.has(scope);
+}
+
 function tenantDefaultScopes(tenant: Pick<TenantRow, 'allowed_scopes'>): string[] {
   return tenant.allowed_scopes.length ? [...tenant.allowed_scopes] : ['User.Read'];
 }
@@ -57,11 +65,13 @@ function scopesAllowedByTenant(
   scopes: readonly string[]
 ): boolean {
   const allowedScopes = tenantDefaultScopes(tenant);
-  return scopes.every((scope) => tenantScopeSatisfies(allowedScopes, scope));
+  return scopes.every(
+    (scope) => isStandardOAuthProtocolScope(scope) || tenantScopeSatisfies(allowedScopes, scope)
+  );
 }
 
 export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
-  const { pkceStore, pgPool, publicUrlHost, extraAllowedHosts } = config;
+  const { pkceStore, pgPool } = config;
 
   const emitAudit = (
     tenantId: string,
@@ -100,21 +110,16 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
     const allowedByStaticClient =
       clientId === tenant.client_id && tenant.redirect_uri_allowlist.includes(redirectUri);
     {
-      const baseRedirectPolicy: RedirectUriPolicy = {
-        mode: process.env.NODE_ENV === 'production' ? 'prod' : 'dev',
-        publicUrlHost: publicUrlHost ?? null,
-        extraAllowedHosts,
-      };
-      const schemeCheck = validateRedirectUri(redirectUri, baseRedirectPolicy);
-      if (!schemeCheck.ok) {
+      const safetyCheck = validateRedirectUriSafety(redirectUri);
+      if (!safetyCheck.ok) {
         emitAudit(
           tenant.id,
           'failure',
           redirectUri,
-          { error: 'invalid_redirect_uri', reason: schemeCheck.reason },
+          { error: 'invalid_redirect_uri', reason: safetyCheck.reason },
           req
         );
-        res.status(400).json({ error: 'invalid_redirect_uri', reason: schemeCheck.reason });
+        res.status(400).json({ error: 'invalid_redirect_uri', reason: safetyCheck.reason });
         return;
       }
     }
@@ -159,7 +164,7 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
     const allowedScopes = tenantDefaultScopes(tenant);
     const effectiveScopes = requestedScopes.length ? requestedScopes : allowedScopes;
     const disallowedScopes = effectiveScopes.filter(
-      (scope) => !tenantScopeSatisfies(allowedScopes, scope)
+      (scope) => !isStandardOAuthProtocolScope(scope) && !tenantScopeSatisfies(allowedScopes, scope)
     );
     if (disallowedScopes.length > 0) {
       emitAudit(tenant.id, 'failure', redirectUri, { error: 'invalid_scope' }, req);
@@ -470,94 +475,125 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
           return;
         }
 
-        const consumed = await consumeGatewayRefreshSession({
+        const rotationLockId = crypto.randomUUID();
+        const rotationLockAcquired = await acquireGatewayRefreshRotationLock({
           redis,
-          sessionStore,
           tenantId: tenant.id,
           refreshToken: submittedRefreshToken,
+          lockId: rotationLockId,
         });
-        if (consumed?.accessTokenHash !== session.accessTokenHash) {
+        if (!rotationLockAcquired) {
           emitTokenAudit(
             tenant.id,
             'failure',
-            refreshAuditMeta('invalid_grant', { reason: 'rotation_mismatch', clientIdHash }),
-            req
-          );
-          res.status(400).json({ error: 'invalid_grant' });
-          return;
-        }
-
-        const msal = await tenantPool.acquire(tenant);
-        const fresh = await refreshDelegatedSession(msal, session.record);
-        if (!fresh?.accessToken) {
-          emitTokenAudit(
-            tenant.id,
-            'failure',
-            refreshAuditMeta('invalid_grant', { reason: 'upstream_refresh_failed', clientIdHash }),
-            req
-          );
-          res.status(400).json({ error: 'invalid_grant' });
-          return;
-        }
-
-        const oldGraphAccessToken = session.record.graphAccessToken;
-        if (!oldGraphAccessToken) {
-          emitTokenAudit(
-            tenant.id,
-            'failure',
-            refreshAuditMeta('invalid_grant', {
-              reason: 'missing_session_access_token',
+            refreshAuditMeta('temporarily_unavailable', {
+              reason: 'rotation_in_progress',
               clientIdHash,
             }),
             req
           );
-          res.status(400).json({ error: 'invalid_grant' });
+          res.status(503).json({ error: 'temporarily_unavailable' });
           return;
         }
-        await forgetDelegatedAccessToken({
-          redis,
-          tenantId: tenant.id,
-          accessToken: oldGraphAccessToken,
-        });
-        const nextMsalCache = serializeMsalCache(msal) ?? session.record.msalCache;
-        await sessionStore.put(tenant.id, fresh.accessToken, {
-          ...session.record,
-          refreshToken: fresh.refreshToken ?? session.record.refreshToken,
-          accountHomeId: fresh.account?.homeAccountId ?? session.record.accountHomeId,
-          msalCache: nextMsalCache,
-          graphAccessToken: fresh.accessToken,
-          graphAccessTokenExpiresOn: fresh.expiresOn?.toISOString(),
-          createdAt: Date.now(),
-        });
-        const nextRefreshToken = mintGatewayRefreshToken();
-        await storeGatewayRefreshToken({
-          redis,
-          tenantId: tenant.id,
-          refreshToken: nextRefreshToken,
-          accessToken: fresh.accessToken,
-        });
-        const freshAccessTokenHash = hashAccessToken(fresh.accessToken);
-        if (session.accessTokenHash !== freshAccessTokenHash) {
-          await sessionStore.deleteByAccessTokenHash(tenant.id, session.accessTokenHash);
+
+        try {
+          const msal = await tenantPool.acquire(tenant);
+          const fresh = await refreshDelegatedSession(msal, session.record);
+          if (!fresh?.accessToken) {
+            emitTokenAudit(
+              tenant.id,
+              'failure',
+              refreshAuditMeta('invalid_grant', {
+                reason: 'upstream_refresh_failed',
+                clientIdHash,
+              }),
+              req
+            );
+            res.status(400).json({ error: 'invalid_grant' });
+            return;
+          }
+
+          const oldGraphAccessToken = session.record.graphAccessToken;
+          if (!oldGraphAccessToken) {
+            emitTokenAudit(
+              tenant.id,
+              'failure',
+              refreshAuditMeta('invalid_grant', {
+                reason: 'missing_session_access_token',
+                clientIdHash,
+              }),
+              req
+            );
+            res.status(400).json({ error: 'invalid_grant' });
+            return;
+          }
+
+          const nextMsalCache = serializeMsalCache(msal) ?? session.record.msalCache;
+          await sessionStore.put(tenant.id, fresh.accessToken, {
+            ...session.record,
+            refreshToken: fresh.refreshToken ?? session.record.refreshToken,
+            accountHomeId: fresh.account?.homeAccountId ?? session.record.accountHomeId,
+            msalCache: nextMsalCache,
+            graphAccessToken: fresh.accessToken,
+            graphAccessTokenExpiresOn: fresh.expiresOn?.toISOString(),
+            createdAt: Date.now(),
+          });
+          const nextRefreshToken = mintGatewayRefreshToken();
+          await storeGatewayRefreshToken({
+            redis,
+            tenantId: tenant.id,
+            refreshToken: nextRefreshToken,
+            accessToken: fresh.accessToken,
+          });
+          await rememberDelegatedAccessToken({
+            redis,
+            tenantId: tenant.id,
+            accessToken: fresh.accessToken,
+            expiresOn: fresh.expiresOn,
+          });
+          await revokeGatewayRefreshToken({
+            redis,
+            tenantId: tenant.id,
+            refreshToken: submittedRefreshToken,
+          });
+          try {
+            const freshAccessTokenHash = hashAccessToken(fresh.accessToken);
+            if (session.accessTokenHash !== freshAccessTokenHash) {
+              await sessionStore.deleteByAccessTokenHash(tenant.id, session.accessTokenHash);
+            }
+            if (oldGraphAccessToken !== fresh.accessToken) {
+              await forgetDelegatedAccessToken({
+                redis,
+                tenantId: tenant.id,
+                accessToken: oldGraphAccessToken,
+              });
+            }
+          } catch (cleanupErr) {
+            logger.warn(
+              { err: (cleanupErr as Error).message, tenantId: tenant.id },
+              'old delegated refresh session cleanup failed after durable rotation'
+            );
+          }
+          emitTokenAudit(
+            tenant.id,
+            'success',
+            refreshAuditMeta(undefined, { clientIdHash, scopes: session.record.scopes }),
+            req
+          );
+          res.json({
+            access_token: fresh.accessToken,
+            token_type: 'Bearer',
+            expires_in: delegatedAccessTokenTtlSeconds(),
+            refresh_token: nextRefreshToken,
+          });
+        } finally {
+          await releaseGatewayRefreshRotationLock({
+            redis,
+            tenantId: tenant.id,
+            refreshToken: submittedRefreshToken,
+            lockId: rotationLockId,
+          });
         }
-        await rememberDelegatedAccessToken({
-          redis,
-          tenantId: tenant.id,
-          accessToken: fresh.accessToken,
-          expiresOn: fresh.expiresOn,
-        });
-        emitTokenAudit(
-          tenant.id,
-          'success',
-          refreshAuditMeta(undefined, { clientIdHash, scopes: session.record.scopes }),
-          req
-        );
-        res.json({
-          access_token: fresh.accessToken,
-          token_type: 'Bearer',
-          expires_in: delegatedAccessTokenTtlSeconds(),
-          refresh_token: nextRefreshToken,
-        });
       } catch (err) {
         logger.error({ err: (err as Error).message, tenantId: tenant.id }, '/token refresh failed');
         emitTokenAudit(tenant.id, 'failure', refreshAuditMeta('temporarily_unavailable'), req);

@@ -235,6 +235,66 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     expect(loc.searchParams.get('scope')).toBe('Mail.Read');
   });
 
+  it('allows standard OAuth protocol scopes without weakening tenant Graph scope gating', async () => {
+    harness = await startApp({ allowed_scopes: ['Mail.Read'] });
+
+    const clientVerifier = crypto.randomBytes(32).toString('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
+    const requestedScope = 'openid profile email offline_access Mail.Read';
+    const params = new URLSearchParams({
+      redirect_uri: 'http://localhost:3000/callback',
+      code_challenge: clientChallenge,
+      code_challenge_method: 'S256',
+      state: 'protocol-scope-test',
+      client_id: harness.tenant.client_id,
+      scope: requestedScope,
+    });
+
+    const authorizeRes = await fetch(`${harness.url}/authorize?${params}`, { redirect: 'manual' });
+    expect(authorizeRes.status).toBe(302);
+    const location = authorizeRes.headers.get('location');
+    expect(location).toBeTruthy();
+    expect(new URL(location!).searchParams.get('scope')).toBe(requestedScope);
+
+    const tokenRes = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: 'the-auth-code',
+        redirect_uri: 'http://localhost:3000/callback',
+        code_verifier: clientVerifier,
+      }),
+    });
+    expect(tokenRes.status).toBe(200);
+    const codeBody = (await tokenRes.json()) as { refresh_token: string };
+    expect(harness.mockMsalAcquireByCode.mock.calls[0]![0].scopes).toEqual([
+      'openid',
+      'profile',
+      'email',
+      'offline_access',
+      'Mail.Read',
+    ]);
+
+    const refreshRes = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: codeBody.refresh_token,
+        client_id: harness.tenant.client_id,
+      }),
+    });
+    expect(refreshRes.status).toBe(200);
+    expect(harness.mockMsalAcquireSilent.mock.calls[0]![0].scopes).toEqual([
+      'openid',
+      'profile',
+      'email',
+      'offline_access',
+      'Mail.Read',
+    ]);
+  });
+
   it('defaults omitted authorize scope to the tenant allowed scopes', async () => {
     harness = await startApp({ allowed_scopes: ['Mail.Read'] });
 
@@ -282,7 +342,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
       code_challenge_method: 'S256',
       state: 'scope-test',
       client_id: harness.tenant.client_id,
-      scope: 'Mail.Read',
+      scope: 'openid Mail.Read',
     });
 
     const res = await fetch(`${harness.url}/authorize?${params}`, { redirect: 'manual' });
@@ -292,7 +352,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     expect(body.error).toBe('invalid_scope');
   });
 
-  it('rejects exact static redirect allowlist entries outside the production public host policy', async () => {
+  it('allows exact static redirect allowlist entries outside the production public host policy', async () => {
     const originalNodeEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
     try {
@@ -317,10 +377,10 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
 
       const res = await fetch(`${harness.url}/authorize?${params}`, { redirect: 'manual' });
 
-      expect(res.status).toBe(400);
-      const body = (await res.json()) as { error: string; reason: string };
-      expect(body.error).toBe('invalid_redirect_uri');
-      expect(body.reason).toContain('host not in allowlist');
+      expect(res.status).toBe(302);
+      const location = res.headers.get('location');
+      expect(location).toBeTruthy();
+      expect(new URL(location!).searchParams.get('redirect_uri')).toBe(redirectUri);
     } finally {
       if (originalNodeEnv === undefined) {
         delete process.env.NODE_ENV;
@@ -664,6 +724,17 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
       })
     ).resolves.toBe(true);
     expect(harness.mockMsalAcquireSilent).toHaveBeenCalledTimes(1);
+
+    const oldHandleReplay = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: body.refresh_token,
+        client_id: harness.tenant.client_id,
+      }),
+    });
+    expect(oldHandleReplay.status).toBe(400);
   });
 
   it('retains refreshed session when upstream returns the same access token', async () => {
@@ -787,7 +858,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     expect(goodRes.status).toBe(200);
   });
 
-  it('burns refresh handle before upstream refresh so failed rotation is single-use', async () => {
+  it('keeps refresh handle retryable when upstream refresh fails before rotation durability', async () => {
     harness = await startApp();
     const clientVerifier = crypto.randomBytes(32).toString('base64url');
     const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
@@ -836,8 +907,8 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
         client_id: harness.tenant.client_id,
       }),
     });
-    expect(replay.status).toBe(400);
-    expect(harness.mockMsalAcquireSilent).toHaveBeenCalledTimes(1);
+    expect(replay.status).toBe(200);
+    expect(harness.mockMsalAcquireSilent).toHaveBeenCalledTimes(2);
   });
 
   it('rejects refresh before MSAL when stored scopes are no longer tenant-allowed', async () => {

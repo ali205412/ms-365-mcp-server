@@ -25,6 +25,10 @@ function legacyRefreshKey(tenantId: string, refreshToken: string): string {
   return `mcp:session:${tenantId}:refresh:${hashRefreshToken(refreshToken)}`;
 }
 
+function refreshRotationLockKey(tenantId: string, refreshToken: string): string {
+  return `mcp:refresh-lock:${tenantId}:${hashRefreshToken(refreshToken)}`;
+}
+
 function resolveTtl(): number {
   const raw = process.env.MS365_MCP_SESSION_TTL_SECONDS;
   if (!raw) return DEFAULT_TTL_SECONDS;
@@ -106,4 +110,34 @@ export async function revokeGatewayRefreshToken(args: {
     refreshKey(args.tenantId, args.refreshToken),
     legacyRefreshKey(args.tenantId, args.refreshToken)
   );
+}
+
+export async function acquireGatewayRefreshRotationLock(args: {
+  redis: RedisClient;
+  tenantId: string;
+  refreshToken: string;
+  lockId: string;
+  ttlMs?: number;
+}): Promise<boolean> {
+  const result = await args.redis.set(
+    refreshRotationLockKey(args.tenantId, args.refreshToken),
+    args.lockId,
+    'PX',
+    args.ttlMs ?? 30_000,
+    'NX'
+  );
+  return result === 'OK';
+}
+
+export async function releaseGatewayRefreshRotationLock(args: {
+  redis: RedisClient;
+  tenantId: string;
+  refreshToken: string;
+  lockId: string;
+}): Promise<void> {
+  const key = refreshRotationLockKey(args.tenantId, args.refreshToken);
+  const current = await args.redis.get(key);
+  if (current === args.lockId) {
+    await args.redis.del(key);
+  }
 }

@@ -131,7 +131,7 @@ describe('Phase 8 progress and cancellation for paginated Graph tools', () => {
     expect(progress.every((n) => n.params.progressToken === 'progress-1')).toBe(true);
   });
 
-  it('cancels pagination and returns a same-tenant partial resource URI', async () => {
+  it('cancels pagination and returns inline partial data without an unreadable resource URI', async () => {
     const { registerGraphTools } = await import('../src/graph-tools.js');
     const server = new McpServer({ name: 'test', version: '0.0.0' });
     const graphRequest = vi
@@ -154,12 +154,13 @@ describe('Phase 8 progress and cancellation for paginated Graph tools', () => {
     const result = await withTenant('tenant-a', () => callList(server, { fetchAllPages: true }));
     const payload = JSON.parse(result.content[0]!.text) as {
       status: string;
-      resourceUri: string;
+      resourceUri?: string;
       partial: { value: unknown[] };
     };
 
     expect(payload.status).toBe('cancelled');
-    expect(payload.resourceUri).toBe('m365://tenant/tenant-a/partial/request-1/progress-1.json');
+    expect(payload.resourceUri).toBeUndefined();
+    expect(result._meta?.partialResourceUri).toBeUndefined();
     expect(payload.partial.value).toHaveLength(1);
   });
 
@@ -206,13 +207,14 @@ describe('Phase 8 progress and cancellation for paginated Graph tools', () => {
     const result = await resultPromise;
     const payload = JSON.parse(result.content[0]!.text) as {
       status: string;
-      resourceUri: string;
+      resourceUri?: string;
       partial: { value: unknown[] };
     };
 
     expect(secondPageSignal?.aborted).toBe(true);
     expect(payload.status).toBe('cancelled');
-    expect(payload.resourceUri).toBe('m365://tenant/tenant-a/partial/request-1/progress-1.json');
+    expect(payload.resourceUri).toBeUndefined();
+    expect(result._meta?.partialResourceUri).toBeUndefined();
     expect(payload.partial.value).toHaveLength(1);
   });
 
@@ -247,8 +249,8 @@ describe('Phase 8 progress and cancellation for paginated Graph tools', () => {
 
       expect(result).toMatchObject({
         _cancelled: true,
-        _partialResourceUri: 'm365://tenant/tenant-a/partial/request-1/progress-1.json',
       });
+      expect((result as Record<string, unknown>)._partialResourceUri).toBeUndefined();
       expect(result.value).toHaveLength(1);
       expect(graphRequest).not.toHaveBeenCalled();
       expect(sendNotification).toHaveBeenCalledTimes(1);
@@ -283,8 +285,8 @@ describe('Phase 8 progress and cancellation for paginated Graph tools', () => {
 
       expect(result).toMatchObject({
         _cancelled: true,
-        _partialResourceUri: 'm365://tenant/tenant-a/partial/request-1/progress-1.json',
       });
+      expect((result as Record<string, unknown>)._partialResourceUri).toBeUndefined();
       expect(result.value).toHaveLength(0);
       expect(graphRequest).not.toHaveBeenCalled();
     } finally {

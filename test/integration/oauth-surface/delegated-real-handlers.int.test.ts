@@ -253,7 +253,7 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
     expect(body.error).toBe('pkce_challenge_collision');
   });
 
-  it('/authorize applies production host policy even for static exact redirect allowlists', async () => {
+  it('/authorize honors static exact redirect allowlists outside production host policy', async () => {
     const originalNodeEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
     try {
@@ -274,10 +274,12 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
         { redirect: 'manual' }
       );
 
-      expect(res.status).toBe(400);
-      const body = (await res.json()) as { error: string; reason: string };
-      expect(body.error).toBe('invalid_redirect_uri');
-      expect(body.reason).toContain('host not in allowlist');
+      expect(res.status).toBe(302);
+      const location = res.headers.get('location');
+      expect(location).toBeTruthy();
+      expect(new URL(location!).searchParams.get('redirect_uri')).toBe(
+        'https://hosted.example/callback'
+      );
     } finally {
       if (originalNodeEnv === undefined) {
         delete process.env.NODE_ENV;

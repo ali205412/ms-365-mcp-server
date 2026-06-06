@@ -45,6 +45,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getRequestTenant } from '../../request-context.js';
 import logger from '../../logger.js';
 import { safeMcpName } from './safe-mcp-name.js';
+import { DISCOVERY_META_TOOL_NAMES } from '../tenant-surface/surface.js';
 
 /**
  * JSON-RPC method literal the MCP SDK uses for tools/list requests.
@@ -169,8 +170,10 @@ export function applyTenantFilter(result: ListToolsResult): ListToolsResult {
   // Registered MCP tool names are run through `safeMcpName` (SEP-986
   // pattern), so we expand the comparison set to include both forms.
   // Cheap one-time build per request; sets are O(1) lookup.
+  const visibleSet =
+    tenant.presetVersion === 'discovery-v1' ? DISCOVERY_META_TOOL_NAMES : enabledSet;
   const expandedSet = new Set<string>();
-  for (const alias of enabledSet) {
+  for (const alias of visibleSet) {
     expandedSet.add(alias);
     expandedSet.add(safeMcpName(alias));
   }

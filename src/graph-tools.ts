@@ -1125,7 +1125,6 @@ async function executeGraphToolInner(
         response = await graphClient.graphRequest(path, options);
       } catch (error) {
         if (operationWasRegistered && operationController?.signal.aborted) {
-          const partialResourceUri = `m365://tenant/${encodeURIComponent(operationKey.tenantId!)}/partial/${encodeURIComponent(operationKey.requestId!)}/${encodeURIComponent(operationKey.progressToken!)}.json`;
           response = {
             content: [
               {
@@ -1133,12 +1132,11 @@ async function executeGraphToolInner(
                 text: JSON.stringify({
                   status: 'cancelled',
                   operation: tool.alias,
-                  resourceUri: partialResourceUri,
                   partial: { value: [] },
                 }),
               },
             ],
-            _meta: { cancelled: true, partialResourceUri },
+            _meta: { cancelled: true },
           };
         } else {
           throw error;
@@ -1176,14 +1174,12 @@ async function executeGraphToolInner(
           const payload = {
             status: 'cancelled',
             operation: tool.alias,
-            resourceUri: combined._partialResourceUri,
             partial: { value: combined.value },
           };
           response.content[0].text = JSON.stringify(payload);
           response._meta = {
             ...response._meta,
             cancelled: true,
-            partialResourceUri: combined._partialResourceUri,
           };
         } else if (combined._truncated) {
           firstPage._truncated = true;

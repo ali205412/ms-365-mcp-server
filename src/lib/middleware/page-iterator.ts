@@ -86,7 +86,6 @@ export interface FetchAllPagesResult {
   _truncated?: true;
   _nextLink?: string;
   _cancelled?: true;
-  _partialResourceUri?: string;
 
   [key: string]: unknown;
 }
@@ -318,16 +317,6 @@ export async function fetchAllPages(
 
   if (cancelled) {
     result._cancelled = true;
-    if (
-      opts.operationKey?.tenantId &&
-      opts.operationKey.requestId &&
-      opts.operationKey.progressToken
-    ) {
-      const tenantId = encodeURIComponent(opts.operationKey.tenantId);
-      const requestId = encodeURIComponent(opts.operationKey.requestId);
-      const progressToken = encodeURIComponent(opts.operationKey.progressToken);
-      result._partialResourceUri = `m365://tenant/${tenantId}/partial/${requestId}/${progressToken}.json`;
-    }
   }
 
   logger.info(

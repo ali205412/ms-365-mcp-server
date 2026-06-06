@@ -222,6 +222,33 @@ describe('plan 05-05 Task 1 — tools/list per-tenant filter (SDK handler wrap)'
     }
   });
 
+  it('keeps discovery-v1 primitives visible when explicit allowlist contains only Graph aliases', async () => {
+    const { wrapToolsListHandler } =
+      await import('../../src/lib/tool-selection/tools-list-filter.js');
+    const { requestContext } = await import('../../src/request-context.js');
+
+    const server = new McpServer({ name: 'test', version: '0.0.0' });
+    for (const name of ['search-tools', 'get-tool-schema', 'execute-tool', 'me.ListMessages']) {
+      server.tool(name, name, {}, { title: name, readOnlyHint: true }, async () => ({
+        content: [{ type: 'text', text: 'ok' }],
+      }));
+    }
+    wrapToolsListHandler(server);
+
+    const response = await requestContext.run(
+      {
+        tenantId: TENANT_A,
+        enabledToolsSet: Object.freeze(new Set<string>(['me.ListMessages'])),
+        enabledToolsExplicit: true,
+        presetVersion: 'discovery-v1',
+      },
+      async () => invokeToolsList(server)
+    );
+
+    const names = response.tools.map((tool) => tool.name).sort();
+    expect(names).toEqual(['execute-tool', 'get-tool-schema', 'search-tools']);
+  });
+
   it('Test 4: pino info log emits {tenantId, before, after} on every filtered call', async () => {
     const loggerMod = (await import('../../src/logger.js')) as unknown as {
       default: { info: ReturnType<typeof vi.fn> };

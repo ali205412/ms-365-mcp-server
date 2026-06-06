@@ -602,9 +602,10 @@ describe('graph-tools', () => {
       const payload = JSON.parse(result.content[0].text);
       expect(payload).toMatchObject({
         status: 'cancelled',
-        resourceUri: 'm365://tenant/tenant-a/partial/request-a/progress-a.json',
         partial: { value: [] },
       });
+      expect(payload.resourceUri).toBeUndefined();
+      expect(result._meta?.partialResourceUri).toBeUndefined();
       expect(cancelOperation(operationKey)).toBe(false);
     });
   });
