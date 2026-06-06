@@ -765,12 +765,12 @@ export function registerBulkActionTools(
   server: McpServer,
   options: RegisterBulkActionToolsOptions
 ): number {
-  assertBulkConfirmationSigningConfigured();
   let registered = 0;
   if (
     patternAllows(options.enabledToolsPattern, BULK_ACTION_TOOL) &&
     setAllows(options.enabledToolsSet, BULK_ACTION_TOOL)
   ) {
+    assertBulkConfirmationSigningConfigured();
     server.tool(
       BULK_ACTION_TOOL,
       'Preview or execute a catalog-driven bulk action. Items name generated Graph/product tool aliases and parameters; raw URLs, methods, headers, and $batch request shapes are rejected. Preview returns a plan digest; writes, high-risk, open-world, or high-volume plans require executing with the exact confirmation object.',

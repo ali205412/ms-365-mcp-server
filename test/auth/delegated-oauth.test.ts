@@ -602,6 +602,31 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     }
   });
 
+  it('rejects non-loopback HTTP redirect URI even when exact static allowlist entry matches', async () => {
+    const redirectUri = 'http://tenant-owned.example.org/oauth/callback';
+    harness = await startApp({ redirect_uri_allowlist: [redirectUri] });
+
+    const clientVerifier = crypto.randomBytes(32).toString('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
+    const params = new URLSearchParams({
+      redirect_uri: redirectUri,
+      code_challenge: clientChallenge,
+      code_challenge_method: 'S256',
+      state: 'plaintext-static-allowlist-test',
+      client_id: harness.tenant.client_id,
+    });
+
+    const res = await fetch(`${harness.url}/authorize?${params}`, { redirect: 'manual' });
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; reason?: string };
+    expect(body.error).toBe('invalid_redirect_uri');
+    expect(body.reason).toContain('non-loopback plaintext redirect URI');
+
+    const entry = await harness.pkceStore.takeByChallenge(harness.tenant.id, clientChallenge);
+    expect(entry).toBeNull();
+  });
+
   it('Test 2: /authorize with redirect_uri NOT in allowlist → 400 invalid_redirect_uri', async () => {
     harness = await startApp({
       redirect_uri_allowlist: ['http://localhost:3000/callback'],

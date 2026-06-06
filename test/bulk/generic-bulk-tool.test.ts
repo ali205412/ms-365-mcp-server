@@ -345,6 +345,25 @@ describe('generic bulk-action tool', () => {
     ).toThrow(BULK_CONFIRMATION_SECRET_ENV);
   });
 
+  it('does not require a shared confirmation secret in HTTP mode when bulk-action is excluded', () => {
+    delete process.env[BULK_CONFIRMATION_SECRET_ENV];
+    setBulkResultRuntimeTransportMode('http');
+    const { server, handlers } = makeServer();
+
+    const registered = registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias: vi.fn(),
+      enabledToolsPattern: /^read-bulk-result$/,
+      enabledToolsSet: new Set([READ_BULK_RESULT_TOOL]),
+    });
+
+    expect(registered).toBe(1);
+    expect(handlers.has(BULK_ACTION_TOOL)).toBe(false);
+    expect(handlers.has(READ_BULK_RESULT_TOOL)).toBe(true);
+  });
+
   it('advertises and preserves every required confirmation field that the parser enforces', () => {
     const { server, schemas } = makeServer();
     registerBulkActionTools(mcpServerStub(server), {
