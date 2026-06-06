@@ -15,6 +15,8 @@ import { MemoryRedisFacade } from '../../../src/lib/redis-facade.js';
 import { RedisPkceStore } from '../../../src/lib/pkce-store/redis-store.js';
 import type { AuthorizeHandlerConfig } from '../../../src/lib/oauth/tenant-handlers.js';
 import type { TenantRow } from '../../../src/lib/tenant/tenant-row.js';
+import type { Pool } from 'pg';
+import { SessionStore } from '../../../src/lib/session-store.js';
 import { newPkce } from '../../setup/pkce-fixture.js';
 
 const { loggerMock } = vi.hoisted(() => ({
@@ -71,6 +73,7 @@ async function startApp(options: {
   tenant?: Partial<TenantRow>;
   msalClient?: unknown;
   authorizeConfig?: Partial<Omit<AuthorizeHandlerConfig, 'pkceStore'>>;
+  pgPool?: Pool;
 }): Promise<Harness> {
   const redis = new MemoryRedisFacade();
   const pkceStore = new RedisPkceStore(redis);
@@ -102,7 +105,7 @@ async function startApp(options: {
   app.get(
     '/authorize',
     loadTenantStub,
-    createAuthorizeHandler({ pkceStore, ...options.authorizeConfig })
+    createAuthorizeHandler({ pkceStore, pgPool: options.pgPool, ...options.authorizeConfig })
   );
   app.post(
     '/token',
@@ -111,6 +114,7 @@ async function startApp(options: {
       pkceStore,
       tenantPool: mockTenantPool,
       redis,
+      pgPool: options.pgPool,
     })
   );
 
@@ -134,16 +138,57 @@ async function startApp(options: {
   });
 }
 
-async function seedPkce(harness: Harness, verifier: string): Promise<void> {
+function fakeDynamicClientPool(input: {
+  tenantId: string;
+  clientId: string;
+  redirectUri: string;
+  grantTypes: string[];
+}): Pool {
+  const now = new Date();
+  return {
+    query: vi.fn(async (sql: string) => {
+      if (sql.includes('select 1 from oauth_clients')) return { rows: [{ '?column?': 1 }] };
+      if (sql.includes('from oauth_clients')) {
+        return {
+          rows: [
+            {
+              id: 'oauth-client-row-1',
+              tenant_id: input.tenantId,
+              client_id: input.clientId,
+              client_name: 'Dynamic Client',
+              redirect_uris: [input.redirectUri],
+              grant_types: input.grantTypes,
+              response_types: ['code'],
+              token_endpoint_auth_method: 'none',
+              created_at: now,
+              updated_at: now,
+              last_seen_at: null,
+              disabled_at: null,
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    }),
+  } as unknown as Pool;
+}
+
+async function seedPkce(
+  harness: Harness,
+  verifier: string,
+  overrides: { clientId?: string; tokenScopes?: string[] } = {}
+): Promise<void> {
   const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
   await harness.pkceStore.put(harness.tenant.id, {
     state: 'state-1',
     clientCodeChallenge: challenge,
     clientCodeChallengeMethod: 'S256',
     serverCodeVerifier: 'server-verifier-xyz',
-    clientId: harness.tenant.client_id,
+    clientId: overrides.clientId ?? harness.tenant.client_id,
     redirectUri: 'http://localhost:3000/callback',
     tenantId: harness.tenant.id,
+    scopes: ['User.Read'],
+    tokenScopes: overrides.tokenScopes,
     createdAt: Date.now(),
   });
 }
@@ -222,6 +267,7 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
         grant_type: 'authorization_code',
         code: 'auth-code-after-retry',
         redirect_uri: 'http://localhost:3000/callback',
+        client_id: harness.tenant.client_id,
         code_verifier: pkce.verifier,
       }),
     });
@@ -338,6 +384,7 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
         grant_type: 'authorization_code',
         code: 'auth-code-1',
         redirect_uri: 'http://localhost:3000/callback',
+        client_id: harness.tenant.client_id,
         code_verifier: pkce.verifier,
       }),
     });
@@ -363,6 +410,105 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
         scopes: ['User.Read'],
       })
     );
+  });
+
+  it('/token rejects authorization-code exchanges missing bound client_id or redirect_uri', async () => {
+    harness = await startApp({});
+
+    const missingClientPkce = newPkce();
+    await seedPkce(harness, missingClientPkce.verifier);
+    const missingClient = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: 'auth-code-missing-client',
+        redirect_uri: 'http://localhost:3000/callback',
+        code_verifier: missingClientPkce.verifier,
+      }),
+    });
+    expect(missingClient.status).toBe(400);
+    expect(((await missingClient.json()) as { error: string }).error).toBe('invalid_request');
+
+    const missingRedirectPkce = newPkce();
+    await seedPkce(harness, missingRedirectPkce.verifier);
+    const missingRedirect = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: 'auth-code-missing-redirect',
+        client_id: harness.tenant.client_id,
+        code_verifier: missingRedirectPkce.verifier,
+      }),
+    });
+    expect(missingRedirect.status).toBe(400);
+    expect(((await missingRedirect.json()) as { error: string }).error).toBe('invalid_request');
+    expect(harness.mockAcquireByCode).not.toHaveBeenCalled();
+  });
+
+  it('/authorize rejects offline_access for auth-code-only dynamic clients', async () => {
+    const dynamicClientId = 'dynamic-auth-code-only-client';
+    harness = await startApp({
+      pgPool: fakeDynamicClientPool({
+        tenantId: 'tenant-oauth-surface',
+        clientId: dynamicClientId,
+        redirectUri: 'http://localhost:3000/callback',
+        grantTypes: ['authorization_code'],
+      }),
+    });
+    const pkce = newPkce();
+
+    const res = await fetch(
+      `${harness.url}/authorize?` +
+        new URLSearchParams({
+          redirect_uri: 'http://localhost:3000/callback',
+          code_challenge: pkce.challenge,
+          code_challenge_method: 'S256',
+          client_id: dynamicClientId,
+          scope: 'offline_access User.Read',
+        }),
+      { redirect: 'manual' }
+    );
+
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe('invalid_scope');
+  });
+
+  it('does not store upstream refresh material for auth-code-only dynamic clients', async () => {
+    const dynamicClientId = 'dynamic-auth-code-only-client';
+    harness = await startApp({
+      pgPool: fakeDynamicClientPool({
+        tenantId: 'tenant-oauth-surface',
+        clientId: dynamicClientId,
+        redirectUri: 'http://localhost:3000/callback',
+        grantTypes: ['authorization_code'],
+      }),
+    });
+    const pkce = newPkce();
+    await seedPkce(harness, pkce.verifier, {
+      clientId: dynamicClientId,
+      tokenScopes: ['User.Read'],
+    });
+
+    const res = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: 'auth-code-dynamic-no-refresh',
+        redirect_uri: 'http://localhost:3000/callback',
+        client_id: dynamicClientId,
+        code_verifier: pkce.verifier,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { refresh_token?: string };
+    expect(body.refresh_token).toBeUndefined();
+    const sessionStore = new SessionStore(harness.redis, Buffer.alloc(32, 7));
+    const sessionRecord = await sessionStore.get(harness.tenant.id, 'access-token-abc');
+    expect(sessionRecord?.refreshToken).toBeUndefined();
   });
 
   it('/token rotates opaque gateway refresh handles without exposing upstream refresh tokens', async () => {
@@ -394,6 +540,7 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
         grant_type: 'authorization_code',
         code: 'auth-code-for-refresh',
         redirect_uri: 'http://localhost:3000/callback',
+        client_id: harness.tenant.client_id,
         code_verifier: pkce.verifier,
       }),
     });
@@ -465,6 +612,7 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
         grant_type: 'authorization_code',
         code: 'auth-code-client-mismatch',
         redirect_uri: 'http://localhost:3000/callback',
+        client_id: harness.tenant.client_id,
         code_verifier: pkce.verifier,
       }),
     });
@@ -507,6 +655,7 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
         grant_type: 'authorization_code',
         code: 'auth-code-upstream-failure',
         redirect_uri: 'http://localhost:3000/callback',
+        client_id: harness.tenant.client_id,
         code_verifier: failingPkce.verifier,
       }),
     });
@@ -578,6 +727,8 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         code: 'auth-code-1',
+        redirect_uri: 'http://localhost:3000/callback',
+        client_id: harness.tenant.client_id,
         code_verifier: nonDelegatedPkce.verifier,
       }),
     });
@@ -594,6 +745,8 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         code: 'auth-code-2',
+        redirect_uri: 'http://localhost:3000/callback',
+        client_id: harness.tenant.client_id,
         code_verifier: emptyPkce.verifier,
       }),
     });
@@ -612,6 +765,8 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         code: 'auth-code-3',
+        redirect_uri: 'http://localhost:3000/callback',
+        client_id: harness.tenant.client_id,
         code_verifier: throwingPkce.verifier,
       }),
     });

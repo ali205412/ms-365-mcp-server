@@ -11,6 +11,7 @@ import {
 } from '../../src/lib/bulk-actions/schema.js';
 import {
   resetBulkResultStoreForTesting,
+  setBulkResultRuntimeTransportMode,
   storeBulkResult,
 } from '../../src/lib/bulk-actions/result-store.js';
 import { MemoryRedisFacade } from '../../src/lib/redis-facade.js';
@@ -137,6 +138,25 @@ function graphClientStub(): GraphClient {
   return {} as unknown as GraphClient;
 }
 
+class FailingReadRedisFacade extends MemoryRedisFacade {
+  async get(_key: string): Promise<string | null> {
+    throw new Error('redis unavailable');
+  }
+
+  async getdel(_key: string): Promise<string | null> {
+    throw new Error('redis unavailable');
+  }
+}
+
+class FailingCursorRedisFacade extends MemoryRedisFacade {
+  async set(key: string, value: string, ...args: Array<string | number>): Promise<'OK' | null> {
+    if (key.includes('bulk-result-cursor')) {
+      throw new Error('redis unavailable');
+    }
+    return super.set(key, value, ...args);
+  }
+}
+
 const PROCESS_LOCAL_BULK_RESULTS_ENV = 'MS365_MCP_ENABLE_PROCESS_LOCAL_BULK_RESULTS';
 const REDIS_URL_ENV = 'MS365_MCP_REDIS_URL';
 const TRANSPORT_ENV = 'MS365_MCP_TRANSPORT';
@@ -152,6 +172,7 @@ describe('generic bulk-action tool', () => {
   beforeEach(() => {
     process.env[PROCESS_LOCAL_BULK_RESULTS_ENV] = '1';
     process.env[TRANSPORT_ENV] = 'stdio';
+    setBulkResultRuntimeTransportMode('stdio');
   });
 
   afterEach(() => {
@@ -281,7 +302,8 @@ describe('generic bulk-action tool', () => {
 
   it('does not use process-local result IDs outside stdio transport', async () => {
     process.env[PROCESS_LOCAL_BULK_RESULTS_ENV] = '1';
-    process.env[TRANSPORT_ENV] = 'http';
+    process.env[TRANSPORT_ENV] = 'stdio';
+    setBulkResultRuntimeTransportMode('http');
     resetBulkResultStoreForTesting();
     const result = await withTenant([BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL], async () =>
       storeBulkResult({
@@ -416,6 +438,48 @@ describe('generic bulk-action tool', () => {
     });
   });
 
+  it('rejects replayed confirmations with forged later expiry before execution', async () => {
+    resetBulkResultStoreForTesting();
+    const { server, handlers } = makeServer();
+    const executeToolAlias = vi.fn(async () => ({
+      content: [{ type: 'text', text: JSON.stringify({ id: 'deleted-id' }) }],
+    }));
+    registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias,
+    });
+
+    const items = [
+      {
+        id: 'delete-1',
+        toolName: 'delete-onedrive-file',
+        parameters: { driveId: 'drive', driveItemId: 'item' },
+      },
+    ];
+    const preview = await withTenant([BULK_ACTION_TOOL, 'delete-onedrive-file'], async () =>
+      handlers.get(BULK_ACTION_TOOL)!({ mode: 'preview', outputMode: 'summary', items })
+    );
+    const confirmation = asRecord(dataFrom(preview)).confirmation as Record<string, unknown>;
+    const forgedExpiresAt = new Date(
+      Date.parse(String(confirmation.expiresAt)) + 60_000
+    ).toISOString();
+
+    const result = await withTenant([BULK_ACTION_TOOL, 'delete-onedrive-file'], async () =>
+      handlers.get(BULK_ACTION_TOOL)!({
+        mode: 'execute',
+        outputMode: 'summary',
+        confirmation: { ...confirmation, expiresAt: forgedExpiresAt },
+        items,
+      })
+    );
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(dataFrom(result))).toContain('confirmation_mismatch');
+    expect(executeToolAlias).not.toHaveBeenCalled();
+  });
+
   it('rejects plan-bound confirmation without the preview expiry during execution', async () => {
     resetBulkResultStoreForTesting();
     const { server, handlers } = makeServer();
@@ -497,6 +561,70 @@ describe('generic bulk-action tool', () => {
       handlers.get(READ_BULK_RESULT_TOOL)!({ resultId: payload.resultId, limit: 10 })
     );
     expect(JSON.stringify(dataFrom(read))).toContain('safe-id');
+  });
+
+  it('returns a structured read-bulk-result error when Redis readback is unavailable', async () => {
+    delete process.env[PROCESS_LOCAL_BULK_RESULTS_ENV];
+    process.env[REDIS_URL_ENV] = 'redis://unit-test';
+    __setRedisForTesting(new MemoryRedisFacade());
+    resetBulkResultStoreForTesting();
+    const { server, handlers } = makeServer();
+    registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias: vi.fn(),
+    });
+    const stored = await withTenant([BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL], async () =>
+      storeBulkResult({
+        digest: 'digest',
+        items: [{ id: 'item-1', toolName: 'get-chat', status: 'succeeded' }],
+        summary: {},
+      })
+    );
+    expect('resultId' in stored).toBe(true);
+    if (!('resultId' in stored)) return;
+    __setRedisForTesting(new FailingReadRedisFacade());
+
+    const read = await withTenant([BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'], async () =>
+      handlers.get(READ_BULK_RESULT_TOOL)!({ resultId: stored.resultId, limit: 10 })
+    );
+
+    expect(read.isError).toBe(true);
+    expect(JSON.stringify(dataFrom(read))).toContain('result_store_unavailable');
+  });
+
+  it('returns a structured read-bulk-result error when Redis cursor creation fails', async () => {
+    delete process.env[PROCESS_LOCAL_BULK_RESULTS_ENV];
+    process.env[REDIS_URL_ENV] = 'redis://unit-test';
+    __setRedisForTesting(new FailingCursorRedisFacade());
+    resetBulkResultStoreForTesting();
+    const { server, handlers } = makeServer();
+    registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias: vi.fn(),
+    });
+    const stored = await withTenant([BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL], async () =>
+      storeBulkResult({
+        digest: 'digest',
+        items: [
+          { id: 'item-1', toolName: 'get-chat', status: 'succeeded' },
+          { id: 'item-2', toolName: 'get-chat', status: 'succeeded' },
+        ],
+        summary: {},
+      })
+    );
+    expect('resultId' in stored).toBe(true);
+    if (!('resultId' in stored)) return;
+
+    const read = await withTenant([BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'], async () =>
+      handlers.get(READ_BULK_RESULT_TOOL)!({ resultId: stored.resultId, limit: 1 })
+    );
+
+    expect(read.isError).toBe(true);
+    expect(JSON.stringify(dataFrom(read))).toContain('result_store_unavailable');
   });
 
   it('stores and reads sanitized full results without leaking unsafe fields', async () => {

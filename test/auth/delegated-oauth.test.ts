@@ -309,7 +309,9 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     expect(authorizeRes.status).toBe(302);
     const location = authorizeRes.headers.get('location');
     expect(location).toBeTruthy();
-    expect(new URL(location!).searchParams.get('scope')).toBe(requestedScope);
+    expect(new URL(location!).searchParams.get('scope')).toBe(
+      'openid profile email Mail.Read offline_access'
+    );
 
     const tokenRes = await fetch(`${harness.url}/token`, {
       method: 'POST',
@@ -319,6 +321,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
         code: 'the-auth-code',
         redirect_uri: 'http://localhost:3000/callback',
         code_verifier: clientVerifier,
+        client_id: harness.tenant.client_id,
       }),
     });
     expect(tokenRes.status).toBe(200);
@@ -327,8 +330,8 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
       'openid',
       'profile',
       'email',
-      'offline_access',
       'Mail.Read',
+      'offline_access',
     ]);
 
     const refreshRes = await fetch(`${harness.url}/token`, {
@@ -345,8 +348,8 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
       'openid',
       'profile',
       'email',
-      'offline_access',
       'Mail.Read',
+      'offline_access',
     ]);
   });
 
@@ -381,6 +384,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
         code: 'the-auth-code',
         redirect_uri: 'http://localhost:3000/callback',
         code_verifier: clientVerifier,
+        client_id: harness.tenant.client_id,
       }),
     });
     expect(tokenRes.status).toBe(200);
@@ -439,6 +443,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
         code: 'the-auth-code',
         redirect_uri: 'http://localhost:3000/callback',
         code_verifier: clientVerifier,
+        client_id: harness.tenant.client_id,
       }),
     });
     expect(tokenRes.status).toBe(200);
@@ -475,6 +480,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
         code: 'the-auth-code',
         redirect_uri: 'http://localhost:3000/callback',
         code_verifier: clientVerifier,
+        client_id: harness.tenant.client_id,
       }),
     });
 
@@ -806,6 +812,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
         code: 'the-auth-code',
         redirect_uri: 'http://localhost:3000/callback',
         code_verifier: clientVerifier,
+        client_id: harness.tenant.client_id,
       }),
     });
 
@@ -918,6 +925,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
         code: 'the-auth-code',
         redirect_uri: 'http://localhost:3000/callback',
         code_verifier: clientVerifier,
+        client_id: harness.tenant.client_id,
       }),
     });
     const codeBody = (await codeRes.json()) as { refresh_token: string };
@@ -983,6 +991,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
         code: 'the-auth-code',
         redirect_uri: 'http://localhost:3000/callback',
         code_verifier: clientVerifier,
+        client_id: harness.tenant.client_id,
       }),
     });
     const codeBody = (await codeRes.json()) as { refresh_token: string };
@@ -1034,6 +1043,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
         code: 'the-auth-code',
         redirect_uri: 'http://localhost:3000/callback',
         code_verifier: clientVerifier,
+        client_id: harness.tenant.client_id,
       }),
     });
     const codeBody = (await codeRes.json()) as { refresh_token: string };
@@ -1097,6 +1107,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
           code: 'the-auth-code',
           redirect_uri: 'http://localhost:3000/callback',
           code_verifier: clientVerifier,
+          client_id: harness.tenant.client_id,
         }),
       });
       const codeBody = (await codeRes.json()) as { refresh_token: string };
@@ -1151,6 +1162,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
         code: 'the-auth-code',
         redirect_uri: 'http://localhost:3000/callback',
         code_verifier: clientVerifier,
+        client_id: harness.tenant.client_id,
       }),
     });
     const codeBody = (await codeRes.json()) as { refresh_token: string };
@@ -1196,6 +1208,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
         code: 'the-auth-code',
         redirect_uri: 'http://localhost:3000/callback',
         code_verifier: clientVerifier,
+        client_id: harness.tenant.client_id,
       }),
     });
     const codeBody = (await codeRes.json()) as { refresh_token: string };
@@ -1247,6 +1260,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
         code: 'the-auth-code',
         redirect_uri: 'http://localhost:3000/callback',
         code_verifier: clientVerifier, // NO corresponding PKCE entry seeded
+        client_id: harness.tenant.client_id,
       }),
     });
 

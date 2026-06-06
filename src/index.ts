@@ -29,6 +29,7 @@ import type { PkceStore } from './lib/pkce-store/pkce-store.js';
 import { version } from './version.js';
 import { connectorDoctor } from './lib/connector-identity/metadata.js';
 import { BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL } from './lib/bulk-actions/schema.js';
+import { setBulkResultRuntimeTransportMode } from './lib/bulk-actions/result-store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -316,6 +317,7 @@ async function main(): Promise<void> {
     // → tenant-pool. Only HTTP mode needs these substrates; stdio reuses the
     // file-backed token cache + in-memory PKCE per D-04.
     const isHttpMode = Boolean(args.http);
+    setBulkResultRuntimeTransportMode(isHttpMode ? 'http' : 'stdio');
     const readinessChecks: ReadinessCheck[] = [];
 
     // region:phase3-postgres  (filled by 03-01 Task 2 — THIS plan)

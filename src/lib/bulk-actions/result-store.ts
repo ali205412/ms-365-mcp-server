@@ -50,6 +50,11 @@ const PROCESS_LOCAL_BULK_RESULTS_ENV = 'MS365_MCP_ENABLE_PROCESS_LOCAL_BULK_RESU
 const RESULT_KEY_PREFIX = 'mcp:bulk-result:';
 const CURSOR_KEY_PREFIX = 'mcp:bulk-result-cursor:';
 const cursors = new Map<string, StoredCursor>();
+let runtimeTransportMode: 'stdio' | 'http' | undefined;
+
+export function setBulkResultRuntimeTransportMode(mode: 'stdio' | 'http'): void {
+  runtimeTransportMode = mode;
+}
 
 function tenantId(): string | undefined {
   return getRequestTenant().id ?? requestContext.getStore()?.tenantId ?? undefined;
@@ -58,7 +63,7 @@ function tenantId(): string | undefined {
 export function processLocalBulkResultsEnabled(): boolean {
   const value = process.env[PROCESS_LOCAL_BULK_RESULTS_ENV];
   if (value !== 'true' && value !== '1') return false;
-  return process.env.MS365_MCP_TRANSPORT === 'stdio';
+  return runtimeTransportMode === 'stdio';
 }
 
 function redisBulkResultsEnabled(): boolean {
@@ -252,6 +257,14 @@ async function consumeCursor(cursor: string): Promise<StoredCursor | null> {
   return cursorState;
 }
 
+function resultStoreUnavailable(): ReadBulkResultOutcome {
+  return {
+    ok: false,
+    code: 'result_store_unavailable',
+    message: 'Durable bulk result storage is unavailable.',
+  };
+}
+
 export async function readBulkResult(input: {
   resultId: string;
   cursor?: string;
@@ -274,7 +287,12 @@ export async function readBulkResult(input: {
     };
   }
   const ownerKey = bulkOwnerKey();
-  const result = await loadResult(input.resultId);
+  let result: StoredResult | null;
+  try {
+    result = await loadResult(input.resultId);
+  } catch {
+    return resultStoreUnavailable();
+  }
   if (!result) return { ok: false, code: 'result_not_found', message: 'Bulk result not found.' };
   if (result.expiresAt <= Date.now()) {
     store.delete(input.resultId);
@@ -289,7 +307,12 @@ export async function readBulkResult(input: {
 
   let offset = 0;
   if (input.cursor) {
-    const cursorState = await consumeCursor(input.cursor);
+    let cursorState: StoredCursor | null;
+    try {
+      cursorState = await consumeCursor(input.cursor);
+    } catch {
+      return resultStoreUnavailable();
+    }
     if (
       !cursorState ||
       cursorState.resultId !== input.resultId ||
@@ -304,8 +327,13 @@ export async function readBulkResult(input: {
   const limit = Math.min(Math.max(input.limit ?? 20, 1), BULK_LIMITS.maxReadLimit);
   const items = result.items.slice(offset, offset + limit);
   const nextOffset = offset + items.length;
-  const nextCursor =
-    nextOffset < result.items.length ? await makeCursor(result, nextOffset) : undefined;
+  let nextCursor: string | undefined;
+  try {
+    nextCursor =
+      nextOffset < result.items.length ? await makeCursor(result, nextOffset) : undefined;
+  } catch {
+    return resultStoreUnavailable();
+  }
   return {
     ok: true,
     value: {

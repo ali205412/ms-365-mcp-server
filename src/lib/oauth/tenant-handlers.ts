@@ -218,8 +218,13 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
       requestedScopes
     );
     const issueGatewayRefreshToken = allowedByStaticClient || dynamicRefreshEnabled;
+    if (!issueGatewayRefreshToken && protocolScopes.includes('offline_access')) {
+      emitAudit(tenant.id, 'failure', redirectUri, { error: 'invalid_scope' }, req);
+      res.status(400).json({ error: 'invalid_scope' });
+      return;
+    }
     const upstreamScopes = uniqScopes([
-      ...protocolScopes,
+      ...protocolScopes.filter((scope) => scope !== 'offline_access'),
       ...graphScopes,
       ...(issueGatewayRefreshToken ? ['offline_access'] : []),
     ]);
@@ -744,8 +749,31 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
       return;
     }
 
-    const submittedClientId = String(body?.client_id ?? tenant.client_id);
-    const submittedRedirectUri = String(body?.redirect_uri ?? entry.redirectUri);
+    if (typeof body?.client_id !== 'string' || body.client_id.trim().length === 0) {
+      emitTokenAudit(
+        tenant.id,
+        'failure',
+        { error: 'invalid_request', reason: 'client_id required' },
+        req
+      );
+      res.status(400).json({ error: 'invalid_request', error_description: 'client_id required' });
+      return;
+    }
+    if (typeof body?.redirect_uri !== 'string' || body.redirect_uri.trim().length === 0) {
+      emitTokenAudit(
+        tenant.id,
+        'failure',
+        { error: 'invalid_request', reason: 'redirect_uri required' },
+        req
+      );
+      res
+        .status(400)
+        .json({ error: 'invalid_request', error_description: 'redirect_uri required' });
+      return;
+    }
+
+    const submittedClientId = body.client_id;
+    const submittedRedirectUri = body.redirect_uri;
     if (
       entry.tenantId !== tenant.id ||
       entry.clientId !== submittedClientId ||
@@ -812,7 +840,7 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
         const sessionStore = new SessionStore(redis, dek);
         await sessionStore.put(tenant.id, result.accessToken, {
           tenantId: tenant.id,
-          refreshToken: refreshTokenFromAuthority,
+          refreshToken: issueGatewayRefreshToken ? refreshTokenFromAuthority : undefined,
           accountHomeId: result.account?.homeAccountId,
           msalCache: serializeMsalCache(msal),
           graphAccessToken: result.accessToken,

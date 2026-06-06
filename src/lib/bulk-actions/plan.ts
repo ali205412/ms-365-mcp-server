@@ -354,6 +354,7 @@ function digestInput(plan: Omit<BulkPlan, 'planDigest' | 'executionParameters'>)
     outputMode: plan.outputMode,
     highVolume: plan.highVolume,
     requiresConfirmation: plan.requiresConfirmation,
+    expiresAt: plan.expiresAt,
     items: plan.items.map((item) => ({
       id: item.id,
       toolName: item.toolName,

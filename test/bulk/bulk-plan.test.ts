@@ -253,7 +253,7 @@ describe('bulk action planner', () => {
     expect(plan.items[0]).toMatchObject({ status: 'blocked', code: 'read_only_violation' });
   });
 
-  it('keeps preview and execute digest stable when execute omits optional confirmation expiry', () => {
+  it('binds the confirmation expiry into the immutable plan digest', () => {
     const previewInput: BulkActionInput = {
       mode: 'preview',
       outputMode: 'summary',
@@ -276,7 +276,7 @@ describe('bulk action planner', () => {
     if ('error' in preview) return;
     expect(preview.requiresConfirmation).toBe(true);
 
-    const execute = runWithTenant([BULK_ACTION_TOOL, 'delete-onedrive-file'], () =>
+    const forgedExecute = runWithTenant([BULK_ACTION_TOOL, 'delete-onedrive-file'], () =>
       buildBulkPlan(
         {
           ...previewInput,
@@ -284,14 +284,15 @@ describe('bulk action planner', () => {
           confirmation: {
             planDigest: preview.planDigest,
             confirmed: true,
+            expiresAt: new Date(Date.parse(preview.expiresAt) + 60_000).toISOString(),
           },
         },
         { readOnly: false, orgMode: true, now: new Date('2026-06-05T00:01:00Z') }
       )
     );
-    expect('error' in execute).toBe(false);
-    if ('error' in execute) return;
-    expect(execute.planDigest).toBe(preview.planDigest);
+    expect('error' in forgedExecute).toBe(false);
+    if ('error' in forgedExecute) return;
+    expect(forgedExecute.planDigest).not.toBe(preview.planDigest);
   });
 
   it('keeps preview and execute digest stable when execute reuses preview expiry', () => {
