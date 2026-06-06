@@ -29,6 +29,7 @@ import type { Request, Response } from 'express';
 import { pinoHttp } from 'pino-http';
 import { nanoid } from 'nanoid';
 import { createServer, type Server } from 'node:http';
+import { isIP } from 'node:net';
 import type { PrometheusExporter } from '@opentelemetry/exporter-prometheus';
 
 import { createBearerAuthMiddleware } from './bearer-auth.js';
@@ -110,7 +111,7 @@ export function createMetricsServer(
 
   const server = createServer(app);
   const host = normalizeMetricsHost(config.host);
-  if (isPublicBind(host) && !isBearerGated(config.bearerToken)) {
+  if (isPublicMetricsBind(host) && !isBearerGated(config.bearerToken)) {
     throw new Error('MS365_MCP_METRICS_BEARER is required when metrics bind publicly');
   }
   server.listen(config.port, host, () => {
@@ -138,6 +139,20 @@ function isBearerGated(token: string | null | undefined): boolean {
   return typeof token === 'string' && token.length > 0;
 }
 
-function isPublicBind(host: string): boolean {
-  return host === '0.0.0.0' || host === '::' || host === '[::]';
+export function isPublicMetricsBind(host: string): boolean {
+  const normalizedHost = host.trim().toLowerCase();
+  const unbracketedHost =
+    normalizedHost.startsWith('[') && normalizedHost.endsWith(']')
+      ? normalizedHost.slice(1, -1)
+      : normalizedHost;
+
+  if (unbracketedHost === 'localhost' || unbracketedHost === '::1') {
+    return false;
+  }
+
+  if (isIP(unbracketedHost) === 4 && unbracketedHost.startsWith('127.')) {
+    return false;
+  }
+
+  return true;
 }

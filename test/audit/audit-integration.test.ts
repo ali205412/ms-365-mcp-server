@@ -281,6 +281,7 @@ describe('audit integration (plan 03-10, TENANT-06)', () => {
         code: 'the-code',
         redirect_uri: 'http://localhost:3100/callback-a',
         code_verifier: clientVerifier,
+        client_id: 'client-A',
       }),
     });
     expect(tokenRes.status).toBe(200);
@@ -303,6 +304,7 @@ describe('audit integration (plan 03-10, TENANT-06)', () => {
         code: 'the-code',
         redirect_uri: 'http://localhost:3100/callback-a',
         code_verifier: bogusVerifier,
+        client_id: 'client-A',
       }),
     });
     expect(tokenRes.status).toBe(400);

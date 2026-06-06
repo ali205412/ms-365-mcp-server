@@ -229,6 +229,7 @@ describe('plan 03-08 — /t/:tenantId/* routing', () => {
           code: 'the-code',
           redirect_uri: 'http://localhost:3000/callback',
           code_verifier: clientVerifier,
+          client_id: 'client-aaaa',
         }),
       });
       expect(tokenRes.status).toBe(200);

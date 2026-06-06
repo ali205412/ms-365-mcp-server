@@ -166,6 +166,7 @@ async function doTokenExchange(h: Harness): Promise<Response> {
     code: 'auth-code-xyz',
     code_verifier: clientVerifier,
     redirect_uri: 'http://localhost:3000/callback',
+    client_id: h.tenant.client_id,
   });
 
   return fetch(`${h.url}/token`, {

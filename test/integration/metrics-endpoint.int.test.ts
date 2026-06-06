@@ -166,6 +166,37 @@ describe('plan 06-03 — /metrics integration contract (OPS-07)', () => {
     ).toThrow(/METRICS_BEARER/);
   });
 
+  it('classifies only localhost and loopback metrics hosts as private', async () => {
+    const { createMetricsServer, isPublicMetricsBind } =
+      await import('../../src/lib/metrics-server/metrics-server.js');
+
+    expect(isPublicMetricsBind('127.0.0.1')).toBe(false);
+    expect(isPublicMetricsBind('127.0.0.2')).toBe(false);
+    expect(isPublicMetricsBind('localhost')).toBe(false);
+    expect(isPublicMetricsBind('LOCALHOST')).toBe(false);
+    expect(isPublicMetricsBind('::1')).toBe(false);
+    expect(isPublicMetricsBind('[::1]')).toBe(false);
+
+    expect(isPublicMetricsBind('0.0.0.0')).toBe(true);
+    expect(isPublicMetricsBind('::')).toBe(true);
+    expect(isPublicMetricsBind('[::]')).toBe(true);
+    expect(isPublicMetricsBind('10.0.0.5')).toBe(true);
+    expect(isPublicMetricsBind('192.168.1.50')).toBe(true);
+    expect(isPublicMetricsBind('2001:db8::5')).toBe(true);
+    expect(isPublicMetricsBind('[2001:db8::5]')).toBe(true);
+    expect(isPublicMetricsBind('metrics.internal')).toBe(true);
+
+    expect(() =>
+      createMetricsServer(exporter, { port: 0, bearerToken: null, host: '10.0.0.5' })
+    ).toThrow(/METRICS_BEARER/);
+    expect(() =>
+      createMetricsServer(exporter, { port: 0, bearerToken: null, host: 'metrics.internal' })
+    ).toThrow(/METRICS_BEARER/);
+    expect(() => createMetricsServer(exporter, { port: 0, bearerToken: null, host: '::' })).toThrow(
+      /METRICS_BEARER/
+    );
+  });
+
   it('allows public metrics binds when Bearer auth is configured', async () => {
     const baseUrl = await startServer('integration-token-abc', '0.0.0.0');
     const res = await fetch(`${baseUrl}/healthz`);
