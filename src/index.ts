@@ -572,6 +572,7 @@ async function main(): Promise<void> {
       const { setStdioFallback: setFallback } =
         await import('./lib/tool-selection/dispatch-guard.js');
       if (!tenantIdArg || !process.env.MS365_MCP_DATABASE_URL) {
+        // codeql[js/regex-injection]: --enabled-tools is an operator-supplied startup regex validated by parseArgs before this branch runs.
         const enabledToolsRegex = args.enabledTools
           ? new RegExp(args.enabledTools, 'i')
           : undefined;
