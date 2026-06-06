@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type GraphClient from '../../src/graph-client.js';
 import { requestContext } from '../../src/request-context.js';
+import { buildBulkPlan } from '../../src/lib/bulk-actions/plan.js';
 import { registerBulkActionTools } from '../../src/lib/bulk-actions/register.js';
 import {
   BULK_ACTION_TOOL,
@@ -10,6 +11,7 @@ import {
   READ_BULK_RESULT_TOOL,
 } from '../../src/lib/bulk-actions/schema.js';
 import {
+  resetBulkResultRuntimeTransportModeForTesting,
   resetBulkResultStoreForTesting,
   setBulkResultRuntimeTransportMode,
   storeBulkResult,
@@ -191,6 +193,7 @@ describe('generic bulk-action tool', () => {
     } else {
       process.env[TRANSPORT_ENV] = originalTransport;
     }
+    resetBulkResultRuntimeTransportModeForTesting();
     __setRedisForTesting(null);
   });
 
@@ -479,6 +482,79 @@ describe('generic bulk-action tool', () => {
     expect(result._meta?.errorCode).toBe('confirmation_mismatch');
     expect(asRecord(dataFrom(result)).error).toMatchObject({ code: 'confirmation_mismatch' });
     expect(executeToolAlias).not.toHaveBeenCalled();
+  });
+
+  it('rejects forged later expiry even when the caller recomputes the later plan digest', async () => {
+    vi.useFakeTimers();
+    try {
+      resetBulkResultStoreForTesting();
+      const { server, handlers } = makeServer();
+      const executeToolAlias = vi.fn(async () => ({
+        content: [{ type: 'text', text: JSON.stringify({ id: 'deleted-id' }) }],
+      }));
+      registerBulkActionTools(mcpServerStub(server), {
+        graphClient: graphClientStub(),
+        readOnly: false,
+        orgMode: true,
+        executeToolAlias,
+      });
+
+      const items = [
+        {
+          id: 'delete-1',
+          toolName: 'delete-onedrive-file',
+          parameters: { driveId: 'drive', driveItemId: 'item' },
+        },
+      ];
+      vi.setSystemTime(new Date('2026-06-05T00:00:00Z'));
+      const preview = await withTenant([BULK_ACTION_TOOL, 'delete-onedrive-file'], async () =>
+        handlers.get(BULK_ACTION_TOOL)!({ mode: 'preview', outputMode: 'summary', items })
+      );
+      const confirmation = asRecord(dataFrom(preview)).confirmation as Record<string, unknown>;
+      const forgedExpiresAt = new Date(
+        Date.parse(String(confirmation.expiresAt)) + 60_000
+      ).toISOString();
+
+      vi.setSystemTime(new Date('2026-06-05T00:01:00Z'));
+      const forgedPlan = await withTenant([BULK_ACTION_TOOL, 'delete-onedrive-file'], async () =>
+        buildBulkPlan(
+          {
+            mode: 'execute',
+            outputMode: 'summary',
+            items,
+            confirmation: {
+              confirmed: true,
+              expiresAt: forgedExpiresAt,
+              planDigest: String(confirmation.planDigest),
+              signature: 'f'.repeat(32),
+            },
+          },
+          { readOnly: false, orgMode: true, now: new Date('2026-06-05T00:01:00Z') }
+        )
+      );
+      expect('error' in forgedPlan).toBe(false);
+      if ('error' in forgedPlan) return;
+
+      const result = await withTenant([BULK_ACTION_TOOL, 'delete-onedrive-file'], async () =>
+        handlers.get(BULK_ACTION_TOOL)!({
+          mode: 'execute',
+          outputMode: 'summary',
+          confirmation: {
+            confirmed: true,
+            expiresAt: forgedExpiresAt,
+            planDigest: forgedPlan.planDigest,
+            signature: 'f'.repeat(32),
+          },
+          items,
+        })
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result._meta?.errorCode).toBe('confirmation_mismatch');
+      expect(executeToolAlias).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('rejects plan-bound confirmation without the preview expiry during execution', async () => {

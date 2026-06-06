@@ -159,7 +159,12 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
     }
 
     const redirectUri = String(req.query.redirect_uri ?? '');
-    const clientId = String(req.query.client_id ?? tenant.client_id);
+    if (typeof req.query.client_id !== 'string' || req.query.client_id.trim().length === 0) {
+      emitAudit(tenant.id, 'failure', redirectUri, { error: 'invalid_request' }, req);
+      res.status(400).json({ error: 'invalid_request', error_description: 'client_id required' });
+      return;
+    }
+    const clientId = req.query.client_id;
     const allowedByStaticClient =
       clientId === tenant.client_id && tenant.redirect_uri_allowlist.includes(redirectUri);
     {
@@ -459,7 +464,27 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
     }
 
     const body = req.body as Record<string, unknown> | undefined;
-    const grantType = String(body?.grant_type ?? 'authorization_code');
+    if (typeof body?.grant_type !== 'string' || body.grant_type.trim().length === 0) {
+      emitTokenAudit(
+        tenant.id,
+        'failure',
+        { error: 'invalid_request', reason: 'grant_type required' },
+        req
+      );
+      res.status(400).json({ error: 'invalid_request', error_description: 'grant_type required' });
+      return;
+    }
+    const grantType = body.grant_type;
+    if (grantType !== 'authorization_code' && grantType !== 'refresh_token') {
+      emitTokenAudit(
+        tenant.id,
+        'failure',
+        { error: 'unsupported_grant_type', grant_type: grantType },
+        req
+      );
+      res.status(400).json({ error: 'unsupported_grant_type' });
+      return;
+    }
     if (grantType === 'refresh_token') {
       const submittedRefreshToken = String(body?.refresh_token ?? '');
       const refreshAuditMeta = (error?: string, extra: Record<string, unknown> = {}) => ({

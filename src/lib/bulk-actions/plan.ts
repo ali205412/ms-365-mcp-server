@@ -69,6 +69,7 @@ export interface BulkPlanningOptions {
   readOnly: boolean;
   orgMode: boolean;
   now?: Date;
+  confirmationExpiresAt?: string;
 }
 
 function tenantTriple():
@@ -396,10 +397,17 @@ export function buildBulkPlan(
 
   const now = options.now ?? new Date();
   const maxExpiresAt = new Date(now.getTime() + BULK_LIMITS.planTtlMs);
-  const expiresAt =
-    input.mode === 'execute' && input.confirmation?.expiresAt
-      ? new Date(Math.min(new Date(input.confirmation.expiresAt).getTime(), maxExpiresAt.getTime()))
-      : maxExpiresAt;
+  const issuedConfirmationExpiresAt =
+    input.mode === 'execute' && options.confirmationExpiresAt
+      ? new Date(options.confirmationExpiresAt)
+      : undefined;
+  if (
+    issuedConfirmationExpiresAt &&
+    issuedConfirmationExpiresAt.getTime() > maxExpiresAt.getTime()
+  ) {
+    return { error: 'confirmation_mismatch', message: 'Bulk confirmation expiry was not issued.' };
+  }
+  const expiresAt = issuedConfirmationExpiresAt ?? maxExpiresAt;
   if (!Number.isFinite(expiresAt.getTime())) {
     return { error: 'invalid_bulk_item', message: 'Bulk confirmation expiresAt is invalid.' };
   }

@@ -227,6 +227,25 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     vi.restoreAllMocks();
   });
 
+  it('rejects /authorize without client_id before storing PKCE state', async () => {
+    harness = await startApp();
+
+    const clientVerifier = crypto.randomBytes(32).toString('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
+    const params = new URLSearchParams({
+      redirect_uri: 'http://localhost:3000/callback',
+      code_challenge: clientChallenge,
+      code_challenge_method: 'S256',
+      state: 'missing-client-id',
+    });
+
+    const res = await fetch(`${harness.url}/authorize?${params}`, { redirect: 'manual' });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: 'invalid_request' });
+    expect(await harness.pkceStore.getByChallenge(harness.tenant.id, clientChallenge)).toBeNull();
+  });
+
   it('Test 1: /authorize happy path writes PKCE + redirects to Microsoft with server-generated challenge', async () => {
     harness = await startApp();
 
@@ -288,6 +307,41 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     expect(location).toBeTruthy();
     const loc = new URL(location!);
     expect(loc.searchParams.get('scope')).toBe('Mail.Read offline_access');
+  });
+
+  it('rejects /token without grant_type before consuming PKCE state', async () => {
+    harness = await startApp({ allowed_scopes: ['Mail.Read'] });
+
+    const clientVerifier = crypto.randomBytes(32).toString('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
+    const params = new URLSearchParams({
+      redirect_uri: 'http://localhost:3000/callback',
+      code_challenge: clientChallenge,
+      code_challenge_method: 'S256',
+      state: 'missing-grant-type',
+      client_id: harness.tenant.client_id,
+      scope: 'Mail.Read',
+    });
+    const authorizeRes = await fetch(`${harness.url}/authorize?${params}`, { redirect: 'manual' });
+    expect(authorizeRes.status).toBe(302);
+
+    const tokenRes = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code: 'the-auth-code',
+        redirect_uri: 'http://localhost:3000/callback',
+        code_verifier: clientVerifier,
+        client_id: harness.tenant.client_id,
+      }),
+    });
+
+    expect(tokenRes.status).toBe(400);
+    expect(await tokenRes.json()).toMatchObject({ error: 'invalid_request' });
+    expect(
+      await harness.pkceStore.getByChallenge(harness.tenant.id, clientChallenge)
+    ).not.toBeNull();
+    expect(harness.mockMsalAcquireByCode).not.toHaveBeenCalled();
   });
 
   it('allows standard OAuth protocol scopes without weakening tenant Graph scope gating', async () => {
@@ -772,6 +826,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
       code_challenge: 'too-short',
       code_challenge_method: 'S256',
       state: 'xyz',
+      client_id: harness.tenant.client_id,
     });
 
     const res = await fetch(`${harness.url}/authorize?${params}`, {

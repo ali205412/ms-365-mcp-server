@@ -5,12 +5,11 @@
 export const DISCOVERY_V1_OPS: ReadonlySet<string> = Object.freeze(
   new Set<string>([
     'bookmark-tool',
+    'bulk-action',
     'calendar-brief-view',
     'connector-diagnostics',
     'delete-skill',
     'execute-tool',
-    'bulk-action',
-    'read-bulk-result',
     'export-skill-pack',
     'file-search-view',
     'forget-fact',
@@ -23,6 +22,7 @@ export const DISCOVERY_V1_OPS: ReadonlySet<string> = Object.freeze(
     'list-recipes',
     'list-skills',
     'permissions-overview-view',
+    'read-bulk-result',
     'recall-facts',
     'record-fact',
     'render-skill',

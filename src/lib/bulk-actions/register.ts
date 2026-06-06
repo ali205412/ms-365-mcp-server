@@ -1,3 +1,4 @@
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type AuthManager from '../../auth.js';
@@ -17,6 +18,7 @@ import {
   READ_BULK_RESULT_TOOL,
   ReadBulkResultInputZod,
   type BulkActionInput,
+  type BulkConfirmation,
   type BulkOutputMode,
 } from './schema.js';
 import { buildBulkPlan, bulkPlanPublicSummary, currentContextSnapshot } from './plan.js';
@@ -33,6 +35,7 @@ import {
   safeIdsPayload,
   sanitizeErrorCode,
   sanitizeValue,
+  stableStringify,
 } from './sanitize.js';
 
 export interface ExecuteToolAliasLikeArgs {
@@ -53,6 +56,72 @@ export interface RegisterBulkActionToolsOptions {
   createToolAliasExecutor?: () => (args: ExecuteToolAliasLikeArgs) => Promise<CallToolResult>;
   enabledToolsPattern?: RegExp;
   enabledToolsSet?: ReadonlySet<string>;
+}
+
+const BULK_CONFIRMATION_HMAC_SECRET = randomBytes(32);
+
+function bulkConfirmationSignaturePayload(input: {
+  planDigest: string;
+  expiresAt: string;
+  tenantId: string | undefined;
+  ownerKey: string;
+}): string {
+  return stableStringify({
+    version: 'bulk-confirmation-v1',
+    planDigest: input.planDigest,
+    expiresAt: input.expiresAt,
+    tenantId: input.tenantId,
+    ownerKey: input.ownerKey,
+  });
+}
+
+function signBulkConfirmation(input: {
+  planDigest: string;
+  expiresAt: string;
+  tenantId: string | undefined;
+  ownerKey: string;
+}): string {
+  return createHmac('sha256', BULK_CONFIRMATION_HMAC_SECRET)
+    .update(bulkConfirmationSignaturePayload(input))
+    .digest('base64url');
+}
+
+function bulkConfirmationSignatureValid(input: {
+  confirmation: BulkConfirmation;
+  tenantId: string | undefined;
+  ownerKey: string;
+}): boolean {
+  const expected = Buffer.from(
+    signBulkConfirmation({
+      planDigest: input.confirmation.planDigest,
+      expiresAt: input.confirmation.expiresAt,
+      tenantId: input.tenantId,
+      ownerKey: input.ownerKey,
+    }),
+    'utf8'
+  );
+  const actual = Buffer.from(input.confirmation.signature, 'utf8');
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+function attachSignedConfirmation(planSummary: Record<string, unknown>): Record<string, unknown> {
+  const confirmation = planSummary.confirmation;
+  if (typeof confirmation !== 'object' || confirmation === null) return planSummary;
+  const record = confirmation as Record<string, unknown>;
+  if (typeof record.planDigest !== 'string' || typeof record.expiresAt !== 'string')
+    return planSummary;
+  return {
+    ...planSummary,
+    confirmation: {
+      ...record,
+      signature: signBulkConfirmation({
+        planDigest: record.planDigest,
+        expiresAt: record.expiresAt,
+        tenantId: getRequestTenant().id,
+        ownerKey: bulkOwnerKey(),
+      }),
+    },
+  };
 }
 
 function syntheticAllowed(alias: string): CallToolResult | null {
@@ -248,7 +317,18 @@ async function handleBulkAction(
   if (dispatchRejection) return dispatchRejection;
 
   const input = parsed.data;
-  const plan = buildBulkPlan(input, { readOnly: options.readOnly, orgMode: options.orgMode });
+  const confirmationSignatureValid = input.confirmation
+    ? bulkConfirmationSignatureValid({
+        confirmation: input.confirmation,
+        tenantId: getRequestTenant().id,
+        ownerKey: bulkOwnerKey(),
+      })
+    : false;
+  const plan = buildBulkPlan(input, {
+    readOnly: options.readOnly,
+    orgMode: options.orgMode,
+    confirmationExpiresAt: confirmationSignatureValid ? input.confirmation?.expiresAt : undefined,
+  });
   if ('error' in plan) {
     return createMcpErrorEnvelope({
       toolName: BULK_ACTION_TOOL,
@@ -259,7 +339,7 @@ async function handleBulkAction(
     });
   }
 
-  const planSummary = bulkPlanPublicSummary(plan);
+  const planSummary = attachSignedConfirmation(bulkPlanPublicSummary(plan));
   auditBulk(
     input.mode === 'preview' ? 'bulk-action.preview' : 'bulk-action.execute.plan',
     'success',
@@ -347,7 +427,7 @@ async function handleBulkAction(
         code: 'confirmation_required',
         message: 'Execute requires confirmation confirmed=true with the exact preview planDigest.',
         data: {
-          confirmation: { planDigest: plan.planDigest, confirmed: true, expiresAt: plan.expiresAt },
+          confirmation: planSummary.confirmation,
           itemCount: plan.items.length,
         },
       });
@@ -366,6 +446,7 @@ async function handleBulkAction(
       });
     }
     if (
+      !confirmationSignatureValid ||
       input.confirmation.planDigest !== plan.planDigest ||
       input.confirmation.confirmed !== true ||
       input.confirmation.expiresAt !== plan.expiresAt

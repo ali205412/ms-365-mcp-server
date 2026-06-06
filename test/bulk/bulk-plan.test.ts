@@ -341,6 +341,7 @@ describe('bulk action planner', () => {
             planDigest: preview.planDigest,
             confirmed: true,
             expiresAt: new Date(Date.parse(preview.expiresAt) + 60_000).toISOString(),
+            signature: 'forged-signature',
           },
         },
         { readOnly: false, orgMode: true, now: new Date('2026-06-05T00:01:00Z') }
@@ -375,9 +376,15 @@ describe('bulk action planner', () => {
             planDigest: preview.planDigest,
             confirmed: true,
             expiresAt: preview.expiresAt,
+            signature: 'test-signature',
           },
         },
-        { readOnly: false, orgMode: true, now: new Date('2026-06-05T00:01:00Z') }
+        {
+          readOnly: false,
+          orgMode: true,
+          now: new Date('2026-06-05T00:01:00Z'),
+          confirmationExpiresAt: preview.expiresAt,
+        }
       )
     );
     expect('error' in execute).toBe(false);

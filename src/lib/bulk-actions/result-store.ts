@@ -56,6 +56,10 @@ export function setBulkResultRuntimeTransportMode(mode: 'stdio' | 'http'): void 
   runtimeTransportMode = mode;
 }
 
+export function resetBulkResultRuntimeTransportModeForTesting(): void {
+  runtimeTransportMode = undefined;
+}
+
 function tenantId(): string | undefined {
   return getRequestTenant().id ?? requestContext.getStore()?.tenantId ?? undefined;
 }

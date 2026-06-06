@@ -81,6 +81,7 @@ export const BulkConfirmationZod = z
     planDigest: z.string().min(32).max(128),
     confirmed: z.literal(true),
     expiresAt: z.string().datetime(),
+    signature: z.string().min(32).max(256),
   })
   .strict();
 export type BulkConfirmation = z.infer<typeof BulkConfirmationZod>;
