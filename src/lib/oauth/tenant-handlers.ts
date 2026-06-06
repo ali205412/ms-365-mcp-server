@@ -11,6 +11,7 @@ import {
   getActiveOAuthClientRegistration,
   hashOpaqueValue,
   hasExactRedirectUri,
+  isOAuthClientStoreAvailable,
   touchOAuthClientRegistration,
 } from './client-store.js';
 import {
@@ -149,7 +150,7 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
       }
     }
     let allowedByDynamicClient = false;
-    if (!allowedByStaticClient && pgPool) {
+    if (!allowedByStaticClient && pgPool && (await isOAuthClientStoreAvailable(pgPool))) {
       const registration = await getActiveOAuthClientRegistration(pgPool, tenant.id, clientId);
       allowedByDynamicClient = Boolean(
         registration &&
