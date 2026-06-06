@@ -573,11 +573,8 @@ async function main(): Promise<void> {
       const { setStdioFallback: setFallback } =
         await import('./lib/tool-selection/dispatch-guard.js');
       if (!tenantIdArg || !process.env.MS365_MCP_DATABASE_URL) {
-        let enabledToolsRegex: RegExp | undefined;
-        if (args.enabledTools) {
-          // --enabled-tools is an operator-supplied startup regex validated by parseArgs before this branch runs.
-          enabledToolsRegex = new RegExp(args.enabledTools, 'i'); // lgtm[js/regex-injection]
-        }
+        const { compileEnabledToolsRegex } = await import('./graph-tools.js');
+        const enabledToolsRegex = compileEnabledToolsRegex(args.enabledTools);
         const allowsAlias = (alias: string): boolean => {
           if (!enabledToolsRegex) return true;
           enabledToolsRegex.lastIndex = 0;

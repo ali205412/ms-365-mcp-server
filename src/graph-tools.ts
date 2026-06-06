@@ -1947,7 +1947,9 @@ export function buildToolsRegistry(
   return toolsMap;
 }
 
-function compileEnabledToolsRegex(enabledToolsPattern: string | undefined): RegExp | undefined {
+export function compileEnabledToolsRegex(
+  enabledToolsPattern: string | undefined
+): RegExp | undefined {
   if (!enabledToolsPattern) return undefined;
   try {
     const regex = new RegExp(enabledToolsPattern, 'i');
