@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ClientCapabilityProfile, McpSurfaceMode, McpTransportKind } from './profile.js';
 import { buildEffectiveCapabilityProfile, DEFAULT_SERVER_CAPABILITIES } from './profile.js';
+import { APP_DEFINITIONS } from '../mcp-apps/assets.js';
 import { getRequestCapabilityProfile } from './session-profile.js';
 
 export interface ConnectorDiagnosticsInput {
@@ -46,6 +47,10 @@ export interface RegisterConnectorDiagnosticsDeps {
 
 const SECRET_KEY_PATTERN = /authorization|cookie|token|secret|password|body/i;
 const DEFAULT_DISPLAY_NAME = 'Microsoft 365 MCP Gateway';
+const CONNECTOR_DIAGNOSTICS_DASHBOARD = 'connector-diagnostics';
+const CONNECTOR_DIAGNOSTICS_APP_URI = APP_DEFINITIONS.find(
+  (app) => app.slug === CONNECTOR_DIAGNOSTICS_DASHBOARD
+)?.uri;
 const FALLBACK_INSTRUCTIONS = Object.freeze([
   'If Apps UI is unavailable, use this text response as the authoritative connector diagnostic.',
   'If resources/read-resource is unavailable, use the metadata URLs listed here directly in the client or browser.',
@@ -85,6 +90,34 @@ export function buildConnectorDiagnostics(
   });
 }
 
+function connectorDiagnosticsResources(tenantId: string): Array<{
+  uri: string;
+  name: string;
+  mimeType: string;
+  description: string;
+}> {
+  return [
+    {
+      uri: `m365://tenant/${tenantId}/dashboards/connector-diagnostics.json`,
+      name: 'Connector diagnostics dashboard data',
+      mimeType: 'application/json',
+      description: 'Durable connector capability profile, metadata URL, and fallback diagnostics.',
+    },
+  ];
+}
+
+function diagnosticsTextWithResources(
+  text: string,
+  resources: ReturnType<typeof connectorDiagnosticsResources>
+): string {
+  return [
+    text,
+    '',
+    'Resources:',
+    ...resources.map((resource) => `- Open ${resource.name}: ${resource.uri}`),
+  ].join('\n');
+}
+
 export function registerConnectorDiagnosticsTool(
   server: McpServer,
   deps: RegisterConnectorDiagnosticsDeps
@@ -115,10 +148,28 @@ export function registerConnectorDiagnosticsTool(
         metadataUrls: deps.metadataUrls,
         expectedDisplayName: deps.expectedDisplayName,
       });
+      const resources = connectorDiagnosticsResources(diagnostics.structured.tenant.id);
 
       return {
-        content: [{ type: 'text' as const, text: diagnostics.text }],
-        structuredContent: diagnostics.structured,
+        content: [
+          {
+            type: 'text' as const,
+            text: diagnosticsTextWithResources(diagnostics.text, resources),
+          },
+        ],
+        structuredContent: {
+          ...diagnostics.structured,
+          resources,
+        },
+        _meta: {
+          dashboard: CONNECTOR_DIAGNOSTICS_DASHBOARD,
+          ...(profile.capabilities.apps.effective && CONNECTOR_DIAGNOSTICS_APP_URI
+            ? {
+                ui: { resourceUri: CONNECTOR_DIAGNOSTICS_APP_URI },
+                'ui/resourceUri': CONNECTOR_DIAGNOSTICS_APP_URI,
+              }
+            : { fallback: 'apps_unsupported' }),
+        },
       };
     }
   );

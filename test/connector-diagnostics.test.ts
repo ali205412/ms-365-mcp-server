@@ -110,6 +110,8 @@ describe('connector diagnostics', () => {
     expect(textPayload).toContain('Resources status: fallback');
     expect(textPayload).toContain('Structured results status: enabled');
     expect(textPayload).toContain('Metadata URLs: mcp: https://example.test/t/tenant-a/mcp');
+    expect(textPayload).toContain('Resources:');
+    expect(textPayload).toContain('m365://tenant/tenant-a/dashboards/connector-diagnostics.json');
     expect(textPayload).toContain('If Apps UI is unavailable');
     expect(textPayload).toContain('Your client does not advertise');
     expect(result.structuredContent).toEqual(
@@ -123,10 +125,51 @@ describe('connector diagnostics', () => {
         fallbackInstructions: expect.any(Array),
         expectedDisplayName: 'Microsoft 365 MCP Gateway',
         fallbacks: expect.any(Array),
+        resources: expect.arrayContaining([
+          expect.objectContaining({
+            uri: 'm365://tenant/tenant-a/dashboards/connector-diagnostics.json',
+          }),
+        ]),
       })
     );
     expect(JSON.stringify(result).toLowerCase()).not.toMatch(
       /authorization|refresh_token|access_token|cookie/
+    );
+  });
+
+  it('exposes the diagnostics UI resource for Apps-capable clients', async () => {
+    const server = new McpServer({ name: 'Microsoft365MCP', version: '0.0.0-test' });
+    const profile = buildEffectiveCapabilityProfile({
+      protocolVersion: '2025-06-18',
+      clientInfo: { name: 'apps-client' },
+      advertisedCapabilities: { tools: {}, apps: {}, resources: {}, structuredToolResults: {} },
+      transport: 'streamable-http',
+      surface: 'discovery',
+      tenantPolicy: { phase8Enabled: true },
+      serverCapabilities: DEFAULT_SERVER_CAPABILITIES,
+    });
+
+    registerConnectorDiagnosticsTool(server, {
+      server: { name: 'Microsoft365MCP', version: '0.0.0-test' },
+      tenant: { id: 'tenant-a' },
+      surface: 'discovery',
+      transport: 'streamable-http',
+      profile,
+    });
+
+    const result = (await callTool(server, 'connector-diagnostics')) as {
+      _meta?: Record<string, unknown>;
+      structuredContent?: { resources?: Array<{ uri: string }> };
+    };
+
+    expect(result._meta?.['ui/resourceUri']).toBe('ui://m365/connector-diagnostics.html');
+    expect(result._meta?.ui).toEqual({ resourceUri: 'ui://m365/connector-diagnostics.html' });
+    expect(result.structuredContent?.resources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          uri: 'm365://tenant/tenant-a/dashboards/connector-diagnostics.json',
+        }),
+      ])
     );
   });
 
