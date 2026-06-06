@@ -1,10 +1,14 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { ExpressStreamableHTTPServerTransport } from './lib/transports/express-streamable-http-transport.js';
+import {
+  ExpressStreamableHTTPServerTransport,
+  type ExpressIncomingMessage,
+} from './lib/transports/express-streamable-http-transport.js';
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import express, { type Request, type Response, type RequestHandler } from 'express';
 import expressRateLimit from 'express-rate-limit';
 import logger, { enableConsoleLogging, rawPinoLogger } from './logger.js';
+import type { ServerResponse } from 'node:http';
 import { registerAuthTools } from './auth-tools.js';
 import { registerGraphTools, registerDiscoveryTools } from './graph-tools.js';
 import { registerMemoryTools } from './lib/memory/tools.js';
@@ -275,7 +279,9 @@ class MicrosoftGraphServer {
         this.options.readOnly,
         this.options.orgMode,
         this.authManager,
-        this.multiAccount
+        this.multiAccount,
+        this.options.enabledTools,
+        enabledToolsSet
       );
       registerMemoryTools(server, {
         redis: getRedis(),
@@ -1435,7 +1441,11 @@ class MicrosoftGraphServer {
             });
 
             await server.connect(transport);
-            await transport.handleRequest(req as any, res as any, undefined);
+            await transport.handleRequest(
+              req as ExpressIncomingMessage,
+              res as unknown as ServerResponse,
+              undefined
+            );
           };
 
           try {
@@ -1494,7 +1504,11 @@ class MicrosoftGraphServer {
             });
 
             await server.connect(transport);
-            await transport.handleRequest(req as any, res as any, req.body);
+            await transport.handleRequest(
+              req as ExpressIncomingMessage,
+              res as unknown as ServerResponse,
+              req.body
+            );
           };
 
           try {

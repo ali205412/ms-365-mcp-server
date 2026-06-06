@@ -1,7 +1,7 @@
 /**
  * Phase 7 Plan 07-07 — MCP prompt parser and renderer contract.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -87,8 +87,11 @@ const PROMPT_TOOL_REFERENCES = [
   'bookmark-tool',
   'save-recipe',
 ] as const;
+const BULK_CONFIRMATION_SECRET_ENV = 'MS365_MCP_BULK_CONFIRMATION_SECRET';
+const TEST_BULK_CONFIRMATION_SECRET = 'mcp-prompts-test-bulk-secret-000000';
 
 let tmpDirs: string[] = [];
+let previousBulkConfirmationSecret: string | undefined;
 
 interface ListPromptsResponse {
   prompts: Array<{
@@ -177,11 +180,21 @@ function promptNames(prompts: readonly PromptTemplateDefinition[]): string[] {
   return prompts.map((prompt) => prompt.name).sort();
 }
 
+beforeEach(() => {
+  previousBulkConfirmationSecret = process.env[BULK_CONFIRMATION_SECRET_ENV];
+  process.env[BULK_CONFIRMATION_SECRET_ENV] = TEST_BULK_CONFIRMATION_SECRET;
+});
+
 afterEach(() => {
   for (const dir of tmpDirs) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
   tmpDirs = [];
+  if (previousBulkConfirmationSecret === undefined) {
+    delete process.env[BULK_CONFIRMATION_SECRET_ENV];
+  } else {
+    process.env[BULK_CONFIRMATION_SECRET_ENV] = previousBulkConfirmationSecret;
+  }
 });
 
 describe('Phase 7 Plan 07-07 — prompt frontmatter loader', () => {

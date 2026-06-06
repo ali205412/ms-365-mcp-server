@@ -364,6 +364,24 @@ describe('generic bulk-action tool', () => {
     expect(handlers.has(READ_BULK_RESULT_TOOL)).toBe(true);
   });
 
+  it('treats an explicit empty enabled_tools set as no bulk aliases enabled', () => {
+    delete process.env[BULK_CONFIRMATION_SECRET_ENV];
+    setBulkResultRuntimeTransportMode('http');
+    const { server, handlers } = makeServer();
+
+    const registered = registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias: vi.fn(),
+      enabledToolsSet: new Set(),
+    });
+
+    expect(registered).toBe(0);
+    expect(handlers.has(BULK_ACTION_TOOL)).toBe(false);
+    expect(handlers.has(READ_BULK_RESULT_TOOL)).toBe(false);
+  });
+
   it('advertises and preserves every required confirmation field that the parser enforces', () => {
     const { server, schemas } = makeServer();
     registerBulkActionTools(mcpServerStub(server), {

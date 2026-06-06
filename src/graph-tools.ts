@@ -2191,7 +2191,9 @@ export function registerDiscoveryTools(
   readOnly: boolean = false,
   orgMode: boolean = false,
   authManager?: AuthManager,
-  _multiAccount: boolean = false
+  _multiAccount: boolean = false,
+  enabledToolsPattern?: string,
+  enabledToolsSet?: ReadonlySet<string>
 ): void {
   const toolsRegistry = buildToolsRegistry(readOnly, orgMode);
   // Plan 05-06: project down to the shape the per-tenant BM25 cache
@@ -2490,6 +2492,15 @@ export function registerDiscoveryTools(
     }
   );
 
+  let enabledToolsRegex: RegExp | undefined;
+  if (enabledToolsPattern) {
+    try {
+      enabledToolsRegex = new RegExp(enabledToolsPattern, 'i');
+    } catch {
+      logger.error(`Invalid tool filter regex pattern: ${enabledToolsPattern}. Ignoring filter.`);
+    }
+  }
+
   registerBulkActionTools(server, {
     graphClient,
     authManager,
@@ -2497,6 +2508,8 @@ export function registerDiscoveryTools(
     orgMode,
     executeToolAlias,
     createToolAliasExecutor: () => createExecuteToolAliasForCurrentContext(readOnly, orgMode),
+    enabledToolsPattern: enabledToolsRegex,
+    enabledToolsSet,
   });
 
   // Layer 3 (list-accounts) is registered by registerAuthTools — no duplicate here.

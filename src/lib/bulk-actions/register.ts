@@ -745,7 +745,7 @@ function patternAllows(pattern: RegExp | undefined, alias: string): boolean {
 }
 
 function setAllows(enabledToolsSet: ReadonlySet<string> | undefined, alias: string): boolean {
-  return enabledToolsSet === undefined || enabledToolsSet.size === 0 || enabledToolsSet.has(alias);
+  return enabledToolsSet === undefined || enabledToolsSet.has(alias);
 }
 
 async function readBulkResultAvailable(options: RegisterBulkActionToolsOptions): Promise<boolean> {

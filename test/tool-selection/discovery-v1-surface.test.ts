@@ -5,7 +5,7 @@
  * the existing selector DSL, while generated Graph and product aliases remain
  * outside that visible preset.
  */
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -89,8 +89,11 @@ const DISCOVERY_META_ALIASES = [
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const ESSENTIALS_PRESET_PATH = path.join(REPO_ROOT, 'src', 'presets', 'essentials-v1.json');
+const BULK_CONFIRMATION_SECRET_ENV = 'MS365_MCP_BULK_CONFIRMATION_SECRET';
+const TEST_BULK_CONFIRMATION_SECRET = 'discovery-v1-surface-test-bulk-secret-000000';
 
 let tmpDirs: string[] = [];
+let previousBulkConfirmationSecret: string | undefined;
 
 interface CallToolResult {
   content: Array<{ type: 'text'; text: string }>;
@@ -151,12 +154,22 @@ function stageDiscovery(tmp: string, ops: readonly string[] = DISCOVERY_META_ALI
   );
 }
 
+beforeEach(() => {
+  previousBulkConfirmationSecret = process.env[BULK_CONFIRMATION_SECRET_ENV];
+  process.env[BULK_CONFIRMATION_SECRET_ENV] = TEST_BULK_CONFIRMATION_SECRET;
+});
+
 afterEach(() => {
   for (const tmp of tmpDirs) {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
   tmpDirs = [];
   discoveryCache._clear();
+  if (previousBulkConfirmationSecret === undefined) {
+    delete process.env[BULK_CONFIRMATION_SECRET_ENV];
+  } else {
+    process.env[BULK_CONFIRMATION_SECRET_ENV] = previousBulkConfirmationSecret;
+  }
 });
 
 async function callDiscoveryTool(
@@ -518,6 +531,41 @@ describe('Phase 7 Plan 07-05 — aggregate memory registration', () => {
     expect(names).toEqual([...DISCOVERY_META_ALIASES].sort());
     expect(names).toHaveLength(30);
   });
+
+  it.each([
+    [
+      'bulk aliases are disabled',
+      Object.freeze(
+        new Set(
+          [...DISCOVERY_META_TOOL_NAMES].filter(
+            (alias) => alias !== 'bulk-action' && alias !== 'read-bulk-result'
+          )
+        )
+      ),
+    ],
+    ['enabled_tools is explicitly empty', Object.freeze(new Set<string>())],
+  ])(
+    'discovery tenant does not require a bulk confirmation secret when %s',
+    async (_label, enabledSet) => {
+      delete process.env[BULK_CONFIRMATION_SECRET_ENV];
+      const graphServer = createServerFactory();
+
+      const mcp = graphServer.createMcpServer({
+        preset_version: DISCOVERY_PRESET_VERSION,
+        enabled_tools_set: enabledSet,
+      } as never);
+      const ctx = {
+        tenantId: '11111111-1111-4111-8111-111111111111',
+        enabledToolsSet: enabledSet,
+        presetVersion: DISCOVERY_PRESET_VERSION,
+      };
+
+      const list = await requestContext.run(ctx, () => invokeToolsList(mcp));
+      const names = list.tools.map((tool) => tool.name);
+      expect(names).not.toContain('bulk-action');
+      expect(names).not.toContain('read-bulk-result');
+    }
+  );
 
   it('discovery tenant exposes discovery, memory, skill, and dashboard tools while search uses the catalog', async () => {
     const graphServer = createServerFactory();
