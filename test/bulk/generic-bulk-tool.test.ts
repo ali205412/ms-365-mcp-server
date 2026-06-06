@@ -1,4 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type GraphClient from '../../src/graph-client.js';
 import { requestContext } from '../../src/request-context.js';
@@ -12,6 +13,8 @@ import {
   resetBulkResultStoreForTesting,
   storeBulkResult,
 } from '../../src/lib/bulk-actions/result-store.js';
+import { MemoryRedisFacade } from '../../src/lib/redis-facade.js';
+import { __setRedisForTesting } from '../../src/lib/redis.js';
 
 vi.mock('../../src/generated/client.js', async () => {
   const { z } = await import('zod');
@@ -77,16 +80,19 @@ type Handler = (
 
 function makeServer() {
   const handlers = new Map<string, Handler>();
+  const schemas = new Map<string, unknown>();
   return {
     handlers,
+    schemas,
     server: {
       tool(
         name: string,
         _description: string,
-        _schema: unknown,
+        schema: unknown,
         _annotations: unknown,
         handler: Handler
       ) {
+        schemas.set(name, schema);
         handlers.set(name, handler);
       },
     },
@@ -132,7 +138,11 @@ function graphClientStub(): GraphClient {
 }
 
 const PROCESS_LOCAL_BULK_RESULTS_ENV = 'MS365_MCP_ENABLE_PROCESS_LOCAL_BULK_RESULTS';
+const REDIS_URL_ENV = 'MS365_MCP_REDIS_URL';
+const TRANSPORT_ENV = 'MS365_MCP_TRANSPORT';
 const originalProcessLocalBulkResults = process.env[PROCESS_LOCAL_BULK_RESULTS_ENV];
+const originalRedisUrl = process.env[REDIS_URL_ENV];
+const originalTransport = process.env[TRANSPORT_ENV];
 
 function mcpServerStub(server: unknown): McpServer {
   return server as McpServer;
@@ -141,6 +151,7 @@ function mcpServerStub(server: unknown): McpServer {
 describe('generic bulk-action tool', () => {
   beforeEach(() => {
     process.env[PROCESS_LOCAL_BULK_RESULTS_ENV] = '1';
+    process.env[TRANSPORT_ENV] = 'stdio';
   });
 
   afterEach(() => {
@@ -149,6 +160,17 @@ describe('generic bulk-action tool', () => {
     } else {
       process.env[PROCESS_LOCAL_BULK_RESULTS_ENV] = originalProcessLocalBulkResults;
     }
+    if (originalRedisUrl === undefined) {
+      delete process.env[REDIS_URL_ENV];
+    } else {
+      process.env[REDIS_URL_ENV] = originalRedisUrl;
+    }
+    if (originalTransport === undefined) {
+      delete process.env[TRANSPORT_ENV];
+    } else {
+      process.env[TRANSPORT_ENV] = originalTransport;
+    }
+    __setRedisForTesting(null);
   });
 
   it('registers synthetic tools and executes read aliases through the shared alias callback', async () => {
@@ -210,6 +232,26 @@ describe('generic bulk-action tool', () => {
     expect(handlers.has(READ_BULK_RESULT_TOOL)).toBe(false);
   });
 
+  it('advertises the same required confirmation expiry that the parser enforces', () => {
+    const { server, schemas } = makeServer();
+    registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias: vi.fn(),
+    });
+    const schema = z.object(schemas.get(BULK_ACTION_TOOL) as z.ZodRawShape);
+
+    const result = schema.safeParse({
+      mode: 'execute',
+      outputMode: 'summary',
+      confirmation: { planDigest: '0'.repeat(64), confirmed: true },
+      items: [{ id: 'read-1', toolName: 'get-chat', parameters: { chatId: 'chat-id' } }],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it('does not advertise cross-request full output when durable bulk result storage is unavailable', async () => {
     delete process.env[PROCESS_LOCAL_BULK_RESULTS_ENV];
     resetBulkResultStoreForTesting();
@@ -235,6 +277,61 @@ describe('generic bulk-action tool', () => {
     expect(result.isError).toBe(true);
     expect(JSON.stringify(dataFrom(result))).toContain('result_store_unavailable');
     expect(executeToolAlias).not.toHaveBeenCalled();
+  });
+
+  it('does not use process-local result IDs outside stdio transport', async () => {
+    process.env[PROCESS_LOCAL_BULK_RESULTS_ENV] = '1';
+    process.env[TRANSPORT_ENV] = 'http';
+    resetBulkResultStoreForTesting();
+    const result = await withTenant([BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL], async () =>
+      storeBulkResult({
+        digest: 'digest',
+        items: [{ id: 'item-1', toolName: 'get-chat', status: 'succeeded' }],
+        summary: {},
+      })
+    );
+
+    expect(result).toMatchObject({ error: 'result_store_unavailable' });
+  });
+
+  it('returns success with compact warnings when ids output exceeds inline budget after execution', async () => {
+    delete process.env[PROCESS_LOCAL_BULK_RESULTS_ENV];
+    resetBulkResultStoreForTesting();
+    const { server, handlers } = makeServer();
+    const executeToolAlias = vi.fn(async () => ({
+      content: [{ type: 'text', text: JSON.stringify({ id: 'x'.repeat(1000) }) }],
+    }));
+    registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias,
+    });
+    const items = Array.from({ length: BULK_LIMITS.maxItems }, (_, index) => ({
+      id: `read-${index}`,
+      toolName: 'get-chat',
+      parameters: { chatId: `chat-${index}` },
+    }));
+
+    const preview = await withTenant(
+      [BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'],
+      async () => handlers.get(BULK_ACTION_TOOL)!({ mode: 'preview', outputMode: 'ids', items })
+    );
+    const result = await withTenant(
+      [BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'],
+      async () =>
+        handlers.get(BULK_ACTION_TOOL)!({
+          mode: 'execute',
+          outputMode: 'ids',
+          confirmation: asRecord(dataFrom(preview)).confirmation,
+          items,
+        })
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(executeToolAlias).toHaveBeenCalledTimes(BULK_LIMITS.maxItems);
+    expect(result._meta?.resultId).toBeUndefined();
+    expect(JSON.stringify(result)).toContain('result_details_compacted_after_execution');
   });
 
   it('rejects oversized stored bulk results instead of truncating them', async () => {
@@ -356,6 +453,50 @@ describe('generic bulk-action tool', () => {
     expect(result.isError).toBe(true);
     expect(JSON.stringify(dataFrom(result))).toContain('invalid_bulk_item');
     expect(executeToolAlias).not.toHaveBeenCalled();
+  });
+
+  it('stores and reads sanitized full results from durable Redis-backed storage', async () => {
+    delete process.env[PROCESS_LOCAL_BULK_RESULTS_ENV];
+    process.env[REDIS_URL_ENV] = 'redis://unit-test';
+    __setRedisForTesting(new MemoryRedisFacade());
+    resetBulkResultStoreForTesting();
+    const { server, handlers } = makeServer();
+    registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias: vi.fn(async () => ({
+        content: [{ type: 'text', text: JSON.stringify({ id: 'safe-id' }) }],
+      })),
+    });
+
+    const preview = await withTenant(
+      [BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'],
+      async () =>
+        handlers.get(BULK_ACTION_TOOL)!({
+          mode: 'preview',
+          outputMode: 'full',
+          items: [{ id: 'read-1', toolName: 'get-chat', parameters: { chatId: 'chat-id' } }],
+        })
+    );
+    const executed = await withTenant(
+      [BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'],
+      async () =>
+        handlers.get(BULK_ACTION_TOOL)!({
+          mode: 'execute',
+          outputMode: 'full',
+          confirmation: asRecord(dataFrom(preview)).confirmation,
+          items: [{ id: 'read-1', toolName: 'get-chat', parameters: { chatId: 'chat-id' } }],
+        })
+    );
+    const payload = asRecord(dataFrom(executed));
+    expect(payload.resultId).toEqual(expect.stringMatching(/^bulk_/));
+    expect(payload.resultStore).toBe('redis_durable');
+
+    const read = await withTenant([BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'], async () =>
+      handlers.get(READ_BULK_RESULT_TOOL)!({ resultId: payload.resultId, limit: 10 })
+    );
+    expect(JSON.stringify(dataFrom(read))).toContain('safe-id');
   });
 
   it('stores and reads sanitized full results without leaking unsafe fields', async () => {

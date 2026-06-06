@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { getRequestOwnerSubject, getRequestTenant, requestContext } from '../../request-context.js';
+import { getRedis } from '../redis.js';
 import { BULK_LIMITS, type BulkErrorCode } from './schema.js';
 import { byteLength, sha256Hex } from './sanitize.js';
 
@@ -23,6 +24,14 @@ interface StoredResult {
   summary: Record<string, unknown>;
 }
 
+interface StoredCursor {
+  resultId: string;
+  tenantId: string;
+  ownerKey: string;
+  offset: number;
+  expiresAt: number;
+}
+
 export type ReadBulkResultOutcome =
   | {
       ok: true;
@@ -38,10 +47,9 @@ export type ReadBulkResultOutcome =
 
 const store = new Map<string, StoredResult>();
 const PROCESS_LOCAL_BULK_RESULTS_ENV = 'MS365_MCP_ENABLE_PROCESS_LOCAL_BULK_RESULTS';
-const cursors = new Map<
-  string,
-  { resultId: string; tenantId: string; ownerKey: string; offset: number; expiresAt: number }
->();
+const RESULT_KEY_PREFIX = 'mcp:bulk-result:';
+const CURSOR_KEY_PREFIX = 'mcp:bulk-result-cursor:';
+const cursors = new Map<string, StoredCursor>();
 
 function tenantId(): string | undefined {
   return getRequestTenant().id ?? requestContext.getStore()?.tenantId ?? undefined;
@@ -49,7 +57,23 @@ function tenantId(): string | undefined {
 
 export function processLocalBulkResultsEnabled(): boolean {
   const value = process.env[PROCESS_LOCAL_BULK_RESULTS_ENV];
-  return value === 'true' || value === '1';
+  if (value !== 'true' && value !== '1') return false;
+  return process.env.MS365_MCP_TRANSPORT === 'stdio';
+}
+
+function redisBulkResultsEnabled(): boolean {
+  return Boolean(process.env.MS365_MCP_REDIS_URL);
+}
+
+export async function bulkResultStoreAvailable(): Promise<boolean> {
+  if (processLocalBulkResultsEnabled()) return true;
+  if (!redisBulkResultsEnabled()) return false;
+  try {
+    const pong = await getRedis().ping();
+    return pong === 'PONG';
+  } catch {
+    return false;
+  }
 }
 
 export function bulkOwnerKey(): string {
@@ -69,11 +93,88 @@ function sweep(now = Date.now()): void {
   }
 }
 
-export function storeBulkResult(input: {
+function validateStoreInput(input: {
+  items: BulkStoredItem[];
+  summary: Record<string, unknown>;
+}):
+  | { ok: true; tenantId: string; ownerKey: string }
+  | { ok: false; error: BulkErrorCode; message: string } {
+  const currentTenant = tenantId();
+  if (!currentTenant) {
+    return {
+      ok: false,
+      error: 'tenant_context_unavailable',
+      message: 'Tenant context unavailable.',
+    };
+  }
+  if (input.items.length > BULK_LIMITS.maxStoredItems) {
+    return {
+      ok: false,
+      error: 'output_budget_exceeded',
+      message: `Bulk result contains ${input.items.length} items, exceeding the storage limit of ${BULK_LIMITS.maxStoredItems}.`,
+    };
+  }
+  const payloadBytes = byteLength({ items: input.items, summary: input.summary });
+  if (payloadBytes > BULK_LIMITS.maxStoredResultBytes) {
+    return {
+      ok: false,
+      error: 'output_budget_exceeded',
+      message: 'Sanitized bulk result exceeds storage budget.',
+    };
+  }
+  return { ok: true, tenantId: currentTenant, ownerKey: bulkOwnerKey() };
+}
+
+export async function storeBulkResult(input: {
   digest: string;
   items: BulkStoredItem[];
   summary: Record<string, unknown>;
-}): { resultId: string; expiresAt: string } | { error: BulkErrorCode; message: string } {
+}): Promise<
+  | {
+      resultId: string;
+      expiresAt: string;
+      resultStore: 'redis_durable' | 'process_local_best_effort';
+    }
+  | { error: BulkErrorCode; message: string }
+> {
+  const validated = validateStoreInput(input);
+  if (!validated.ok) return { error: validated.error, message: validated.message };
+
+  const now = Date.now();
+  const resultId = `bulk_${randomBytes(18).toString('base64url')}`;
+  const expiresAt = now + BULK_LIMITS.resultTtlMs;
+  const result: StoredResult = {
+    resultId,
+    tenantId: validated.tenantId,
+    ownerKey: validated.ownerKey,
+    createdAt: now,
+    expiresAt,
+    digest: input.digest,
+    items: input.items,
+    summary: input.summary,
+  };
+
+  if (redisBulkResultsEnabled()) {
+    try {
+      await getRedis().set(
+        `${RESULT_KEY_PREFIX}${resultId}`,
+        JSON.stringify(result),
+        'PX',
+        BULK_LIMITS.resultTtlMs
+      );
+      return {
+        resultId,
+        expiresAt: new Date(expiresAt).toISOString(),
+        resultStore: 'redis_durable',
+      };
+    } catch {
+      return {
+        error: 'result_store_unavailable',
+        message: 'Durable bulk result storage is unavailable.',
+      };
+    }
+  }
+
   if (!processLocalBulkResultsEnabled()) {
     return {
       error: 'result_store_unavailable',
@@ -81,59 +182,82 @@ export function storeBulkResult(input: {
         'Bulk result pagination requires durable storage; process-local result IDs are disabled by default.',
     };
   }
-  sweep();
-  const currentTenant = tenantId();
-  if (!currentTenant)
-    return { error: 'tenant_context_unavailable', message: 'Tenant context unavailable.' };
-  const ownerKey = bulkOwnerKey();
-  if (input.items.length > BULK_LIMITS.maxStoredItems) {
-    return {
-      error: 'output_budget_exceeded',
-      message: `Bulk result contains ${input.items.length} items, exceeding the storage limit of ${BULK_LIMITS.maxStoredItems}.`,
-    };
-  }
-  const items = input.items;
-  const payloadBytes = byteLength({ items, summary: input.summary });
-  if (payloadBytes > BULK_LIMITS.maxStoredResultBytes) {
-    return {
-      error: 'output_budget_exceeded',
-      message: 'Sanitized bulk result exceeds storage budget.',
-    };
-  }
-  const now = Date.now();
-  const resultId = `bulk_${randomBytes(18).toString('base64url')}`;
-  const expiresAt = now + BULK_LIMITS.resultTtlMs;
-  store.set(resultId, {
+
+  sweep(now);
+  store.set(resultId, result);
+  return {
     resultId,
-    tenantId: currentTenant,
-    ownerKey,
-    createdAt: now,
-    expiresAt,
-    digest: input.digest,
-    items,
-    summary: input.summary,
-  });
-  return { resultId, expiresAt: new Date(expiresAt).toISOString() };
+    expiresAt: new Date(expiresAt).toISOString(),
+    resultStore: 'process_local_best_effort',
+  };
 }
 
-function makeCursor(result: StoredResult, offset: number): string {
+async function makeCursor(result: StoredResult, offset: number): Promise<string> {
   const cursor = `cur_${randomBytes(18).toString('base64url')}`;
-  cursors.set(cursor, {
+  const state: StoredCursor = {
     resultId: result.resultId,
     tenantId: result.tenantId,
     ownerKey: result.ownerKey,
     offset,
     expiresAt: result.expiresAt,
-  });
+  };
+  if (redisBulkResultsEnabled()) {
+    await getRedis().set(
+      `${CURSOR_KEY_PREFIX}${cursor}`,
+      JSON.stringify(state),
+      'PX',
+      Math.max(1, result.expiresAt - Date.now())
+    );
+  } else {
+    cursors.set(cursor, state);
+  }
   return cursor;
 }
 
-export function readBulkResult(input: {
+function parseStoredResult(value: string | null): StoredResult | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as StoredResult;
+    if (typeof parsed.resultId !== 'string' || !Array.isArray(parsed.items)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function parseStoredCursor(value: string | null): StoredCursor | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as StoredCursor;
+    if (typeof parsed.resultId !== 'string' || typeof parsed.offset !== 'number') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function loadResult(resultId: string): Promise<StoredResult | null> {
+  if (redisBulkResultsEnabled()) {
+    return parseStoredResult(await getRedis().get(`${RESULT_KEY_PREFIX}${resultId}`));
+  }
+  return store.get(resultId) ?? null;
+}
+
+async function consumeCursor(cursor: string): Promise<StoredCursor | null> {
+  if (redisBulkResultsEnabled()) {
+    return parseStoredCursor(await getRedis().getdel(`${CURSOR_KEY_PREFIX}${cursor}`));
+  }
+  const cursorState = cursors.get(cursor) ?? null;
+  cursors.delete(cursor);
+  return cursorState;
+}
+
+export async function readBulkResult(input: {
   resultId: string;
   cursor?: string;
   limit?: number;
-}): ReadBulkResultOutcome {
-  if (!processLocalBulkResultsEnabled()) {
+}): Promise<ReadBulkResultOutcome> {
+  if (!redisBulkResultsEnabled() && !processLocalBulkResultsEnabled()) {
     return {
       ok: false,
       code: 'result_store_unavailable',
@@ -142,28 +266,30 @@ export function readBulkResult(input: {
   }
   sweep();
   const currentTenant = tenantId();
-  if (!currentTenant)
+  if (!currentTenant) {
     return {
       ok: false,
       code: 'tenant_context_unavailable',
       message: 'Tenant context unavailable.',
     };
+  }
   const ownerKey = bulkOwnerKey();
-  const result = store.get(input.resultId);
+  const result = await loadResult(input.resultId);
   if (!result) return { ok: false, code: 'result_not_found', message: 'Bulk result not found.' };
   if (result.expiresAt <= Date.now()) {
     store.delete(input.resultId);
     return { ok: false, code: 'result_expired', message: 'Bulk result expired.' };
   }
-  if (result.tenantId !== currentTenant)
+  if (result.tenantId !== currentTenant) {
     return { ok: false, code: 'tenant_mismatch', message: 'Bulk result tenant mismatch.' };
-  if (result.ownerKey !== ownerKey)
+  }
+  if (result.ownerKey !== ownerKey) {
     return { ok: false, code: 'owner_mismatch', message: 'Bulk result owner mismatch.' };
+  }
 
   let offset = 0;
   if (input.cursor) {
-    const cursorState = cursors.get(input.cursor);
-    cursors.delete(input.cursor);
+    const cursorState = await consumeCursor(input.cursor);
     if (
       !cursorState ||
       cursorState.resultId !== input.resultId ||
@@ -178,7 +304,8 @@ export function readBulkResult(input: {
   const limit = Math.min(Math.max(input.limit ?? 20, 1), BULK_LIMITS.maxReadLimit);
   const items = result.items.slice(offset, offset + limit);
   const nextOffset = offset + items.length;
-  const nextCursor = nextOffset < result.items.length ? makeCursor(result, nextOffset) : undefined;
+  const nextCursor =
+    nextOffset < result.items.length ? await makeCursor(result, nextOffset) : undefined;
   return {
     ok: true,
     value: {

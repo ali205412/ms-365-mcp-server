@@ -22,7 +22,7 @@ import {
 import { buildBulkPlan, bulkPlanPublicSummary, currentContextSnapshot } from './plan.js';
 import {
   bulkOwnerKey,
-  processLocalBulkResultsEnabled,
+  bulkResultStoreAvailable,
   readBulkResult,
   storeBulkResult,
   type BulkStoredItem,
@@ -177,20 +177,20 @@ async function emitBulkEvent(
   });
 }
 
-function compactStoredOutput(input: {
+function compactBulkOutput(input: {
   planSummary: Record<string, unknown>;
   status: string;
   results: BulkStoredItem[];
-  resultId: string;
-  resultExpiresAt: string;
+  resultId?: string;
+  resultExpiresAt?: string;
+  resultStore?: string;
 }): Record<string, unknown> {
   const failures = input.results.filter((item) => item.status !== 'succeeded');
   return {
     ...input.planSummary,
     status: input.status,
-    resultId: input.resultId,
-    resultExpiresAt: input.resultExpiresAt,
-    resultStore: 'process_local_best_effort',
+    ...(input.resultId ? { resultId: input.resultId, resultExpiresAt: input.resultExpiresAt } : {}),
+    ...(input.resultStore ? { resultStore: input.resultStore } : {}),
     successCount: input.results.length - failures.length,
     failureCount: failures.length,
     failures: failures.map((item) => ({
@@ -200,7 +200,9 @@ function compactStoredOutput(input: {
       code: item.code,
       retryAfterSeconds: item.retryAfterSeconds,
     })),
-    nextAction: 'Call read-bulk-result with resultId to page through sanitized details.',
+    nextAction: input.resultId
+      ? 'Call read-bulk-result with resultId to page through sanitized details.'
+      : 'Review the compact summary; detailed result paging is unavailable for this execution.',
   };
 }
 
@@ -310,7 +312,7 @@ async function handleBulkAction(
     });
   }
 
-  if (input.outputMode === 'full' && !readBulkResultAvailable(options)) {
+  if (input.outputMode === 'full' && !(await readBulkResultAvailable(options))) {
     auditBulk('bulk-action.execute.blocked', 'failure', {
       digestPrefix: plan.planDigest.slice(0, 12),
       itemCount: plan.items.length,
@@ -322,7 +324,7 @@ async function handleBulkAction(
       summary: 'Bulk action full output is unavailable for this tenant.',
       code: 'result_store_unavailable',
       message:
-        'Enable read-bulk-result with bulk-action or choose outputMode summary, errors, or ids.',
+        'Enable durable bulk result storage and read-bulk-result with bulk-action, or choose outputMode summary, errors, or ids.',
       data: planSummary,
       warnings: ['no_items_executed'],
     });
@@ -490,53 +492,43 @@ async function handleBulkAction(
   });
   let resultId: string | undefined;
   let resultExpiresAt: string | undefined;
+  let resultStore: string | undefined;
+  let outputBudgetWarning = false;
   if (input.outputMode === 'full' || byteLength(preliminary) > BULK_LIMITS.maxInlineResultBytes) {
-    if (!readBulkResultAvailable(options)) {
-      return createMcpErrorEnvelope({
-        toolName: BULK_ACTION_TOOL,
-        summary:
-          'Bulk action result exceeds inline output budget and cannot be stored for this tenant.',
-        code: 'result_store_unavailable',
-        message: 'Enable read-bulk-result with bulk-action or choose a more compact outputMode.',
-        data: renderBulkOutput({
-          planSummary,
-          executionItems: results,
-          outputMode: 'summary',
-          status,
-        }),
+    if (!(await readBulkResultAvailable(options))) {
+      outputBudgetWarning = true;
+    } else {
+      const stored = await storeBulkResult({
+        digest: plan.planDigest,
+        items: results,
+        summary: planSummary,
       });
+      if ('error' in stored) {
+        outputBudgetWarning = true;
+      } else {
+        resultId = stored.resultId;
+        resultExpiresAt = stored.expiresAt;
+        resultStore = stored.resultStore;
+        await emitBulkEvent('bulk-action.result_stored', {
+          digestPrefix: plan.planDigest.slice(0, 12),
+          itemCount: results.length,
+          resultIdPrefix: resultIdPrefix(resultId),
+        });
+      }
     }
-    const stored = storeBulkResult({
-      digest: plan.planDigest,
-      items: results,
-      summary: planSummary,
-    });
-    if ('error' in stored) {
-      return createMcpErrorEnvelope({
-        toolName: BULK_ACTION_TOOL,
-        summary: 'Bulk action result could not be stored within output budgets.',
-        code: stored.error,
-        message: stored.message,
-      });
-    }
-    resultId = stored.resultId;
-    resultExpiresAt = stored.expiresAt;
-    await emitBulkEvent('bulk-action.result_stored', {
-      digestPrefix: plan.planDigest.slice(0, 12),
-      itemCount: results.length,
-      resultIdPrefix: resultIdPrefix(resultId),
-    });
   }
 
   const output =
     resultId && resultExpiresAt
-      ? compactStoredOutput({ planSummary, status, results, resultId, resultExpiresAt })
-      : renderBulkOutput({
-          planSummary,
-          executionItems: results,
-          outputMode: input.outputMode,
-          status,
-        });
+      ? compactBulkOutput({ planSummary, status, results, resultId, resultExpiresAt, resultStore })
+      : outputBudgetWarning
+        ? compactBulkOutput({ planSummary, status, results })
+        : renderBulkOutput({
+            planSummary,
+            executionItems: results,
+            outputMode: input.outputMode,
+            status,
+          });
   auditBulk('bulk-action.execute.complete', status === 'completed' ? 'success' : 'failure', {
     digestPrefix: plan.planDigest.slice(0, 12),
     itemCount: results.length,
@@ -559,7 +551,10 @@ async function handleBulkAction(
     nextActions: resultId
       ? ['Call read-bulk-result with resultId to page through sanitized details.']
       : ['Review statuses and retry failed items only if safe.'],
-    warnings: status === 'completed' ? [] : ['some_items_failed'],
+    warnings: [
+      ...(status === 'completed' ? [] : ['some_items_failed']),
+      ...(outputBudgetWarning ? ['result_details_compacted_after_execution'] : []),
+    ],
     meta: { digestPrefix: plan.planDigest.slice(0, 12), resultId, ownerRef: bulkOwnerKey() },
   });
 }
@@ -576,7 +571,7 @@ async function handleReadBulkResult(rawInput: unknown): Promise<CallToolResult> 
   }
   const dispatchRejection = syntheticAllowed(READ_BULK_RESULT_TOOL);
   if (dispatchRejection) return dispatchRejection;
-  const outcome = readBulkResult(parsed.data);
+  const outcome = await readBulkResult(parsed.data);
   if (!outcome.ok) {
     auditBulk('bulk-action.result_read_denied', 'failure', { code: outcome.code });
     await emitBulkEvent('bulk-action.result_read_denied', { code: outcome.code });
@@ -616,9 +611,9 @@ function setAllows(enabledToolsSet: ReadonlySet<string> | undefined, alias: stri
   return enabledToolsSet === undefined || enabledToolsSet.size === 0 || enabledToolsSet.has(alias);
 }
 
-function readBulkResultAvailable(options: RegisterBulkActionToolsOptions): boolean {
+async function readBulkResultAvailable(options: RegisterBulkActionToolsOptions): Promise<boolean> {
   return (
-    processLocalBulkResultsEnabled() &&
+    (await bulkResultStoreAvailable()) &&
     patternAllows(options.enabledToolsPattern, READ_BULK_RESULT_TOOL) &&
     setAllows(options.enabledToolsSet, READ_BULK_RESULT_TOOL) &&
     syntheticAllowed(READ_BULK_RESULT_TOOL) === null
@@ -656,7 +651,7 @@ export function registerBulkActionTools(
           .object({
             planDigest: z.string(),
             confirmed: z.literal(true),
-            expiresAt: z.string().datetime().optional(),
+            expiresAt: z.string().datetime(),
           })
           .optional(),
       },
