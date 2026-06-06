@@ -2416,11 +2416,20 @@ export function registerDiscoveryTools(
         return createTranscriptStructuredResult(tool_name, result);
       }
       const data = graphResultData(result);
+      const context = getRequestTokens();
       const resources = graphResourceLinksForToolResult({
         toolName: tool_name,
         tenantId: getRequestTenant().id,
         data,
         parameters,
+        tenant: context?.tenantRow
+          ? {
+              enabled_tools: context.tenantRow.enabled_tools,
+              enabled_tools_set: context.enabledToolsSet,
+              preset_version: context.presetVersion,
+              allowed_scopes: context.tenantRow.allowed_scopes,
+            }
+          : undefined,
       });
       const envelope = createMcpResultEnvelope({
         toolName: 'execute-tool',

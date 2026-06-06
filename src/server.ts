@@ -71,6 +71,7 @@ import {
 import { createAuthSelectorMiddleware } from './lib/auth-selector.js';
 import {
   createToolsListFilterMiddleware,
+  wrapNativeDiscoveryToolHandlers,
   wrapToolsListHandler,
 } from './lib/tool-selection/tools-list-filter.js';
 import { resolveTenantSurface } from './lib/tenant-surface/surface.js';
@@ -369,6 +370,9 @@ class MicrosoftGraphServer {
     // `_registeredTools` map. Safe to call in stdio mode — `wrapToolsListHandler`
     // reads `getRequestTenant()` from AsyncLocalStorage which falls back to
     // the stdio bootstrap triple (Pitfall 8). Idempotent on repeat calls.
+    // Native discovery tools also need dispatch guarding because tools/list
+    // filtering is not a tools/call authorization boundary.
+    wrapNativeDiscoveryToolHandlers(server);
     wrapToolsListHandler(server);
 
     return server;

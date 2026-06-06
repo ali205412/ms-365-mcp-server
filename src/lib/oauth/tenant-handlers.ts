@@ -529,8 +529,28 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
         });
 
         try {
+          const lockedSession = await lookupGatewayRefreshSession({
+            redis,
+            sessionStore,
+            tenantId: tenant.id,
+            refreshToken: submittedRefreshToken,
+          });
+          if (!lockedSession || lockedSession.accessTokenHash !== session.accessTokenHash) {
+            emitTokenAudit(
+              tenant.id,
+              'failure',
+              refreshAuditMeta('invalid_grant', {
+                reason: 'refresh_handle_rotated',
+                clientIdHash,
+              }),
+              req
+            );
+            res.status(400).json({ error: 'invalid_grant' });
+            return;
+          }
+
           const msal = await tenantPool.acquire(tenant);
-          const fresh = await refreshDelegatedSession(msal, session.record);
+          const fresh = await refreshDelegatedSession(msal, lockedSession.record);
           if (!fresh?.accessToken) {
             emitTokenAudit(
               tenant.id,
@@ -545,7 +565,7 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
             return;
           }
 
-          const oldGraphAccessToken = session.record.graphAccessToken;
+          const oldGraphAccessToken = lockedSession.record.graphAccessToken;
           if (!oldGraphAccessToken) {
             emitTokenAudit(
               tenant.id,
@@ -560,11 +580,11 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
             return;
           }
 
-          const nextMsalCache = serializeMsalCache(msal) ?? session.record.msalCache;
+          const nextMsalCache = serializeMsalCache(msal) ?? lockedSession.record.msalCache;
           await sessionStore.put(tenant.id, fresh.accessToken, {
-            ...session.record,
-            refreshToken: fresh.refreshToken ?? session.record.refreshToken,
-            accountHomeId: fresh.account?.homeAccountId ?? session.record.accountHomeId,
+            ...lockedSession.record,
+            refreshToken: fresh.refreshToken ?? lockedSession.record.refreshToken,
+            accountHomeId: fresh.account?.homeAccountId ?? lockedSession.record.accountHomeId,
             msalCache: nextMsalCache,
             graphAccessToken: fresh.accessToken,
             graphAccessTokenExpiresOn: fresh.expiresOn?.toISOString(),
@@ -590,8 +610,8 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
           });
           try {
             const freshAccessTokenHash = hashAccessToken(fresh.accessToken);
-            if (session.accessTokenHash !== freshAccessTokenHash) {
-              await sessionStore.deleteByAccessTokenHash(tenant.id, session.accessTokenHash);
+            if (lockedSession.accessTokenHash !== freshAccessTokenHash) {
+              await sessionStore.deleteByAccessTokenHash(tenant.id, lockedSession.accessTokenHash);
             }
             if (oldGraphAccessToken !== fresh.accessToken) {
               await forgetDelegatedAccessToken({
@@ -609,7 +629,7 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
           emitTokenAudit(
             tenant.id,
             'success',
-            refreshAuditMeta(undefined, { clientIdHash, scopes: session.record.scopes }),
+            refreshAuditMeta(undefined, { clientIdHash, scopes: lockedSession.record.scopes }),
             req
           );
           res.json({

@@ -286,6 +286,67 @@ describe('plan 05-05 Task 1 — tools/list per-tenant filter (SDK handler wrap)'
     expect(names).not.toContain('bulk-action');
   });
 
+  it('guards direct calls to unlisted native discovery tools', async () => {
+    const { wrapNativeDiscoveryToolHandlers } =
+      await import('../../src/lib/tool-selection/tools-list-filter.js');
+    const { requestContext } = await import('../../src/request-context.js');
+
+    const server = new McpServer({ name: 'test', version: '0.0.0' });
+    server.tool(
+      'search-tools',
+      'search-tools',
+      {},
+      { title: 'search-tools', readOnlyHint: true },
+      async () => ({
+        content: [{ type: 'text', text: 'search-ok' }],
+      })
+    );
+    server.tool(
+      'save-skill',
+      'save-skill',
+      {},
+      { title: 'save-skill', readOnlyHint: false },
+      async () => ({
+        content: [{ type: 'text', text: 'save-ok' }],
+      })
+    );
+    wrapNativeDiscoveryToolHandlers(server);
+    const tools = (
+      server as unknown as {
+        _registeredTools: Record<
+          string,
+          { handler: (args: unknown, extra: unknown) => Promise<unknown> }
+        >;
+      }
+    )._registeredTools;
+
+    const searchResult = await requestContext.run(
+      {
+        tenantId: TENANT_A,
+        enabledToolsSet: Object.freeze(new Set<string>(['search-tools'])),
+        enabledToolsExplicit: true,
+        presetVersion: 'discovery-v1',
+      },
+      async () => tools['search-tools'].handler({}, {})
+    );
+    expect(searchResult).toMatchObject({ content: [{ text: 'search-ok' }] });
+
+    const saveResult = await requestContext.run(
+      {
+        tenantId: TENANT_A,
+        enabledToolsSet: Object.freeze(new Set<string>(['search-tools'])),
+        enabledToolsExplicit: true,
+        presetVersion: 'discovery-v1',
+      },
+      async () => tools['save-skill'].handler({}, {})
+    );
+    expect(saveResult).toMatchObject({ isError: true });
+    const payload = JSON.parse(
+      (saveResult as { content: Array<{ type: 'text'; text: string }> }).content[0].text
+    ) as { error: string; tool: string };
+    expect(payload).toMatchObject({ error: 'tool_not_enabled_for_tenant', tool: 'save-skill' });
+  });
+
   it('Test 4: pino info log emits {tenantId, before, after} on every filtered call', async () => {
     const loggerMod = (await import('../../src/logger.js')) as unknown as {
       default: { info: ReturnType<typeof vi.fn> };
