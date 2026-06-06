@@ -10,6 +10,7 @@ import {
   DEFAULT_SERVER_CAPABILITIES,
 } from '../src/lib/mcp-capabilities/profile.js';
 import { McpSessionRegistry } from '../src/lib/mcp-notifications/session-registry.js';
+import { requestContext } from '../src/request-context.js';
 
 async function callTool(server: McpServer, name: string, args: Record<string, unknown> = {}) {
   const inner = (
@@ -127,6 +128,48 @@ describe('connector diagnostics', () => {
     expect(JSON.stringify(result).toLowerCase()).not.toMatch(
       /authorization|refresh_token|access_token|cookie/
     );
+  });
+
+  it('uses the live request capability profile ahead of bootstrap registration defaults', async () => {
+    const server = new McpServer({ name: 'Microsoft365MCP', version: '0.0.0-test' });
+    const bootstrapProfile = buildEffectiveCapabilityProfile({
+      protocolVersion: '2025-06-18',
+      clientInfo: { name: 'bootstrap' },
+      advertisedCapabilities: { tools: {}, apps: {}, resources: {}, structuredToolResults: {} },
+      transport: 'streamable-http',
+      surface: 'discovery',
+      tenantPolicy: { phase8Enabled: true },
+      serverCapabilities: DEFAULT_SERVER_CAPABILITIES,
+    });
+    const liveProfile = buildEffectiveCapabilityProfile({
+      protocolVersion: '2025-06-18',
+      clientInfo: { name: 'client-without-apps' },
+      advertisedCapabilities: { tools: {} },
+      transport: 'streamable-http',
+      surface: 'discovery',
+      tenantPolicy: { phase8Enabled: true },
+      serverCapabilities: DEFAULT_SERVER_CAPABILITIES,
+    });
+
+    registerConnectorDiagnosticsTool(server, {
+      server: { name: 'Microsoft365MCP', version: '0.0.0-test' },
+      tenant: { id: 'tenant-a' },
+      surface: 'discovery',
+      transport: 'streamable-http',
+      profile: bootstrapProfile,
+    });
+
+    const result = (await requestContext.run({ capabilityProfile: liveProfile }, () =>
+      callTool(server, 'connector-diagnostics')
+    )) as {
+      content: Array<{ type: string; text: string }>;
+      structuredContent?: { capabilities?: Record<string, { effective?: boolean }> };
+    };
+
+    expect(result.content[0]!.text).toContain('Apps status: fallback');
+    expect(result.content[0]!.text).toContain('Resources status: fallback');
+    expect(result.structuredContent?.capabilities?.apps?.effective).toBe(false);
+    expect(result.structuredContent?.capabilities?.resources?.effective).toBe(false);
   });
 
   it('stores and resolves immutable Streamable HTTP session profiles', () => {

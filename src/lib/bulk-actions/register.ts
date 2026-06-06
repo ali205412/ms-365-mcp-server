@@ -400,11 +400,7 @@ async function handleBulkAction(
       textDetails: plan.requiresConfirmation
         ? {
             heading: 'Confirmation object for execute:',
-            data: {
-              status: 'preview',
-              itemCount: plan.items.length,
-              confirmation: planSummary.confirmation,
-            },
+            data: planSummary.confirmation,
           }
         : undefined,
       meta: { digestPrefix: plan.planDigest.slice(0, 12), ownerRef: bulkOwnerKey() },

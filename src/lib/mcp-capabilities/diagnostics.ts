@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ClientCapabilityProfile, McpSurfaceMode, McpTransportKind } from './profile.js';
 import { buildEffectiveCapabilityProfile, DEFAULT_SERVER_CAPABILITIES } from './profile.js';
+import { getRequestCapabilityProfile } from './session-profile.js';
 
 export interface ConnectorDiagnosticsInput {
   server: { name: string; version: string };
@@ -95,6 +96,7 @@ export function registerConnectorDiagnosticsTool(
     { title: 'connector-diagnostics', readOnlyHint: true, openWorldHint: false },
     async () => {
       const profile =
+        getRequestCapabilityProfile() ??
         deps.profile ??
         buildEffectiveCapabilityProfile({
           protocolVersion: undefined,

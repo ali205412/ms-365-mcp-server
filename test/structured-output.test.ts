@@ -371,4 +371,51 @@ describe('Phase 8 structured discovery tool integration', () => {
       expect(options.rawResponse).toBe(true);
     }
   });
+
+  it('bounds large transcript visible fallback while preserving full structured content', async () => {
+    const { registerDiscoveryTools } = (await import('../src/graph-tools.js')) as {
+      registerDiscoveryTools: typeof registerDiscoveryToolsType;
+    };
+    const server = new McpServer({ name: 'test', version: '0.0.0' });
+    const vtt = `WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n${'Transcript line. '.repeat(1_000)}END`;
+    const graphClient = {
+      graphRequest: vi.fn().mockResolvedValue({
+        content: [{ type: 'text', text: JSON.stringify({ message: 'OK!', rawResponse: vtt }) }],
+      }),
+    };
+    registerDiscoveryTools(
+      server,
+      graphClient as unknown as Parameters<typeof registerDiscoveryTools>[1],
+      false,
+      true
+    );
+
+    const ctx = {
+      tenantId: '11111111-1111-4111-8111-111111111111',
+      enabledToolsSet: new Set(['me.onlineMeetings.GetTranscriptsContent']),
+      enabledToolsExplicit: true,
+      presetVersion: 'discovery-v1',
+    };
+
+    const executed = await requestContext.run(ctx, () =>
+      callTool(server, 'execute-tool', {
+        tool_name: 'me.onlineMeetings.GetTranscriptsContent',
+        parameters: { onlineMeetingId: 'meeting-1', callTranscriptId: 'transcript-1' },
+      })
+    );
+
+    expect(executed.isError).not.toBe(true);
+    expect(executed.content[0]?.text.length).toBeLessThanOrEqual(7_500);
+    expect(executed.content[0]?.text).toContain('Transcript text fallback truncated');
+    expect(executed.content[0]?.text).not.toContain(vtt);
+    expect(executed.structuredContent?.data).toMatchObject({
+      contentType: 'text/vtt',
+      content: vtt,
+    });
+    expect(executed.structuredContent?.nextActions).toContain(
+      'Read structuredContent.data.content for the complete WEBVTT transcript.'
+    );
+    expect(executed.structuredContent?.warnings).toContain('transcript_text_fallback_truncated');
+    expect(McpResultEnvelopeZod.parse(executed)).toEqual(executed);
+  });
 });

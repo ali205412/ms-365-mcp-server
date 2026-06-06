@@ -45,7 +45,7 @@ function appDomainMetadata(): { domain?: string } {
   try {
     const parsed = raw.includes('://') ? new URL(raw) : new URL(`https://${raw}`);
     if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return {};
-    return { domain: parsed.hostname };
+    return { domain: parsed.origin };
   } catch {
     return {};
   }

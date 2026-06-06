@@ -490,11 +490,33 @@ function transcriptTextFromResult(result: CallToolResult): string | undefined {
   return result.content.find((item): item is TextContent => item.type === 'text')?.text;
 }
 
+const TRANSCRIPT_TEXT_FALLBACK_MAX_CHARS = 7_500;
+
+function transcriptVisibleText(content: string): { text: string; truncated: boolean } {
+  const byteLength = Buffer.byteLength(content, 'utf8');
+  const prefix = `Fetched transcript content (${byteLength} bytes):\n\n`;
+  if (prefix.length + content.length <= TRANSCRIPT_TEXT_FALLBACK_MAX_CHARS) {
+    return { text: `${prefix}${content}`, truncated: false };
+  }
+
+  const suffix =
+    '\n\n[Transcript text fallback truncated. Read structuredContent.data.content for the complete WEBVTT transcript.]';
+  const maxContentLength = Math.max(
+    0,
+    TRANSCRIPT_TEXT_FALLBACK_MAX_CHARS - prefix.length - suffix.length
+  );
+  return {
+    text: `${prefix}${content.slice(0, maxContentLength)}${suffix}`,
+    truncated: true,
+  };
+}
+
 function createTranscriptStructuredResult(
   toolName: string,
   result: CallToolResult
 ): CallToolResult {
-  const content = transcriptTextFromResult(result);
+  const content = transcriptTextFromResult(result) ?? '';
+  const visible = transcriptVisibleText(content);
   const contentType =
     typeof result._meta?.contentType === 'string'
       ? result._meta.contentType
@@ -503,18 +525,20 @@ function createTranscriptStructuredResult(
     content: [
       {
         type: 'text',
-        text: `Fetched transcript content (${Buffer.byteLength(content ?? '', 'utf8')} bytes):\n\n${content ?? ''}`,
+        text: visible.text,
       },
     ],
     structuredContent: {
       summary: 'Fetched transcript content.',
       data: {
         contentType,
-        content: content ?? '',
+        content,
       },
       resources: [],
-      nextActions: [],
-      warnings: [],
+      nextActions: visible.truncated
+        ? ['Read structuredContent.data.content for the complete WEBVTT transcript.']
+        : [],
+      warnings: visible.truncated ? ['transcript_text_fallback_truncated'] : [],
     },
     _meta: {
       toolAlias: toolName,

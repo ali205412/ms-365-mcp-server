@@ -39,6 +39,7 @@ import { mountHealth, type ReadinessCheck } from './lib/health.js';
 import { registerShutdownHooks } from './lib/shutdown.js';
 import { createCorsMiddleware, type CorsMode } from './lib/cors.js';
 import { getRedis } from './lib/redis.js';
+import { setBulkResultRuntimeTransportMode } from './lib/bulk-actions/result-store.js';
 import { registerAuditResourcePublisher } from './lib/audit.js';
 import { resolveTrustProxySetting } from './lib/trust-proxy.js';
 import { createRateLimitMiddleware } from './lib/rate-limit/middleware.js';
@@ -233,6 +234,7 @@ class MicrosoftGraphServer {
     tenant?: TenantRow,
     skillPrompts: readonly PromptTemplateDefinition[] = []
   ): McpServer {
+    setBulkResultRuntimeTransportMode(this.options.http ? 'http' : 'stdio');
     // Per-tenant allowlist for tool registration. The augmented
     // `req.tenant` shape from loadTenant carries `enabled_tools_set` —
     // a frozen Set of aliases derived from `tenants.enabled_tools` text
@@ -949,6 +951,7 @@ class MicrosoftGraphServer {
 
     const outputFormat = this.options.toon ? 'toon' : 'json';
     this.graphClient = new GraphClient(this.authManager, this.secrets, outputFormat);
+    setBulkResultRuntimeTransportMode(this.options.http ? 'http' : 'stdio');
 
     if (!this.options.http) {
       this.server = this.createMcpServer();

@@ -145,7 +145,7 @@ function visibleConfirmationFrom(result: ToolLikeResult): Record<string, unknown
   const afterMarker = text.slice(start + marker.length);
   const end = afterMarker.indexOf('\n\nNext actions:');
   const jsonText = (end === -1 ? afterMarker : afterMarker.slice(0, end)).trim();
-  return asRecord(JSON.parse(jsonText)).confirmation as Record<string, unknown>;
+  return asRecord(JSON.parse(jsonText));
 }
 
 function graphClientStub(): GraphClient {
