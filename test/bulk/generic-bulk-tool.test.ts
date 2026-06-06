@@ -1,5 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type GraphClient from '../../src/graph-client.js';
 import { requestContext } from '../../src/request-context.js';
 import { registerBulkActionTools } from '../../src/lib/bulk-actions/register.js';
@@ -124,11 +124,26 @@ function graphClientStub(): GraphClient {
   return {} as unknown as GraphClient;
 }
 
+const PROCESS_LOCAL_BULK_RESULTS_ENV = 'MS365_MCP_ENABLE_PROCESS_LOCAL_BULK_RESULTS';
+const originalProcessLocalBulkResults = process.env[PROCESS_LOCAL_BULK_RESULTS_ENV];
+
 function mcpServerStub(server: unknown): McpServer {
   return server as McpServer;
 }
 
 describe('generic bulk-action tool', () => {
+  beforeEach(() => {
+    process.env[PROCESS_LOCAL_BULK_RESULTS_ENV] = '1';
+  });
+
+  afterEach(() => {
+    if (originalProcessLocalBulkResults === undefined) {
+      delete process.env[PROCESS_LOCAL_BULK_RESULTS_ENV];
+    } else {
+      process.env[PROCESS_LOCAL_BULK_RESULTS_ENV] = originalProcessLocalBulkResults;
+    }
+  });
+
   it('registers synthetic tools and executes read aliases through the shared alias callback', async () => {
     resetBulkResultStoreForTesting();
     const { server, handlers } = makeServer();
@@ -186,6 +201,33 @@ describe('generic bulk-action tool', () => {
     });
     expect(handlers.has(BULK_ACTION_TOOL)).toBe(true);
     expect(handlers.has(READ_BULK_RESULT_TOOL)).toBe(false);
+  });
+
+  it('does not advertise cross-request full output when durable bulk result storage is unavailable', async () => {
+    delete process.env[PROCESS_LOCAL_BULK_RESULTS_ENV];
+    resetBulkResultStoreForTesting();
+    const { server, handlers } = makeServer();
+    const executeToolAlias = vi.fn();
+    registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias,
+    });
+
+    const result = await withTenant(
+      [BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'],
+      async () =>
+        handlers.get(BULK_ACTION_TOOL)!({
+          mode: 'execute',
+          outputMode: 'full',
+          items: [{ id: 'read-1', toolName: 'get-chat', parameters: { chatId: 'chat-id' } }],
+        })
+    );
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(dataFrom(result))).toContain('result_store_unavailable');
+    expect(executeToolAlias).not.toHaveBeenCalled();
   });
 
   it('requires plan-bound confirmation before high-risk writes and injects internal static confirmation only after match', async () => {

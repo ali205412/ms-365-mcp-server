@@ -37,6 +37,7 @@ export type ReadBulkResultOutcome =
   | { ok: false; code: BulkErrorCode; message: string };
 
 const store = new Map<string, StoredResult>();
+const PROCESS_LOCAL_BULK_RESULTS_ENV = 'MS365_MCP_ENABLE_PROCESS_LOCAL_BULK_RESULTS';
 const cursors = new Map<
   string,
   { resultId: string; tenantId: string; ownerKey: string; offset: number; expiresAt: number }
@@ -44,6 +45,11 @@ const cursors = new Map<
 
 function tenantId(): string | undefined {
   return getRequestTenant().id ?? requestContext.getStore()?.tenantId ?? undefined;
+}
+
+export function processLocalBulkResultsEnabled(): boolean {
+  const value = process.env[PROCESS_LOCAL_BULK_RESULTS_ENV];
+  return value === 'true' || value === '1';
 }
 
 export function bulkOwnerKey(): string {
@@ -68,6 +74,13 @@ export function storeBulkResult(input: {
   items: BulkStoredItem[];
   summary: Record<string, unknown>;
 }): { resultId: string; expiresAt: string } | { error: BulkErrorCode; message: string } {
+  if (!processLocalBulkResultsEnabled()) {
+    return {
+      error: 'result_store_unavailable',
+      message:
+        'Bulk result pagination requires durable storage; process-local result IDs are disabled by default.',
+    };
+  }
   sweep();
   const currentTenant = tenantId();
   if (!currentTenant)
@@ -114,6 +127,13 @@ export function readBulkResult(input: {
   cursor?: string;
   limit?: number;
 }): ReadBulkResultOutcome {
+  if (!processLocalBulkResultsEnabled()) {
+    return {
+      ok: false,
+      code: 'result_store_unavailable',
+      message: 'Bulk result pagination is unavailable without durable storage.',
+    };
+  }
   sweep();
   const currentTenant = tenantId();
   if (!currentTenant)

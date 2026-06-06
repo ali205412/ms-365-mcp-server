@@ -22,6 +22,7 @@ import {
 import { buildBulkPlan, bulkPlanPublicSummary, currentContextSnapshot } from './plan.js';
 import {
   bulkOwnerKey,
+  processLocalBulkResultsEnabled,
   readBulkResult,
   storeBulkResult,
   type BulkStoredItem,
@@ -617,6 +618,7 @@ function setAllows(enabledToolsSet: ReadonlySet<string> | undefined, alias: stri
 
 function readBulkResultAvailable(options: RegisterBulkActionToolsOptions): boolean {
   return (
+    processLocalBulkResultsEnabled() &&
     patternAllows(options.enabledToolsPattern, READ_BULK_RESULT_TOOL) &&
     setAllows(options.enabledToolsSet, READ_BULK_RESULT_TOOL) &&
     syntheticAllowed(READ_BULK_RESULT_TOOL) === null
