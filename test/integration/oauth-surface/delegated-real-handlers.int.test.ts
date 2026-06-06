@@ -453,6 +453,79 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
     expect(invalidBody.error).toBe('invalid_grant');
   });
 
+  it('/token rejects refresh client mismatches and upstream refresh failures', async () => {
+    harness = await startApp({});
+    const pkce = newPkce();
+    await seedPkce(harness, pkce.verifier);
+
+    const codeRes = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: 'auth-code-client-mismatch',
+        redirect_uri: 'http://localhost:3000/callback',
+        code_verifier: pkce.verifier,
+      }),
+    });
+    expect(codeRes.status).toBe(200);
+    const codeBody = (await codeRes.json()) as { refresh_token: string };
+
+    const mismatch = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: codeBody.refresh_token,
+        client_id: 'wrong-client-id',
+      }),
+    });
+    expect(mismatch.status).toBe(400);
+    expect(((await mismatch.json()) as { error: string }).error).toBe('invalid_grant');
+    await harness.close();
+    harness = undefined;
+
+    const mockAcquireByCode = vi.fn(async () => ({
+      accessToken: 'access-token-before-upstream-failure',
+      refreshToken: 'upstream-refresh-token-before-failure',
+      expiresOn: new Date(Date.now() + 3600 * 1000),
+      account: { homeAccountId: 'home-account-1' },
+    }));
+    const mockAcquireByRefreshToken = vi.fn(async () => null);
+    harness = await startApp({
+      msalClient: {
+        acquireTokenByCode: mockAcquireByCode,
+        acquireTokenByRefreshToken: mockAcquireByRefreshToken,
+      },
+    });
+    const failingPkce = newPkce();
+    await seedPkce(harness, failingPkce.verifier);
+    const failingCodeRes = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: 'auth-code-upstream-failure',
+        redirect_uri: 'http://localhost:3000/callback',
+        code_verifier: failingPkce.verifier,
+      }),
+    });
+    expect(failingCodeRes.status).toBe(200);
+    const failingCodeBody = (await failingCodeRes.json()) as { refresh_token: string };
+
+    const upstreamFailure = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: failingCodeBody.refresh_token,
+        client_id: harness.tenant.client_id,
+      }),
+    });
+    expect(upstreamFailure.status).toBe(400);
+    expect(((await upstreamFailure.json()) as { error: string }).error).toBe('invalid_grant');
+  });
+
   it('/token rejects missing verifier, missing code, and PKCE misses before MSAL', async () => {
     harness = await startApp({});
 
