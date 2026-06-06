@@ -25,9 +25,9 @@
  * Both seams first read the tenant-scoped `ReadonlySet<string>` from the ALS
  * frame seeded by `src/lib/tool-selection/tenant-context-middleware.ts`
  * (plan 05-04). Stdio mode falls back to the bootstrap dispatch-guard set.
- * Undefined set → pass-through; the dispatch-guard inside `executeGraphTool`
- * is the authoritative gate and fails closed if a tool is called that the
- * filter let through (defense in depth).
+ * Undefined set with no stdio fallback → pass-through; the dispatch-guard
+ * inside `executeGraphTool` is the authoritative gate and fails closed if a
+ * tool is called that the filter let through (defense in depth).
  *
  * Threat refs (05-PLAN threat register):
  *   - T-05-10 (tool metadata leaked pre-dispatch): mitigated by BOTH seams;
@@ -115,8 +115,8 @@ function effectiveTenantForFiltering(): ReturnType<typeof getRequestTenant> {
  * marks the instance).
  *
  * Pass-through contracts (identical to the Express middleware):
- *   - `getRequestTenant().enabledToolsSet === undefined` → return the
- *     SDK's default result unchanged (dispatch-guard will fail closed).
+ *   - No ALS enabledToolsSet and no stdio fallback set → return the SDK's
+ *     default result unchanged (dispatch-guard will fail closed).
  *   - Result payload malformed (missing `tools` array) → return unchanged.
  *   - Any exception inside the filter → log and return the default result
  *     (fail open for list — fail closed for dispatch is the contract).
@@ -207,11 +207,13 @@ export function applyTenantFilter(result: ListToolsResult): ListToolsResult {
   // Per-tenant `enabledSet` is built from raw aliases (`me.messages.X`).
   // Registered MCP tool names are run through `safeMcpName` (SEP-986
   // pattern), so we expand the comparison set to include both forms.
-  // Cheap one-time build per request; sets are O(1) lookup.
+  // Keep the original set's `.has()` semantics too: test and bootstrap
+  // fallbacks can use ReadonlySet implementations that are permissive without
+  // being iterable.
   const visibleSet =
     tenant.presetVersion === 'discovery-v1'
       ? effectiveDiscoveryVisibleSet(enabledSet)!
-      : new Set<string>(enabledSet);
+      : enabledSet;
   const expandedSet = new Set<string>();
   for (const alias of visibleSet) {
     expandedSet.add(alias);
@@ -220,7 +222,8 @@ export function applyTenantFilter(result: ListToolsResult): ListToolsResult {
 
   const before = result.tools.length;
   const filteredTools = result.tools.filter(
-    (tool) => typeof tool.name === 'string' && expandedSet.has(tool.name)
+    (tool) =>
+      typeof tool.name === 'string' && (visibleSet.has(tool.name) || expandedSet.has(tool.name))
   );
   const after = filteredTools.length;
 
