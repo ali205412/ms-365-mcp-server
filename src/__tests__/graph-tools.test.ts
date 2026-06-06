@@ -395,6 +395,33 @@ describe('graph-tools', () => {
       expect(url).toContain('$search=%22from%3Aali%40example.com%22');
       expect(options.headers).not.toHaveProperty('ConsistencyLevel');
     });
+
+    it('does not set ConsistencyLevel for shared-mailbox mail $search endpoints', async () => {
+      const endpoint = makeEndpoint({
+        path: '/users/:user-id/messages',
+        parameters: [
+          ...makeEndpoint().parameters,
+          { name: 'user-id', type: 'Path', schema: z.string() },
+        ],
+      });
+      const config = makeConfig({ pathPattern: '/users/{user-id}/messages' });
+      mockEndpoints.push(endpoint);
+      mockEndpointsJson = [config];
+
+      const graphClient = createMockGraphClient();
+      const server = createMockServer();
+      const { registerGraphTools } = await loadModule();
+      registerGraphTools(server as any, graphClient as any);
+
+      const tool = server.tools.get('test-tool');
+      expect(tool).toBeDefined();
+      await tool!.handler({ 'user-id': 'shared@example.com', search: '"from:ali@example.com"' });
+
+      const [url, options] = graphClient.graphRequest.mock.calls[0];
+      expect(url).toContain('/users/shared%40example.com/messages');
+      expect(url).toContain('$search=%22from%3Aali%40example.com%22');
+      expect(options.headers).not.toHaveProperty('ConsistencyLevel');
+    });
   });
 
   // ---- 2. fetchAllPages pagination ----

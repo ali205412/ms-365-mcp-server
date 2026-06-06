@@ -455,8 +455,13 @@ function usesAdvancedDirectoryQuery(
   );
 }
 
+function isUserMailboxPath(path: string): boolean {
+  return /^\/users\/[^/]+\/(messages|mailfolders|sendmail)(\/|$)/i.test(path);
+}
+
 function isAdvancedDirectoryQueryPath(requestPath: string): boolean {
   const path = pathWithoutQuery(requestPath).toLowerCase();
+  if (isUserMailboxPath(path)) return false;
   return [
     '/users',
     '/groups',

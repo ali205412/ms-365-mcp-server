@@ -20,6 +20,7 @@ export type AuthorizeRequestIdentity = Pick<
   | 'redirectUri'
   | 'tenantId'
   | 'scopes'
+  | 'tokenScopes'
   | 'forwardedAuthorizeParams'
 >;
 
@@ -61,6 +62,7 @@ export function isSameAuthorizeRequest(
     entry.redirectUri === expected.redirectUri &&
     entry.tenantId === expected.tenantId &&
     scopesMatch(entry.scopes, expected.scopes) &&
+    scopesMatch(entry.tokenScopes, expected.tokenScopes) &&
     forwardedParamsMatch(entry.forwardedAuthorizeParams, expected.forwardedAuthorizeParams)
   );
 }

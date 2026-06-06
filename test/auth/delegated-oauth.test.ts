@@ -267,7 +267,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     expect(entry?.redirectUri).toBe('http://localhost:3000/callback');
   });
 
-  it('forwards only requested tenant-allowed scopes to Microsoft', async () => {
+  it('forwards requested tenant-allowed scopes plus offline_access for refresh handles', async () => {
     harness = await startApp({ allowed_scopes: ['User.Read', 'Mail.ReadWrite'] });
 
     const clientVerifier = crypto.randomBytes(32).toString('base64url');
@@ -287,7 +287,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     const location = res.headers.get('location');
     expect(location).toBeTruthy();
     const loc = new URL(location!);
-    expect(loc.searchParams.get('scope')).toBe('Mail.Read');
+    expect(loc.searchParams.get('scope')).toBe('Mail.Read offline_access');
   });
 
   it('allows standard OAuth protocol scopes without weakening tenant Graph scope gating', async () => {
@@ -323,7 +323,13 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     });
     expect(tokenRes.status).toBe(200);
     const codeBody = (await tokenRes.json()) as { refresh_token: string };
-    expect(harness.mockMsalAcquireByCode.mock.calls[0]![0].scopes).toEqual(['Mail.Read']);
+    expect(harness.mockMsalAcquireByCode.mock.calls[0]![0].scopes).toEqual([
+      'openid',
+      'profile',
+      'email',
+      'offline_access',
+      'Mail.Read',
+    ]);
 
     const refreshRes = await fetch(`${harness.url}/token`, {
       method: 'POST',
@@ -335,10 +341,16 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
       }),
     });
     expect(refreshRes.status).toBe(200);
-    expect(harness.mockMsalAcquireSilent.mock.calls[0]![0].scopes).toEqual(['Mail.Read']);
+    expect(harness.mockMsalAcquireSilent.mock.calls[0]![0].scopes).toEqual([
+      'openid',
+      'profile',
+      'email',
+      'offline_access',
+      'Mail.Read',
+    ]);
   });
 
-  it('maps protocol-only authorize scopes onto tenant Graph defaults for Microsoft token requests', async () => {
+  it('keeps protocol-only authorize requests protocol-only for Microsoft token requests', async () => {
     harness = await startApp({ allowed_scopes: ['Mail.Read'] });
 
     const clientVerifier = crypto.randomBytes(32).toString('base64url');
@@ -358,7 +370,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     const location = authorizeRes.headers.get('location');
     expect(location).toBeTruthy();
     expect(new URL(location!).searchParams.get('scope')).toBe(
-      'openid profile email offline_access Mail.Read'
+      'openid profile email offline_access'
     );
 
     const tokenRes = await fetch(`${harness.url}/token`, {
@@ -373,7 +385,12 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     });
     expect(tokenRes.status).toBe(200);
     const codeBody = (await tokenRes.json()) as { refresh_token: string };
-    expect(harness.mockMsalAcquireByCode.mock.calls[0]![0].scopes).toEqual(['Mail.Read']);
+    expect(harness.mockMsalAcquireByCode.mock.calls[0]![0].scopes).toEqual([
+      'openid',
+      'profile',
+      'email',
+      'offline_access',
+    ]);
 
     const refreshRes = await fetch(`${harness.url}/token`, {
       method: 'POST',
@@ -385,7 +402,12 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
       }),
     });
     expect(refreshRes.status).toBe(200);
-    expect(harness.mockMsalAcquireSilent.mock.calls[0]![0].scopes).toEqual(['Mail.Read']);
+    expect(harness.mockMsalAcquireSilent.mock.calls[0]![0].scopes).toEqual([
+      'openid',
+      'profile',
+      'email',
+      'offline_access',
+    ]);
   });
 
   it('defaults omitted authorize scope to the tenant allowed scopes', async () => {
@@ -407,7 +429,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     const location = res.headers.get('location');
     expect(location).toBeTruthy();
     const loc = new URL(location!);
-    expect(loc.searchParams.get('scope')).toBe('Mail.Read');
+    expect(loc.searchParams.get('scope')).toBe('Mail.Read offline_access');
 
     const tokenRes = await fetch(`${harness.url}/token`, {
       method: 'POST',
@@ -421,7 +443,10 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     });
     expect(tokenRes.status).toBe(200);
     expect(harness.mockMsalAcquireByCode).toHaveBeenCalledTimes(1);
-    expect(harness.mockMsalAcquireByCode.mock.calls[0]![0].scopes).toEqual(['Mail.Read']);
+    expect(harness.mockMsalAcquireByCode.mock.calls[0]![0].scopes).toEqual([
+      'Mail.Read',
+      'offline_access',
+    ]);
   });
 
   it('rejects requested scopes not permitted by the tenant', async () => {

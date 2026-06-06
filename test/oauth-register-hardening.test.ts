@@ -212,6 +212,22 @@ describe('POST /register — redirect_uri allowlist (AUTH-06, T-01-06)', () => {
     ]);
   });
 
+  it('rejects refresh-only registrations because they cannot authorize', async () => {
+    server = await startMiniServer({
+      mode: 'prod',
+      publicUrlHost: null,
+      supportedGrantTypes: ['authorization_code', 'refresh_token'],
+    });
+
+    const res = await postJson(`${server.url}/register`, {
+      redirect_uris: ['http://localhost:3000/cb'],
+      grant_types: ['refresh_token'],
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: 'invalid_client_metadata' });
+  });
+
   it('rejects unsupported token endpoint authentication methods', async () => {
     server = await startMiniServer({ mode: 'prod', publicUrlHost: null });
     const res = await postJson(`${server.url}/register`, {

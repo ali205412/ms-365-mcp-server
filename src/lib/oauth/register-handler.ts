@@ -60,6 +60,13 @@ export function createRegisterHandler(
       });
       return;
     }
+    if (grantTypes.includes('refresh_token') && !grantTypes.includes('authorization_code')) {
+      res.status(400).json({
+        error: 'invalid_client_metadata',
+        error_description: 'refresh_token requires authorization_code.',
+      });
+      return;
+    }
     if (tokenEndpointAuthMethod !== 'none') {
       res.status(400).json({
         error: 'invalid_client_metadata',

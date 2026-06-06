@@ -85,7 +85,7 @@ function resolveTenantAuthorizeScopes(
   const requestedGraphScopes = requestedScopes.filter(
     (scope) => !isStandardOAuthProtocolScope(scope)
   );
-  const graphScopes = requestedGraphScopes.length ? requestedGraphScopes : allowedScopes;
+  const graphScopes = requestedScopes.length === 0 ? allowedScopes : requestedGraphScopes;
   const disallowedScopes = graphScopes.filter(
     (scope) => !tenantScopeSatisfies(allowedScopes, scope)
   );
@@ -96,13 +96,20 @@ function resolveTenantAuthorizeScopes(
   };
 }
 
-async function isRedirectUriAllowedByDynamicClient(
+interface DynamicClientAuthorizeDecision {
+  allowed: boolean;
+  refreshEnabled: boolean;
+}
+
+async function dynamicClientAuthorizeDecision(
   pgPool: Pool,
   tenant: Pick<TenantRow, 'id'>,
   clientId: string,
   redirectUri: string
-): Promise<boolean> {
-  if (!(await isOAuthClientStoreAvailable(pgPool))) return false;
+): Promise<DynamicClientAuthorizeDecision> {
+  if (!(await isOAuthClientStoreAvailable(pgPool))) {
+    return { allowed: false, refreshEnabled: false };
+  }
   const registration = await getActiveOAuthClientRegistration(pgPool, tenant.id, clientId);
   const allowed = Boolean(
     registration &&
@@ -113,7 +120,7 @@ async function isRedirectUriAllowedByDynamicClient(
   if (allowed) {
     await touchOAuthClientRegistration(pgPool, tenant.id, clientId);
   }
-  return allowed;
+  return { allowed, refreshEnabled: Boolean(registration?.grantTypes.includes('refresh_token')) };
 }
 
 export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
@@ -170,13 +177,16 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
       }
     }
     let allowedByDynamicClient = false;
+    let dynamicRefreshEnabled = false;
     if (!allowedByStaticClient && pgPool) {
-      allowedByDynamicClient = await isRedirectUriAllowedByDynamicClient(
+      const dynamicDecision = await dynamicClientAuthorizeDecision(
         pgPool,
         tenant,
         clientId,
         redirectUri
       );
+      allowedByDynamicClient = dynamicDecision.allowed;
+      dynamicRefreshEnabled = dynamicDecision.refreshEnabled;
     }
     if (!allowedByStaticClient && !allowedByDynamicClient) {
       emitAudit(tenant.id, 'failure', redirectUri, { error: 'invalid_redirect_uri' }, req);
@@ -207,7 +217,12 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
       tenant,
       requestedScopes
     );
-    const upstreamScopes = uniqScopes([...protocolScopes, ...graphScopes]);
+    const issueGatewayRefreshToken = allowedByStaticClient || dynamicRefreshEnabled;
+    const upstreamScopes = uniqScopes([
+      ...protocolScopes,
+      ...graphScopes,
+      ...(issueGatewayRefreshToken ? ['offline_access'] : []),
+    ]);
     if (disallowedScopes.length > 0) {
       emitAudit(tenant.id, 'failure', redirectUri, { error: 'invalid_scope' }, req);
       res.status(400).json({ error: 'invalid_scope' });
@@ -225,6 +240,7 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
       redirectUri,
       tenantId: tenantKey,
       scopes: graphScopes,
+      tokenScopes: upstreamScopes,
       createdAt: Date.now(),
     };
 
@@ -370,12 +386,19 @@ function serializeMsalCache(client: unknown): string | undefined {
 
 async function refreshDelegatedSession(
   msal: unknown,
-  record: { refreshToken?: string; accountHomeId?: string; msalCache?: string; scopes: string[] }
+  record: {
+    refreshToken?: string;
+    accountHomeId?: string;
+    msalCache?: string;
+    scopes: string[];
+    tokenScopes?: string[];
+  }
 ): Promise<RefreshResult | null> {
+  const tokenScopes = record.tokenScopes ?? record.scopes;
   if (record.refreshToken && isRefreshMsalClient(msal)) {
     return await msal.acquireTokenByRefreshToken({
       refreshToken: record.refreshToken,
-      scopes: record.scopes,
+      scopes: tokenScopes,
     });
   }
 
@@ -388,7 +411,7 @@ async function refreshDelegatedSession(
     if (!account) return null;
     return await msal.acquireTokenSilent({
       account,
-      scopes: record.scopes,
+      scopes: tokenScopes,
       forceRefresh: true,
     });
   }
@@ -757,10 +780,11 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
         return;
       }
 
-      const scopes = entry.scopes?.length ? entry.scopes : ['User.Read'];
+      const scopes = entry.scopes ?? ['User.Read'];
+      const tokenScopes = entry.tokenScopes ?? scopes;
       const result = await msal.acquireTokenByCode({
         code: String(body?.code ?? ''),
-        scopes,
+        scopes: tokenScopes,
         redirectUri: entry.redirectUri,
         codeVerifier: entry.serverCodeVerifier,
       });
@@ -785,6 +809,7 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
           graphAccessTokenExpiresOn: result.expiresOn?.toISOString(),
           clientId: submittedClientId,
           scopes,
+          tokenScopes,
           ownerSubject: result.account?.homeAccountId ?? result.account?.username,
           createdAt: Date.now(),
         });
