@@ -61,7 +61,7 @@ export interface CallToolResultLike {
  * wins. The fallback is also never persisted to disk / cross-process —
  * it is a pure in-process module-level handle.
  */
-interface StdioFallback {
+export interface StdioFallback {
   enabledToolsSet: ReadonlySet<string>;
   enabledToolsExplicit?: boolean;
   tenantId: string;
@@ -93,11 +93,19 @@ export function setStdioFallback(value: StdioFallback | undefined): void {
 }
 
 /**
+ * Read the registered stdio fallback so list/handler filters can apply the
+ * same policy when StdioServerTransport dispatches outside AsyncLocalStorage.
+ */
+export function getStdioFallback(): StdioFallback | undefined {
+  return readFallback();
+}
+
+/**
  * Test helper — read the current stdio fallback. Not exported publicly;
  * only called from dispatch-guard's own test file.
  */
 export function _getStdioFallbackForTest(): StdioFallback | undefined {
-  return readFallback();
+  return getStdioFallback();
 }
 
 /**

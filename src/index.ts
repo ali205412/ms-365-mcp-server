@@ -28,7 +28,6 @@ import { MemoryPkceStore } from './lib/pkce-store/memory-store.js';
 import type { PkceStore } from './lib/pkce-store/pkce-store.js';
 import { version } from './version.js';
 import { connectorDoctor } from './lib/connector-identity/metadata.js';
-import { BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL } from './lib/bulk-actions/schema.js';
 import { setBulkResultRuntimeTransportMode } from './lib/bulk-actions/result-store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -569,6 +568,8 @@ async function main(): Promise<void> {
       // covering the same surface native/discovery registration exposes after
       // the optional --enabled-tools regex is applied.
       const { api } = await import('./generated/client.js');
+      const { DISCOVERY_META_TOOL_NAMES, DISCOVERY_PRESET_VERSION } =
+        await import('./lib/tenant-surface/surface.js');
       const { setStdioFallback: setFallback } =
         await import('./lib/tool-selection/dispatch-guard.js');
       if (!tenantIdArg || !process.env.MS365_MCP_DATABASE_URL) {
@@ -590,24 +591,20 @@ async function main(): Promise<void> {
         // Add the synthetic tools registered beyond api.endpoints. These are
         // also filtered by the v1 --enabled-tools regex at registration time;
         // the dispatch-guard must accept them when they DO register.
-        for (const synthetic of [
+        for (const synthetic of new Set<string>([
+          ...DISCOVERY_META_TOOL_NAMES,
           'parse-teams-url',
           'graph-batch',
           'graph-upload-large-file',
-          'search-tools',
-          'get-tool-schema',
-          'execute-tool',
           'list-accounts',
-          BULK_ACTION_TOOL,
-          READ_BULK_RESULT_TOOL,
-        ]) {
+        ])) {
           if (allowsAlias(synthetic)) allAliases.add(synthetic);
         }
         setFallback({
           enabledToolsSet: Object.freeze(allAliases),
           enabledToolsExplicit: false,
           tenantId: 'stdio-legacy',
-          presetVersion: 'stdio-legacy',
+          presetVersion: args.discovery ? DISCOVERY_PRESET_VERSION : 'stdio-legacy',
         });
       }
     }

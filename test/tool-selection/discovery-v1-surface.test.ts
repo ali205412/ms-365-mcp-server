@@ -21,6 +21,7 @@ import {
 } from '../../src/lib/tool-selection/preset-loader.js';
 import { validateSelectors } from '../../src/lib/tool-selection/registry-validator.js';
 import { requestContext } from '../../src/request-context.js';
+import { setStdioFallback } from '../../src/lib/tool-selection/dispatch-guard.js';
 import { registerDiscoveryTools, discoveryCache } from '../../src/graph-tools.js';
 import {
   DISCOVERY_META_TOOL_NAMES,
@@ -165,6 +166,7 @@ afterEach(() => {
   }
   tmpDirs = [];
   discoveryCache._clear();
+  setStdioFallback(undefined);
   if (previousBulkConfirmationSecret === undefined) {
     delete process.env[BULK_CONFIRMATION_SECRET_ENV];
   } else {
@@ -589,6 +591,39 @@ describe('Phase 7 Plan 07-05 — aggregate memory registration', () => {
     expect(names).toEqual([...DISCOVERY_META_TOOL_NAMES].sort());
     expect(names).toEqual([...DISCOVERY_META_ALIASES].sort());
     expect(names).toHaveLength(30);
+  });
+
+  it('stdio discovery fallback hides and rejects disabled connector diagnostics', async () => {
+    const enabledSet = Object.freeze(
+      new Set([...DISCOVERY_META_TOOL_NAMES].filter((alias) => alias !== 'connector-diagnostics'))
+    );
+    setStdioFallback({
+      enabledToolsSet: enabledSet,
+      enabledToolsExplicit: true,
+      tenantId: 'stdio-legacy',
+      presetVersion: DISCOVERY_PRESET_VERSION,
+    });
+
+    const graphServer = new MicrosoftGraphServer(
+      {
+        isMultiAccount: vi.fn(async () => false),
+        listAccounts: vi.fn(async () => []),
+      } as never,
+      { discovery: true, orgMode: true }
+    );
+    const mcp = graphServer.createMcpServer({
+      preset_version: DISCOVERY_PRESET_VERSION,
+      enabled_tools_set: enabledSet,
+    } as never);
+
+    const list = await invokeToolsList(mcp);
+    const names = list.tools.map((tool) => tool.name);
+    expect(names).toContain('search-tools');
+    expect(names).not.toContain('connector-diagnostics');
+
+    const result = await callDiscoveryTool(mcp, 'connector-diagnostics', {});
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('tool_not_enabled_for_tenant');
   });
 
   it.each([

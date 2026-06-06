@@ -22,11 +22,12 @@
  *      test harnesses) gets the same filtering. Harmless on Streamable
  *      HTTP where it never fires.
  *
- * Both seams read the tenant-scoped `ReadonlySet<string>` from the ALS
+ * Both seams first read the tenant-scoped `ReadonlySet<string>` from the ALS
  * frame seeded by `src/lib/tool-selection/tenant-context-middleware.ts`
- * (plan 05-04). Undefined set → pass-through; the dispatch-guard inside
- * `executeGraphTool` is the authoritative gate and fails closed if a tool
- * is called that the filter let through (defense in depth).
+ * (plan 05-04). Stdio mode falls back to the bootstrap dispatch-guard set.
+ * Undefined set → pass-through; the dispatch-guard inside `executeGraphTool`
+ * is the authoritative gate and fails closed if a tool is called that the
+ * filter let through (defense in depth).
  *
  * Threat refs (05-PLAN threat register):
  *   - T-05-10 (tool metadata leaked pre-dispatch): mitigated by BOTH seams;
@@ -44,8 +45,8 @@ import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getRequestTenant } from '../../request-context.js';
 import logger from '../../logger.js';
-import { DISCOVERY_META_TOOL_NAMES } from '../tenant-surface/surface.js';
-import { checkDispatch, type CallToolResultLike } from './dispatch-guard.js';
+import { DISCOVERY_META_TOOL_NAMES, DISCOVERY_PRESET_VERSION } from '../tenant-surface/surface.js';
+import { checkDispatch, getStdioFallback, type CallToolResultLike } from './dispatch-guard.js';
 import { safeMcpName } from './safe-mcp-name.js';
 export const MANDATORY_DISCOVERY_TOOL_NAMES: ReadonlySet<string> = Object.freeze(
   new Set(['search-tools', 'get-tool-schema', 'execute-tool'])
@@ -86,6 +87,21 @@ interface ListToolsResult {
   tools: ToolEntry[];
   nextCursor?: string;
   [key: string]: unknown;
+}
+
+function effectiveTenantForFiltering(): ReturnType<typeof getRequestTenant> {
+  const tenant = getRequestTenant();
+  if (tenant.enabledToolsSet) return tenant;
+
+  const fallback = getStdioFallback();
+  if (!fallback) return tenant;
+
+  return {
+    id: tenant.id ?? fallback.tenantId,
+    enabledToolsSet: fallback.enabledToolsSet,
+    enabledToolsExplicit: tenant.enabledToolsExplicit ?? fallback.enabledToolsExplicit,
+    presetVersion: tenant.presetVersion ?? fallback.presetVersion,
+  };
 }
 
 /**
@@ -165,14 +181,13 @@ function effectiveDiscoveryVisibleSet(
 }
 
 export function applyTenantFilter(result: ListToolsResult): ListToolsResult {
-  const tenant = getRequestTenant();
+  const tenant = effectiveTenantForFiltering();
   const enabledSet = tenant.enabledToolsSet;
 
-  // Pass-through when no enabled set is available. This path fires in two
-  // cases: (1) no ALS frame (stdio without --tenant-id), (2) loadTenant
-  // did not populate the set (legacy /mcp path). Dispatch-guard still
-  // fails closed on individual tool calls, so tool metadata leakage in
-  // the list is not a security breach — it's a UX regression we log.
+  // Pass-through only when neither ALS nor the stdio bootstrap fallback has
+  // an enabled set. Dispatch-guard still fails closed on individual Graph tool
+  // calls, so tool metadata leakage in the list is not a security breach —
+  // it's a UX regression we log when tenant context identifies the request.
   if (!enabledSet) {
     if (tenant.id) {
       logger.warn(
@@ -223,8 +238,8 @@ export function applyTenantFilter(result: ListToolsResult): ListToolsResult {
 }
 
 function nativeDispatchRejection(alias: string): CallToolResultLike | null {
-  const tenant = getRequestTenant();
-  if (tenant.presetVersion !== 'discovery-v1') return null;
+  const tenant = effectiveTenantForFiltering();
+  if (tenant.presetVersion !== DISCOVERY_PRESET_VERSION) return null;
   const effectiveSet = effectiveDiscoveryVisibleSet(tenant.enabledToolsSet);
   return checkDispatch(alias, effectiveSet, tenant.id, tenant.presetVersion);
 }
