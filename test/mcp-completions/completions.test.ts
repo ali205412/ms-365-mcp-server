@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { requestContext } from '../../src/request-context.js';
 import {
@@ -15,6 +15,9 @@ import MicrosoftGraphServer from '../../src/server.js';
 
 const TENANT_A = '11111111-1111-4111-8111-111111111111';
 const TENANT_B = '22222222-2222-4222-8222-222222222222';
+const BULK_CONFIRMATION_SECRET_ENV = 'MS365_MCP_BULK_CONFIRMATION_SECRET';
+const TEST_BULK_CONFIRMATION_SECRET = 'mcp-completions-test-bulk-secret-000000';
+let previousBulkConfirmationSecret: string | undefined;
 const COMPLETABLE_PROMPT = `---
 name: completion-fixture
 description: Prompt with completable args
@@ -28,6 +31,19 @@ arguments:
 ---
 Use {{tenantId}} {{account}} {{alias}}.
 `;
+
+beforeEach(() => {
+  previousBulkConfirmationSecret = process.env[BULK_CONFIRMATION_SECRET_ENV];
+  process.env[BULK_CONFIRMATION_SECRET_ENV] = TEST_BULK_CONFIRMATION_SECRET;
+});
+
+afterEach(() => {
+  if (previousBulkConfirmationSecret === undefined) {
+    delete process.env[BULK_CONFIRMATION_SECRET_ENV];
+    return;
+  }
+  process.env[BULK_CONFIRMATION_SECRET_ENV] = previousBulkConfirmationSecret;
+});
 
 vi.mock('../../src/generated/client.js', () => ({
   api: {
