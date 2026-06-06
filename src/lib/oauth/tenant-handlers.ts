@@ -25,6 +25,7 @@ import {
   mintGatewayRefreshToken,
   releaseGatewayRefreshRotationLock,
   revokeGatewayRefreshToken,
+  startGatewayRefreshRotationLockHeartbeat,
   storeGatewayRefreshToken,
 } from './refresh-handles.js';
 import type { RedisClient } from '../redis.js';
@@ -68,6 +69,30 @@ function scopesAllowedByTenant(
   return scopes.every(
     (scope) => isStandardOAuthProtocolScope(scope) || tenantScopeSatisfies(allowedScopes, scope)
   );
+}
+
+function uniqScopes(scopes: readonly string[]): string[] {
+  return [...new Set(scopes)];
+}
+
+function resolveTenantAuthorizeScopes(
+  tenant: Pick<TenantRow, 'allowed_scopes'>,
+  requestedScopes: readonly string[]
+): { graphScopes: string[]; protocolScopes: string[]; disallowedScopes: string[] } {
+  const allowedScopes = tenantDefaultScopes(tenant);
+  const protocolScopes = requestedScopes.filter(isStandardOAuthProtocolScope);
+  const requestedGraphScopes = requestedScopes.filter(
+    (scope) => !isStandardOAuthProtocolScope(scope)
+  );
+  const graphScopes = requestedGraphScopes.length ? requestedGraphScopes : allowedScopes;
+  const disallowedScopes = graphScopes.filter(
+    (scope) => !tenantScopeSatisfies(allowedScopes, scope)
+  );
+  return {
+    graphScopes: uniqScopes(graphScopes),
+    protocolScopes: uniqScopes(protocolScopes),
+    disallowedScopes,
+  };
 }
 
 export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
@@ -161,11 +186,11 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
       .split(/\s+/)
       .map((scope) => scope.trim())
       .filter(Boolean);
-    const allowedScopes = tenantDefaultScopes(tenant);
-    const effectiveScopes = requestedScopes.length ? requestedScopes : allowedScopes;
-    const disallowedScopes = effectiveScopes.filter(
-      (scope) => !isStandardOAuthProtocolScope(scope) && !tenantScopeSatisfies(allowedScopes, scope)
+    const { graphScopes, protocolScopes, disallowedScopes } = resolveTenantAuthorizeScopes(
+      tenant,
+      requestedScopes
     );
+    const upstreamScopes = uniqScopes([...protocolScopes, ...graphScopes]);
     if (disallowedScopes.length > 0) {
       emitAudit(tenant.id, 'failure', redirectUri, { error: 'invalid_scope' }, req);
       res.status(400).json({ error: 'invalid_scope' });
@@ -182,7 +207,7 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
       clientId,
       redirectUri,
       tenantId: tenantKey,
-      scopes: effectiveScopes,
+      scopes: graphScopes,
       createdAt: Date.now(),
     };
 
@@ -218,7 +243,7 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
     authorizeUrl.searchParams.set('client_id', tenant.client_id);
     authorizeUrl.searchParams.set('response_type', 'code');
     authorizeUrl.searchParams.set('redirect_uri', redirectUri);
-    authorizeUrl.searchParams.set('scope', effectiveScopes.join(' '));
+    authorizeUrl.searchParams.set('scope', upstreamScopes.join(' '));
     authorizeUrl.searchParams.set('state', state);
     authorizeUrl.searchParams.set('code_challenge', serverChallenge);
     authorizeUrl.searchParams.set('code_challenge_method', 'S256');
@@ -239,7 +264,7 @@ export function createAuthorizeHandler(config: AuthorizeHandlerConfig) {
       {
         clientId,
         clientSource: allowedByStaticClient ? 'static' : 'dynamic',
-        scopes: effectiveScopes,
+        scopes: graphScopes,
       },
       req
     );
@@ -496,6 +521,13 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
           return;
         }
 
+        const stopRotationLockHeartbeat = startGatewayRefreshRotationLockHeartbeat({
+          redis,
+          tenantId: tenant.id,
+          refreshToken: submittedRefreshToken,
+          lockId: rotationLockId,
+        });
+
         try {
           const msal = await tenantPool.acquire(tenant);
           const fresh = await refreshDelegatedSession(msal, session.record);
@@ -587,17 +619,27 @@ export function createTenantTokenHandler(config: TenantTokenHandlerConfig) {
             refresh_token: nextRefreshToken,
           });
         } finally {
-          await releaseGatewayRefreshRotationLock({
-            redis,
-            tenantId: tenant.id,
-            refreshToken: submittedRefreshToken,
-            lockId: rotationLockId,
-          });
+          stopRotationLockHeartbeat();
+          try {
+            await releaseGatewayRefreshRotationLock({
+              redis,
+              tenantId: tenant.id,
+              refreshToken: submittedRefreshToken,
+              lockId: rotationLockId,
+            });
+          } catch (releaseErr) {
+            logger.warn(
+              { err: (releaseErr as Error).message, tenantId: tenant.id },
+              'delegated refresh rotation lock release failed'
+            );
+          }
         }
       } catch (err) {
         logger.error({ err: (err as Error).message, tenantId: tenant.id }, '/token refresh failed');
         emitTokenAudit(tenant.id, 'failure', refreshAuditMeta('temporarily_unavailable'), req);
-        res.status(503).json({ error: 'temporarily_unavailable' });
+        if (!res.headersSent) {
+          res.status(503).json({ error: 'temporarily_unavailable' });
+        }
       }
       return;
     }

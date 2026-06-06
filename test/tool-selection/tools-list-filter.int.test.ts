@@ -246,7 +246,44 @@ describe('plan 05-05 Task 1 — tools/list per-tenant filter (SDK handler wrap)'
     );
 
     const names = response.tools.map((tool) => tool.name).sort();
+    expect(names).toEqual(['execute-tool', 'get-tool-schema', 'me.ListMessages', 'search-tools']);
+  });
+
+  it('does not expose unlisted discovery native tools for discovery-v1 tenants', async () => {
+    const { wrapToolsListHandler } =
+      await import('../../src/lib/tool-selection/tools-list-filter.js');
+    const { requestContext } = await import('../../src/request-context.js');
+
+    const server = new McpServer({ name: 'test', version: '0.0.0' });
+    for (const name of [
+      'search-tools',
+      'get-tool-schema',
+      'execute-tool',
+      'delete-skill',
+      'save-skill',
+      'bulk-action',
+    ]) {
+      server.tool(name, name, {}, { title: name, readOnlyHint: true }, async () => ({
+        content: [{ type: 'text', text: 'ok' }],
+      }));
+    }
+    wrapToolsListHandler(server);
+
+    const response = await requestContext.run(
+      {
+        tenantId: TENANT_A,
+        enabledToolsSet: Object.freeze(new Set<string>(['search-tools'])),
+        enabledToolsExplicit: true,
+        presetVersion: 'discovery-v1',
+      },
+      async () => invokeToolsList(server)
+    );
+
+    const names = response.tools.map((tool) => tool.name).sort();
     expect(names).toEqual(['execute-tool', 'get-tool-schema', 'search-tools']);
+    expect(names).not.toContain('delete-skill');
+    expect(names).not.toContain('save-skill');
+    expect(names).not.toContain('bulk-action');
   });
 
   it('Test 4: pino info log emits {tenantId, before, after} on every filtered call', async () => {

@@ -25,9 +25,11 @@ import { MemoryRedisFacade } from '../../src/lib/redis-facade.js';
 import { RedisPkceStore } from '../../src/lib/pkce-store/redis-store.js';
 import { generateTenantDek } from '../../src/lib/crypto/dek.js';
 import {
+  delegatedAccessTokenKey,
   forgetDelegatedAccessToken,
   hasDelegatedAccessToken,
 } from '../../src/lib/delegated-access-tokens.js';
+import { hashAccessToken } from '../../src/lib/session-store.js';
 import type { TenantRow } from '../../src/lib/tenant/tenant-row.js';
 
 vi.mock('../../src/logger.js', () => ({
@@ -66,11 +68,20 @@ interface AppHarness {
   pkceStore: RedisPkceStore;
   mockMsalAcquireByCode: ReturnType<typeof vi.fn>;
   mockMsalAcquireSilent: ReturnType<typeof vi.fn>;
+  mockSessionStorePutFailure?: Error;
+  mockRefreshHandleStoreFailure?: Error;
+  mockDelegatedMarkerFailure?: Error;
 }
 
 async function startApp(
   tenantOverrides: Partial<TenantRow> = {},
-  authorizeOptions: { publicUrlHost?: string | null; extraAllowedHosts?: readonly string[] } = {}
+  authorizeOptions: {
+    publicUrlHost?: string | null;
+    extraAllowedHosts?: readonly string[];
+    refreshSessionPutFailures?: number;
+    refreshHandleStoreFailures?: number;
+    refreshMarkerFailures?: number;
+  } = {}
 ): Promise<AppHarness> {
   const redis = new MemoryRedisFacade();
   const pkceStore = new RedisPkceStore(redis);
@@ -109,8 +120,51 @@ async function startApp(
     getDekForTenant: vi.fn(() => Buffer.alloc(32, 7)),
   };
 
-  const { createAuthorizeHandler, createTenantTokenHandler } =
-    await import('../../src/lib/oauth/tenant-handlers.js');
+  const [{ createAuthorizeHandler, createTenantTokenHandler }, sessionStoreMod] = await Promise.all(
+    [import('../../src/lib/oauth/tenant-handlers.js'), import('../../src/lib/session-store.js')]
+  );
+  const realSessionStorePut = sessionStoreMod.SessionStore.prototype.put;
+  const realRedisSet = redis.set.bind(redis);
+  const mockSessionStorePutFailure = new Error('session write failed');
+  const mockRefreshHandleStoreFailure = new Error('refresh handle write failed');
+  const mockDelegatedMarkerFailure = new Error('marker write failed');
+  let remainingRefreshSessionPutFailures = authorizeOptions.refreshSessionPutFailures ?? 0;
+  let remainingRefreshHandleStoreFailures = authorizeOptions.refreshHandleStoreFailures ?? 0;
+  let remainingRefreshMarkerFailures = authorizeOptions.refreshMarkerFailures ?? 0;
+  if (remainingRefreshSessionPutFailures > 0) {
+    vi.spyOn(sessionStoreMod.SessionStore.prototype, 'put').mockImplementation(async function (
+      this: InstanceType<typeof sessionStoreMod.SessionStore>,
+      tenantId: string,
+      accessToken: string,
+      record: Parameters<typeof realSessionStorePut>[2]
+    ) {
+      if (accessToken === 'access-token-refreshed' && remainingRefreshSessionPutFailures > 0) {
+        remainingRefreshSessionPutFailures--;
+        throw mockSessionStorePutFailure;
+      }
+      return await realSessionStorePut.call(this, tenantId, accessToken, record);
+    });
+  }
+  if (remainingRefreshHandleStoreFailures > 0 || remainingRefreshMarkerFailures > 0) {
+    vi.spyOn(redis, 'set').mockImplementation(async (key, value, ...args) => {
+      if (
+        key.startsWith(`mcp:refresh:${tenant.id}:`) &&
+        String(value).includes(hashAccessToken('access-token-refreshed')) &&
+        remainingRefreshHandleStoreFailures > 0
+      ) {
+        remainingRefreshHandleStoreFailures--;
+        throw mockRefreshHandleStoreFailure;
+      }
+      if (
+        key === delegatedAccessTokenKey(tenant.id, 'access-token-refreshed') &&
+        remainingRefreshMarkerFailures > 0
+      ) {
+        remainingRefreshMarkerFailures--;
+        throw mockDelegatedMarkerFailure;
+      }
+      return await realRedisSet(key, value, ...args);
+    });
+  }
 
   const app = express();
   app.use(express.json());
@@ -170,6 +224,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
       await harness.close();
       harness = undefined;
     }
+    vi.restoreAllMocks();
   });
 
   it('Test 1: /authorize happy path writes PKCE + redirects to Microsoft with server-generated challenge', async () => {
@@ -268,13 +323,7 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     });
     expect(tokenRes.status).toBe(200);
     const codeBody = (await tokenRes.json()) as { refresh_token: string };
-    expect(harness.mockMsalAcquireByCode.mock.calls[0]![0].scopes).toEqual([
-      'openid',
-      'profile',
-      'email',
-      'offline_access',
-      'Mail.Read',
-    ]);
+    expect(harness.mockMsalAcquireByCode.mock.calls[0]![0].scopes).toEqual(['Mail.Read']);
 
     const refreshRes = await fetch(`${harness.url}/token`, {
       method: 'POST',
@@ -286,13 +335,57 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
       }),
     });
     expect(refreshRes.status).toBe(200);
-    expect(harness.mockMsalAcquireSilent.mock.calls[0]![0].scopes).toEqual([
-      'openid',
-      'profile',
-      'email',
-      'offline_access',
-      'Mail.Read',
-    ]);
+    expect(harness.mockMsalAcquireSilent.mock.calls[0]![0].scopes).toEqual(['Mail.Read']);
+  });
+
+  it('maps protocol-only authorize scopes onto tenant Graph defaults for Microsoft token requests', async () => {
+    harness = await startApp({ allowed_scopes: ['Mail.Read'] });
+
+    const clientVerifier = crypto.randomBytes(32).toString('base64url');
+    const clientChallenge = crypto.createHash('sha256').update(clientVerifier).digest('base64url');
+    const requestedScope = 'openid profile email offline_access';
+    const params = new URLSearchParams({
+      redirect_uri: 'http://localhost:3000/callback',
+      code_challenge: clientChallenge,
+      code_challenge_method: 'S256',
+      state: 'protocol-only-scope-test',
+      client_id: harness.tenant.client_id,
+      scope: requestedScope,
+    });
+
+    const authorizeRes = await fetch(`${harness.url}/authorize?${params}`, { redirect: 'manual' });
+    expect(authorizeRes.status).toBe(302);
+    const location = authorizeRes.headers.get('location');
+    expect(location).toBeTruthy();
+    expect(new URL(location!).searchParams.get('scope')).toBe(
+      'openid profile email offline_access Mail.Read'
+    );
+
+    const tokenRes = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: 'the-auth-code',
+        redirect_uri: 'http://localhost:3000/callback',
+        code_verifier: clientVerifier,
+      }),
+    });
+    expect(tokenRes.status).toBe(200);
+    const codeBody = (await tokenRes.json()) as { refresh_token: string };
+    expect(harness.mockMsalAcquireByCode.mock.calls[0]![0].scopes).toEqual(['Mail.Read']);
+
+    const refreshRes = await fetch(`${harness.url}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: codeBody.refresh_token,
+        client_id: harness.tenant.client_id,
+      }),
+    });
+    expect(refreshRes.status).toBe(200);
+    expect(harness.mockMsalAcquireSilent.mock.calls[0]![0].scopes).toEqual(['Mail.Read']);
   });
 
   it('defaults omitted authorize scope to the tenant allowed scopes', async () => {
@@ -910,6 +1003,69 @@ describe('Delegated OAuth flow (AUTH-01)', () => {
     expect(replay.status).toBe(200);
     expect(harness.mockMsalAcquireSilent).toHaveBeenCalledTimes(2);
   });
+
+  it.each([
+    ['session write', { refreshSessionPutFailures: 1 }],
+    ['replacement refresh handle write', { refreshHandleStoreFailures: 1 }],
+    ['delegated marker write', { refreshMarkerFailures: 1 }],
+  ] as const)(
+    'keeps refresh handle retryable when durable %s fails after upstream refresh succeeds',
+    async (_name, failureOptions) => {
+      harness = await startApp({}, failureOptions);
+      const clientVerifier = crypto.randomBytes(32).toString('base64url');
+      const clientChallenge = crypto
+        .createHash('sha256')
+        .update(clientVerifier)
+        .digest('base64url');
+
+      await harness.pkceStore.put(harness.tenant.id, {
+        state: 'state',
+        clientCodeChallenge: clientChallenge,
+        clientCodeChallengeMethod: 'S256',
+        serverCodeVerifier: 'server-verifier-xyz',
+        clientId: harness.tenant.client_id,
+        redirectUri: 'http://localhost:3000/callback',
+        tenantId: harness.tenant.id,
+        scopes: ['User.Read'],
+        createdAt: Date.now(),
+      });
+
+      const codeRes = await fetch(`${harness.url}/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code: 'the-auth-code',
+          redirect_uri: 'http://localhost:3000/callback',
+          code_verifier: clientVerifier,
+        }),
+      });
+      const codeBody = (await codeRes.json()) as { refresh_token: string };
+
+      const failedRefresh = await fetch(`${harness.url}/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'refresh_token',
+          refresh_token: codeBody.refresh_token,
+          client_id: harness.tenant.client_id,
+        }),
+      });
+      expect(failedRefresh.status).toBe(503);
+
+      const replay = await fetch(`${harness.url}/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'refresh_token',
+          refresh_token: codeBody.refresh_token,
+          client_id: harness.tenant.client_id,
+        }),
+      });
+      expect(replay.status).toBe(200);
+      expect(harness.mockMsalAcquireSilent).toHaveBeenCalledTimes(2);
+    }
+  );
 
   it('rejects refresh before MSAL when stored scopes are no longer tenant-allowed', async () => {
     harness = await startApp({ allowed_scopes: ['Mail.Read'] });

@@ -3,6 +3,7 @@ import type { RedisClient } from '../redis.js';
 import { hashAccessToken, type SessionRecord, type SessionStore } from '../session-store.js';
 
 const DEFAULT_TTL_SECONDS = 14 * 24 * 60 * 60;
+const DEFAULT_ROTATION_LOCK_TTL_MS = 120_000;
 
 export interface GatewayRefreshSession {
   accessTokenHash: string;
@@ -27,6 +28,42 @@ function legacyRefreshKey(tenantId: string, refreshToken: string): string {
 
 function refreshRotationLockKey(tenantId: string, refreshToken: string): string {
   return `mcp:refresh-lock:${tenantId}:${hashRefreshToken(refreshToken)}`;
+}
+
+function resolveRotationLockTtlMs(): number {
+  const raw = process.env.MS365_MCP_REFRESH_LOCK_TTL_MS;
+  if (!raw) return DEFAULT_ROTATION_LOCK_TTL_MS;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 30_000 ? parsed : DEFAULT_ROTATION_LOCK_TTL_MS;
+}
+
+async function evalCompareAndDelete(
+  redis: RedisClient,
+  key: string,
+  lockId: string
+): Promise<void> {
+  await redis.eval(
+    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+    1,
+    key,
+    lockId
+  );
+}
+
+async function evalCompareAndPexpire(
+  redis: RedisClient,
+  key: string,
+  lockId: string,
+  ttlMs: number
+): Promise<boolean> {
+  const result = await redis.eval(
+    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end",
+    1,
+    key,
+    lockId,
+    String(ttlMs)
+  );
+  return result === 1;
 }
 
 function resolveTtl(): number {
@@ -112,6 +149,10 @@ export async function revokeGatewayRefreshToken(args: {
   );
 }
 
+export function resolveGatewayRefreshRotationLockTtlMs(): number {
+  return resolveRotationLockTtlMs();
+}
+
 export async function acquireGatewayRefreshRotationLock(args: {
   redis: RedisClient;
   tenantId: string;
@@ -123,10 +164,43 @@ export async function acquireGatewayRefreshRotationLock(args: {
     refreshRotationLockKey(args.tenantId, args.refreshToken),
     args.lockId,
     'PX',
-    args.ttlMs ?? 30_000,
+    args.ttlMs ?? resolveRotationLockTtlMs(),
     'NX'
   );
   return result === 'OK';
+}
+
+export async function refreshGatewayRefreshRotationLock(args: {
+  redis: RedisClient;
+  tenantId: string;
+  refreshToken: string;
+  lockId: string;
+  ttlMs?: number;
+}): Promise<boolean> {
+  return await evalCompareAndPexpire(
+    args.redis,
+    refreshRotationLockKey(args.tenantId, args.refreshToken),
+    args.lockId,
+    args.ttlMs ?? resolveRotationLockTtlMs()
+  );
+}
+
+export function startGatewayRefreshRotationLockHeartbeat(args: {
+  redis: RedisClient;
+  tenantId: string;
+  refreshToken: string;
+  lockId: string;
+  ttlMs?: number;
+}): () => void {
+  const ttlMs = args.ttlMs ?? resolveRotationLockTtlMs();
+  const intervalMs = Math.max(1_000, Math.floor(ttlMs / 3));
+  const timer = setInterval(() => {
+    void refreshGatewayRefreshRotationLock({ ...args, ttlMs }).catch(() => {
+      // Best effort: the refresh handler still validates ownership on release.
+    });
+  }, intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
 }
 
 export async function releaseGatewayRefreshRotationLock(args: {
@@ -135,9 +209,9 @@ export async function releaseGatewayRefreshRotationLock(args: {
   refreshToken: string;
   lockId: string;
 }): Promise<void> {
-  const key = refreshRotationLockKey(args.tenantId, args.refreshToken);
-  const current = await args.redis.get(key);
-  if (current === args.lockId) {
-    await args.redis.del(key);
-  }
+  await evalCompareAndDelete(
+    args.redis,
+    refreshRotationLockKey(args.tenantId, args.refreshToken),
+    args.lockId
+  );
 }

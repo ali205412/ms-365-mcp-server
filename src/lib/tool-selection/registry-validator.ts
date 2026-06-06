@@ -79,6 +79,10 @@ const GRAPH_REGISTRY_ALIASES = api.endpoints
   .map((e) => e.alias)
   .filter((a): a is string => typeof a === 'string' && a.length > 0);
 
+const GRAPH_REGISTRY_ALIAS_SET: ReadonlySet<string> = Object.freeze(
+  new Set(GRAPH_REGISTRY_ALIASES)
+);
+
 const REGISTRY_ALIASES: ReadonlySet<string> = Object.freeze(
   new Set([...GRAPH_REGISTRY_ALIASES, ...DISCOVERY_V1_OPS])
 );
@@ -174,6 +178,10 @@ function topSuggestions(query: string, pool: ReadonlySet<string>): string[] {
 
 export function getRegistryAliases(): ReadonlySet<string> {
   return REGISTRY_ALIASES;
+}
+
+export function getGraphRegistryAliases(): ReadonlySet<string> {
+  return GRAPH_REGISTRY_ALIAS_SET;
 }
 
 export function getWorkloadPrefixes(): ReadonlySet<string> {
