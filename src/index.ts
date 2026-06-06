@@ -575,8 +575,8 @@ async function main(): Promise<void> {
       if (!tenantIdArg || !process.env.MS365_MCP_DATABASE_URL) {
         let enabledToolsRegex: RegExp | undefined;
         if (args.enabledTools) {
-          // codeql[js/regex-injection]: --enabled-tools is an operator-supplied startup regex validated by parseArgs before this branch runs.
-          enabledToolsRegex = new RegExp(args.enabledTools, 'i');
+          // --enabled-tools is an operator-supplied startup regex validated by parseArgs before this branch runs.
+          enabledToolsRegex = new RegExp(args.enabledTools, 'i'); // lgtm[js/regex-injection]
         }
         const allowsAlias = (alias: string): boolean => {
           if (!enabledToolsRegex) return true;
