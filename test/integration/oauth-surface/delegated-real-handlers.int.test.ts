@@ -344,6 +344,7 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
         new URLSearchParams({
           redirect_uri: 'javascript:alert(1)',
           code_challenge: pkce.challenge,
+          client_id: harness.tenant.client_id,
         }),
       { redirect: 'manual' }
     );
@@ -354,6 +355,7 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
         new URLSearchParams({
           redirect_uri: 'http://localhost:4000/not-allowed',
           code_challenge: pkce.challenge,
+          client_id: harness.tenant.client_id,
         }),
       { redirect: 'manual' }
     );
@@ -364,6 +366,7 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
         new URLSearchParams({
           redirect_uri: 'http://localhost:3000/callback',
           code_challenge: 'too-short',
+          client_id: harness.tenant.client_id,
         }),
       { redirect: 'manual' }
     );
@@ -761,6 +764,7 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
+        grant_type: 'authorization_code',
         code: 'auth-code-1',
         redirect_uri: 'http://localhost:3000/callback',
         client_id: harness.tenant.client_id,
@@ -779,6 +783,7 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
+        grant_type: 'authorization_code',
         code: 'auth-code-2',
         redirect_uri: 'http://localhost:3000/callback',
         client_id: harness.tenant.client_id,
@@ -799,6 +804,7 @@ describe('plan 06-05 — real delegated OAuth handlers', () => {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
+        grant_type: 'authorization_code',
         code: 'auth-code-3',
         redirect_uri: 'http://localhost:3000/callback',
         client_id: harness.tenant.client_id,
