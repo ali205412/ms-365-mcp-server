@@ -1,10 +1,9 @@
 import type { Request } from 'express';
 import { describe, expect, it } from 'vitest';
 import { requestLogProps } from '../src/lib/request-log-props.js';
-import { requestContext } from '../src/request-context.js';
 
 describe('requestLogProps', () => {
-  it('returns only scalar request and tenant identifiers from the request', () => {
+  it('binds only stable request identifiers before tenant middleware runs', () => {
     const req = {
       id: 'req-123',
       tenant: {
@@ -18,28 +17,21 @@ describe('requestLogProps', () => {
 
     const props = requestLogProps(req);
 
-    expect(props).toEqual({ requestId: 'req-123', tenantId: 'tenant-abc' });
-    expect(Object.keys(props).sort()).toEqual(['requestId', 'tenantId']);
+    expect(props).toEqual({ requestId: 'req-123' });
+    expect(Object.keys(props)).toEqual(['requestId']);
   });
 
-  it('falls back to the async request context tenant id', () => {
-    const props = requestContext.run({ tenantId: 'tenant-from-context' }, () =>
-      requestLogProps({ id: 'req-456' } as unknown as Request)
-    );
+  it('does not rebind tenantId from mutable request state', () => {
+    const props = requestLogProps({
+      id: 'req-456',
+      tenant: { id: 'tenant-late' },
+    } as unknown as Request);
 
-    expect(props).toEqual({ requestId: 'req-456', tenantId: 'tenant-from-context' });
-  });
-
-  it('omits tenantId when the async request context tenant id is null', () => {
-    const props = requestContext.run({ tenantId: null }, () =>
-      requestLogProps({ id: 'req-789' } as unknown as Request)
-    );
-
-    expect(props).toEqual({ requestId: 'req-789' });
+    expect(props).toEqual({ requestId: 'req-456' });
     expect(Object.hasOwn(props, 'tenantId')).toBe(false);
   });
 
-  it('omits tenantId for non-string or empty identifiers', () => {
+  it('omits requestId for non-string or empty identifiers', () => {
     expect(requestLogProps({ id: 123, tenant: { id: '' } } as unknown as Request)).toEqual({
       requestId: null,
     });

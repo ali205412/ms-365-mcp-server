@@ -1,32 +1,18 @@
 import type { Request } from 'express';
-import { requestContext } from '../request-context.js';
 
-type RequestWithTenant = Request & {
+type RequestWithId = Request & {
   id?: unknown;
-  tenant?: {
-    id?: unknown;
-  };
 };
 
 export interface RequestLogProps {
   requestId: string | null;
-  tenantId?: string;
 }
 
 export function requestLogProps(req: Request): RequestLogProps {
-  const request = req as RequestWithTenant;
+  const request = req as RequestWithId;
   const requestId = typeof request.id === 'string' && request.id.length > 0 ? request.id : null;
-  const tenantId = tenantIdFromRequest(request) ?? tenantIdFromContext();
 
-  return tenantId === undefined ? { requestId } : { requestId, tenantId };
-}
-
-function tenantIdFromRequest(req: RequestWithTenant): string | undefined {
-  const id = req.tenant?.id;
-  return typeof id === 'string' && id.length > 0 ? id : undefined;
-}
-
-function tenantIdFromContext(): string | undefined {
-  const tenantId = requestContext.getStore()?.tenantId;
-  return typeof tenantId === 'string' && tenantId.length > 0 ? tenantId : undefined;
+  // pino-http binds customProps before tenant middleware and reads them again at response finish.
+  // Keep these props stable so tenant routes do not serialize duplicate tenantId keys.
+  return { requestId };
 }

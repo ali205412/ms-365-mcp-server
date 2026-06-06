@@ -255,7 +255,7 @@ describe('generic bulk-action tool', () => {
     });
   });
 
-  it('accepts plan-bound confirmation without optional expiry during execution', async () => {
+  it('rejects plan-bound confirmation without the preview expiry during execution', async () => {
     resetBulkResultStoreForTesting();
     const { server, handlers } = makeServer();
     const executeToolAlias = vi.fn(async () => ({
@@ -289,9 +289,9 @@ describe('generic bulk-action tool', () => {
       })
     );
 
-    expect(result.isError).not.toBe(true);
-    expect(JSON.stringify(dataFrom(result))).not.toContain('confirmation_mismatch');
-    expect(executeToolAlias).toHaveBeenCalledTimes(1);
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(dataFrom(result))).toContain('invalid_bulk_item');
+    expect(executeToolAlias).not.toHaveBeenCalled();
   });
 
   it('stores and reads sanitized full results without leaking unsafe fields', async () => {
