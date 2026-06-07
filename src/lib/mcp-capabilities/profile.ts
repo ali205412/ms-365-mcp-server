@@ -105,6 +105,13 @@ const CLIENT_ADVERTISED_CAPABILITIES = new Set<CapabilityName>([
   'apps',
 ]);
 
+// MCP Apps (SEP-1865) clients advertise UI support under the extension identifier
+// `io.modelcontextprotocol/ui` inside `capabilities.extensions`, NOT a top-level
+// `apps` capability. Accept the spec extension key so spec-compliant hosts (OpenAI
+// Apps SDK / MCP-UI clients) actually receive `ui://` widget links; the legacy
+// `apps` key is still honored for our own bootstrap/test clients.
+const MCP_APPS_EXTENSION_ID = 'io.modelcontextprotocol/ui';
+
 export const DEFAULT_SERVER_CAPABILITIES: ServerCapabilityMap = Object.freeze({
   tools: true,
   resources: true,
@@ -204,8 +211,18 @@ function isCapabilityAdvertised(name: CapabilityName, advertised: AdvertisedCapa
       resourceSubscribeEnabled(resources)
     );
   }
+  if (name === 'apps') {
+    return hasObjectCapability(advertised, 'apps') || hasMcpAppsExtension(advertised);
+  }
   if (!CLIENT_ADVERTISED_CAPABILITIES.has(name)) return true;
   return hasObjectCapability(advertised, name);
+}
+
+function hasMcpAppsExtension(advertised: AdvertisedCapabilities): boolean {
+  const extensions = advertised.extensions;
+  if (typeof extensions !== 'object' || extensions === null) return false;
+  const ui = (extensions as Record<string, unknown>)[MCP_APPS_EXTENSION_ID];
+  return typeof ui === 'object' && ui !== null;
 }
 
 function hasObjectCapability(advertised: AdvertisedCapabilities, name: string): boolean {

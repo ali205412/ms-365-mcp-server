@@ -105,6 +105,39 @@ describe('ClientCapabilityProfile', () => {
     expect(profile.capabilities.apps.disabledReason).toMatch(/client does not advertise/i);
   });
 
+  it('recognizes MCP Apps advertised via the SEP-1865 extension key', () => {
+    const profile = buildEffectiveCapabilityProfile({
+      protocolVersion: '2025-06-18',
+      clientInfo: { name: 'apps-sdk-client', version: '1.0.0' },
+      advertisedCapabilities: {
+        tools: {},
+        extensions: {
+          'io.modelcontextprotocol/ui': { mimeTypes: ['text/html;profile=mcp-app'] },
+        },
+      },
+      transport: 'streamable-http',
+      surface: 'discovery',
+      tenantPolicy: { phase8Enabled: true },
+      serverCapabilities: DEFAULT_SERVER_CAPABILITIES,
+    });
+
+    expect(profile.capabilities.apps.effective).toBe(true);
+  });
+
+  it('still honors the legacy top-level apps capability key', () => {
+    const profile = buildEffectiveCapabilityProfile({
+      protocolVersion: '2025-06-18',
+      clientInfo: { name: 'legacy-apps-client', version: '1.0.0' },
+      advertisedCapabilities: { tools: {}, apps: {} },
+      transport: 'streamable-http',
+      surface: 'discovery',
+      tenantPolicy: { phase8Enabled: true },
+      serverCapabilities: DEFAULT_SERVER_CAPABILITIES,
+    });
+
+    expect(profile.capabilities.apps.effective).toBe(true);
+  });
+
   it('keeps legacy SSE honest by disabling advanced capabilities', () => {
     const profile = buildEffectiveCapabilityProfile({
       protocolVersion: '2024-11-05',
