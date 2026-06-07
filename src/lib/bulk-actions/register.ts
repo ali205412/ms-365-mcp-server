@@ -5,6 +5,7 @@ import type AuthManager from '../../auth.js';
 import type GraphClient from '../../graph-client.js';
 import type { CallToolResult } from '../../graph-tools.js';
 import { getFlow, getRequestId, getRequestTenant, requestContext } from '../../request-context.js';
+import logger from '../../logger.js';
 import { writeAuditStandalone } from '../audit.js';
 import { getPool } from '../postgres.js';
 import { checkDispatch } from '../tool-selection/dispatch-guard.js';
@@ -73,13 +74,26 @@ function configuredBulkConfirmationSecret(): Buffer | undefined {
   return secret;
 }
 
-function assertBulkConfirmationSigningConfigured(): void {
-  if (configuredBulkConfirmationSecret()) return;
-  if (getBulkResultRuntimeTransportMode() === 'http') {
-    throw new Error(
-      `${BULK_CONFIRMATION_SECRET_ENV} must be configured for HTTP bulk-action confirmations.`
-    );
+// Report whether bulk confirmations can be signed with a stable secret. A missing
+// or invalid secret must NEVER throw out of createMcpServer — that would take down
+// every tool for every tenant (a single optional feature's misconfiguration is not
+// grounds for a full connector outage). Instead the caller disables only the
+// bulk-action tool and logs a warning. In stdio mode the process-local random secret
+// is acceptable (single process, no restart-survival or multi-worker concern).
+function bulkConfirmationSigningStatus():
+  | { available: true }
+  | { available: false; reason: string } {
+  let configured: Buffer | undefined;
+  try {
+    configured = configuredBulkConfirmationSecret();
+  } catch (error) {
+    return { available: false, reason: (error as Error).message };
   }
+  if (configured) return { available: true };
+  if (getBulkResultRuntimeTransportMode() === 'http') {
+    return { available: false, reason: `${BULK_CONFIRMATION_SECRET_ENV} is not configured` };
+  }
+  return { available: true };
 }
 
 function bulkConfirmationHmacSecret(): Buffer {
@@ -762,11 +776,17 @@ export function registerBulkActionTools(
   options: RegisterBulkActionToolsOptions
 ): number {
   let registered = 0;
-  if (
+  const bulkActionAllowed =
     patternAllows(options.enabledToolsPattern, BULK_ACTION_TOOL) &&
-    setAllows(options.enabledToolsSet, BULK_ACTION_TOOL)
-  ) {
-    assertBulkConfirmationSigningConfigured();
+    setAllows(options.enabledToolsSet, BULK_ACTION_TOOL);
+  const signing = bulkActionAllowed ? bulkConfirmationSigningStatus() : undefined;
+  if (bulkActionAllowed && signing && !signing.available) {
+    logger.warn(
+      `bulk-action tool disabled: ${signing.reason}. ` +
+        `Set ${BULK_CONFIRMATION_SECRET_ENV} (>=32 bytes) to enable signed bulk confirmations.`
+    );
+  }
+  if (bulkActionAllowed && signing?.available) {
     server.tool(
       BULK_ACTION_TOOL,
       'Preview or execute a catalog-driven bulk action. Items name generated Graph/product tool aliases and parameters; raw URLs, methods, headers, and $batch request shapes are rejected. Preview returns a plan digest; writes, high-risk, open-world, or high-volume plans require executing with the exact confirmation object.',

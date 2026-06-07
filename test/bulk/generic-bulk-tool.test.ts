@@ -330,19 +330,23 @@ describe('generic bulk-action tool', () => {
     expect(handlers.has(READ_BULK_RESULT_TOOL)).toBe(false);
   });
 
-  it('requires a shared confirmation secret when registering bulk-action in HTTP mode', () => {
+  it('disables bulk-action without throwing when the confirmation secret is missing in HTTP mode', () => {
     delete process.env[BULK_CONFIRMATION_SECRET_ENV];
     setBulkResultRuntimeTransportMode('http');
-    const { server } = makeServer();
+    const { server, handlers } = makeServer();
 
-    expect(() =>
-      registerBulkActionTools(mcpServerStub(server), {
-        graphClient: graphClientStub(),
-        readOnly: false,
-        orgMode: true,
-        executeToolAlias: vi.fn(),
-      })
-    ).toThrow(BULK_CONFIRMATION_SECRET_ENV);
+    // A missing signing secret must disable ONLY bulk-action and never throw out of
+    // registration (which previously cascaded into a 500 on every createMcpServer).
+    const registered = registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias: vi.fn(),
+    });
+
+    expect(handlers.has(BULK_ACTION_TOOL)).toBe(false);
+    expect(handlers.has(READ_BULK_RESULT_TOOL)).toBe(true);
+    expect(registered).toBe(1);
   });
 
   it('does not require a shared confirmation secret in HTTP mode when bulk-action is excluded', () => {

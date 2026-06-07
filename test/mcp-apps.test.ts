@@ -232,13 +232,18 @@ describe('MCP Apps foundation', () => {
     );
   });
 
-  it('fails closed for programmatic HTTP discovery server construction without bulk confirmation secret', () => {
+  it('fails soft for HTTP discovery server construction without bulk confirmation secret', () => {
     delete process.env[BULK_CONFIRMATION_SECRET_ENV];
 
-    expect(() => createGraphServer().createMcpServer(discoveryTenant() as never)).toThrow(
-      BULK_CONFIRMATION_SECRET_ENV
-    );
+    // A missing optional secret must disable ONLY bulk-action, never throw out of
+    // createMcpServer (which previously 500-ed every tool for every tenant in prod).
+    const mcp = createGraphServer().createMcpServer(discoveryTenant() as never);
     expect(getBulkResultRuntimeTransportMode()).toBe('http');
+
+    const registered = (mcp as unknown as { _registeredTools: Record<string, unknown> })
+      ._registeredTools;
+    expect(registered['bulk-action']).toBeUndefined();
+    expect(registered['connector-diagnostics']).toBeDefined();
   });
 
   it('static-preset tenants do not expose app tools or resources by default', async () => {
