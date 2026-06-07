@@ -1,3 +1,4 @@
+-- Up Migration
 -- Durable, tenant-scoped OAuth Dynamic Client Registration clients.
 
 CREATE TABLE IF NOT EXISTS oauth_clients (
