@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { requestContext } from '../../src/request-context.js';
 import {
@@ -15,6 +15,10 @@ import MicrosoftGraphServer from '../../src/server.js';
 
 const TENANT_A = '11111111-1111-4111-8111-111111111111';
 const TENANT_B = '22222222-2222-4222-8222-222222222222';
+const BULK_CONFIRMATION_SECRET_ENV = 'MS365_MCP_BULK_CONFIRMATION_SECRET';
+const TEST_BULK_CONFIRMATION_SECRET = 'mcp-resources-test-bulk-secret-000000';
+
+let previousBulkConfirmationSecret: string | undefined;
 
 const memoryMocks = vi.hoisted(() => ({
   listBookmarks: vi.fn(),
@@ -143,6 +147,19 @@ function restrictedDashboardTenant() {
     enabled_tools_set: Object.freeze(new Set(['connector-diagnostics'])),
   };
 }
+
+beforeEach(() => {
+  previousBulkConfirmationSecret = process.env[BULK_CONFIRMATION_SECRET_ENV];
+  process.env[BULK_CONFIRMATION_SECRET_ENV] = TEST_BULK_CONFIRMATION_SECRET;
+});
+
+afterEach(() => {
+  if (previousBulkConfirmationSecret === undefined) {
+    delete process.env[BULK_CONFIRMATION_SECRET_ENV];
+  } else {
+    process.env[BULK_CONFIRMATION_SECRET_ENV] = previousBulkConfirmationSecret;
+  }
+});
 
 describe('Phase 7 Plan 07-11 Task 2 - MCP resource read dispatch', () => {
   beforeEach(() => {

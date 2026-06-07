@@ -490,11 +490,33 @@ function transcriptTextFromResult(result: CallToolResult): string | undefined {
   return result.content.find((item): item is TextContent => item.type === 'text')?.text;
 }
 
+const TRANSCRIPT_TEXT_FALLBACK_MAX_CHARS = 7_500;
+
+function transcriptVisibleText(content: string): { text: string; truncated: boolean } {
+  const byteLength = Buffer.byteLength(content, 'utf8');
+  const prefix = `Fetched transcript content (${byteLength} bytes):\n\n`;
+  if (prefix.length + content.length <= TRANSCRIPT_TEXT_FALLBACK_MAX_CHARS) {
+    return { text: `${prefix}${content}`, truncated: false };
+  }
+
+  const suffix =
+    '\n\n[Transcript text fallback truncated. Read structuredContent.data.content for the complete WEBVTT transcript.]';
+  const maxContentLength = Math.max(
+    0,
+    TRANSCRIPT_TEXT_FALLBACK_MAX_CHARS - prefix.length - suffix.length
+  );
+  return {
+    text: `${prefix}${content.slice(0, maxContentLength)}${suffix}`,
+    truncated: true,
+  };
+}
+
 function createTranscriptStructuredResult(
   toolName: string,
   result: CallToolResult
 ): CallToolResult {
-  const content = transcriptTextFromResult(result);
+  const content = transcriptTextFromResult(result) ?? '';
+  const visible = transcriptVisibleText(content);
   const contentType =
     typeof result._meta?.contentType === 'string'
       ? result._meta.contentType
@@ -503,18 +525,20 @@ function createTranscriptStructuredResult(
     content: [
       {
         type: 'text',
-        text: `Fetched transcript content (${Buffer.byteLength(content ?? '', 'utf8')} bytes).`,
+        text: visible.text,
       },
     ],
     structuredContent: {
       summary: 'Fetched transcript content.',
       data: {
         contentType,
-        content: content ?? '',
+        content,
       },
       resources: [],
-      nextActions: ['Read structuredContent.data.content for the complete WEBVTT transcript.'],
-      warnings: [],
+      nextActions: visible.truncated
+        ? ['Read structuredContent.data.content for the complete WEBVTT transcript.']
+        : [],
+      warnings: visible.truncated ? ['transcript_text_fallback_truncated'] : [],
     },
     _meta: {
       toolAlias: toolName,
@@ -1124,30 +1148,40 @@ async function executeGraphToolInner(
       `Making graph request to ${path} with options: ${JSON.stringify(loggableOptions)}${_redacted ? ' [accessToken=REDACTED]' : ''}`
     );
 
-    let response: Awaited<ReturnType<GraphClient['graphRequest']>> | undefined;
+    const cancelledGraphResponse = (): TextToolResult => ({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            status: 'cancelled',
+            operation: tool.alias,
+            partial: { value: [] },
+          }),
+        },
+      ],
+      _meta: { cancelled: true },
+    });
+    const isInitialAbortResponse = (candidate: TextToolResult): boolean =>
+      candidate.isError === true &&
+      operationWasRegistered &&
+      operationController?.signal.aborted === true &&
+      (candidate._meta?.errorCode === 'AbortError' || candidate._meta?.errorCode === 'cancelled');
+
+    let response: TextToolResult | undefined;
     try {
       try {
         response = await graphClient.graphRequest(path, options);
+        if (isInitialAbortResponse(response)) {
+          response = cancelledGraphResponse();
+        }
       } catch (error) {
         if (operationWasRegistered && operationController?.signal.aborted) {
-          response = {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  status: 'cancelled',
-                  operation: tool.alias,
-                  partial: { value: [] },
-                }),
-              },
-            ],
-            _meta: { cancelled: true },
-          };
+          response = cancelledGraphResponse();
         } else {
           throw error;
         }
       }
-      if (isTranscriptContent) {
+      if (isTranscriptContent && response) {
         response = preserveRawTranscriptText(response);
       }
 
@@ -1299,15 +1333,7 @@ export function registerGraphTools(
    */
   enabledToolsSet?: ReadonlySet<string>
 ): number {
-  let enabledToolsRegex: RegExp | undefined;
-  if (enabledToolsPattern) {
-    try {
-      enabledToolsRegex = new RegExp(enabledToolsPattern, 'i');
-      logger.info(`Tool filtering enabled with pattern: ${enabledToolsPattern}`);
-    } catch {
-      logger.error(`Invalid tool filter regex pattern: ${enabledToolsPattern}. Ignoring filter.`);
-    }
-  }
+  const enabledToolsRegex = compileEnabledToolsRegex(enabledToolsPattern);
 
   const useSetFilter = enabledToolsSet !== undefined && enabledToolsSet.size > 0;
   if (useSetFilter) {
@@ -1350,7 +1376,7 @@ export function registerGraphTools(
       }
     }
 
-    if (enabledToolsRegex && !enabledToolsRegex.test(tool.alias)) {
+    if (!aliasMatchesEnabledToolsRegex(enabledToolsRegex, tool.alias)) {
       logger.info(`Skipping tool ${tool.alias} - doesn't match filter pattern`);
       skippedCount++;
       continue;
@@ -1587,7 +1613,8 @@ export function registerGraphTools(
     readOnly,
     orgMode,
     executeToolAlias,
-    createToolAliasExecutor: () => createExecuteToolAliasForCurrentContext(readOnly, orgMode),
+    createToolAliasExecutor: () =>
+      createExecuteToolAliasForCurrentContext(readOnly, orgMode, enabledToolsRegex),
     enabledToolsPattern: enabledToolsRegex,
     enabledToolsSet,
   });
@@ -1920,6 +1947,38 @@ export function buildToolsRegistry(
   return toolsMap;
 }
 
+export function compileEnabledToolsRegex(
+  enabledToolsPattern: string | undefined
+): RegExp | undefined {
+  if (!enabledToolsPattern) return undefined;
+  try {
+    const regex = new RegExp(enabledToolsPattern, 'i');
+    logger.info(`Tool filtering enabled with pattern: ${enabledToolsPattern}`);
+    return regex;
+  } catch {
+    logger.error(`Invalid tool filter regex pattern: ${enabledToolsPattern}. Ignoring filter.`);
+    return undefined;
+  }
+}
+
+function aliasMatchesEnabledToolsRegex(regex: RegExp | undefined, alias: string): boolean {
+  if (!regex) return true;
+  regex.lastIndex = 0;
+  return regex.test(alias);
+}
+
+function filterToolsRegistryByPattern(
+  toolsRegistry: ReturnType<typeof buildToolsRegistry>,
+  enabledToolsRegex: RegExp | undefined
+): ReturnType<typeof buildToolsRegistry> {
+  if (!enabledToolsRegex) return toolsRegistry;
+  const filtered: ReturnType<typeof buildToolsRegistry> = new Map();
+  for (const [alias, entry] of toolsRegistry) {
+    if (aliasMatchesEnabledToolsRegex(enabledToolsRegex, alias)) filtered.set(alias, entry);
+  }
+  return filtered;
+}
+
 export interface ExecuteToolAliasArgs {
   toolName: string;
   parameters?: Record<string, unknown>;
@@ -1927,11 +1986,13 @@ export interface ExecuteToolAliasArgs {
   authManager?: AuthManager;
   readOnly?: boolean;
   orgMode?: boolean;
+  enabledToolsPattern?: RegExp;
 }
 
 export function createExecuteToolAliasForCurrentContext(
   readOnly = false,
-  orgMode = false
+  orgMode = false,
+  enabledToolsRegex?: RegExp
 ): (args: ExecuteToolAliasArgs) => Promise<CallToolResult> {
   const tenant = resolveTenantForDiscovery();
   if (!tenant) {
@@ -1952,7 +2013,10 @@ export function createExecuteToolAliasForCurrentContext(
     };
   }
 
-  const toolsRegistry = buildToolsRegistry(readOnly, orgMode);
+  const toolsRegistry = filterToolsRegistryByPattern(
+    buildToolsRegistry(readOnly, orgMode),
+    enabledToolsRegex
+  );
   const catalog = resolveDiscoveryCatalog({
     presetVersion: tenant.presetVersion,
     enabledToolsSet: tenant.enabledToolsSet,
@@ -2026,7 +2090,11 @@ export function createExecuteToolAliasForCurrentContext(
 }
 
 export async function executeToolAlias(args: ExecuteToolAliasArgs): Promise<CallToolResult> {
-  const runner = createExecuteToolAliasForCurrentContext(args.readOnly, args.orgMode);
+  const runner = createExecuteToolAliasForCurrentContext(
+    args.readOnly,
+    args.orgMode,
+    args.enabledToolsPattern
+  );
   return runner(args);
 }
 
@@ -2157,9 +2225,15 @@ export function registerDiscoveryTools(
   readOnly: boolean = false,
   orgMode: boolean = false,
   authManager?: AuthManager,
-  _multiAccount: boolean = false
+  _multiAccount: boolean = false,
+  enabledToolsPattern?: string,
+  enabledToolsSet?: ReadonlySet<string>
 ): void {
-  const toolsRegistry = buildToolsRegistry(readOnly, orgMode);
+  const enabledToolsRegex = compileEnabledToolsRegex(enabledToolsPattern);
+  const toolsRegistry = filterToolsRegistryByPattern(
+    buildToolsRegistry(readOnly, orgMode),
+    enabledToolsRegex
+  );
   // Plan 05-06: project down to the shape the per-tenant BM25 cache
   // consumes. Built once per registerDiscoveryTools call; reused for every
   // search-tools / get-tool-schema invocation.
@@ -2415,6 +2489,7 @@ export function registerDiscoveryTools(
         authManager,
         readOnly,
         orgMode,
+        enabledToolsPattern: enabledToolsRegex,
       });
       if (result.isError) return result;
       if (isTranscriptContentAlias(tool_name)) {
@@ -2462,7 +2537,10 @@ export function registerDiscoveryTools(
     readOnly,
     orgMode,
     executeToolAlias,
-    createToolAliasExecutor: () => createExecuteToolAliasForCurrentContext(readOnly, orgMode),
+    createToolAliasExecutor: () =>
+      createExecuteToolAliasForCurrentContext(readOnly, orgMode, enabledToolsRegex),
+    enabledToolsPattern: enabledToolsRegex,
+    enabledToolsSet,
   });
 
   // Layer 3 (list-accounts) is registered by registerAuthTools — no duplicate here.

@@ -1,10 +1,14 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { ExpressStreamableHTTPServerTransport } from './lib/transports/express-streamable-http-transport.js';
+import {
+  ExpressStreamableHTTPServerTransport,
+  type ExpressIncomingMessage,
+} from './lib/transports/express-streamable-http-transport.js';
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import express, { type Request, type Response, type RequestHandler } from 'express';
 import expressRateLimit from 'express-rate-limit';
 import logger, { enableConsoleLogging, rawPinoLogger } from './logger.js';
+import type { ServerResponse } from 'node:http';
 import { registerAuthTools } from './auth-tools.js';
 import { registerGraphTools, registerDiscoveryTools } from './graph-tools.js';
 import { registerMemoryTools } from './lib/memory/tools.js';
@@ -17,6 +21,7 @@ import { registerMcpApps } from './lib/mcp-apps/register.js';
 import { registerMcpCompletions } from './lib/mcp-completions/register.js';
 import { registerMcpLogging } from './lib/mcp-logging/register.js';
 import { buildEffectiveCapabilityProfile } from './lib/mcp-capabilities/profile.js';
+import { registerConnectorDiagnosticsTool } from './lib/mcp-capabilities/diagnostics.js';
 import { registerDashboardTools } from './lib/mcp-dashboards/tools.js';
 import {
   mcpSessionRegistry,
@@ -38,6 +43,7 @@ import { mountHealth, type ReadinessCheck } from './lib/health.js';
 import { registerShutdownHooks } from './lib/shutdown.js';
 import { createCorsMiddleware, type CorsMode } from './lib/cors.js';
 import { getRedis } from './lib/redis.js';
+import { setBulkResultRuntimeTransportMode } from './lib/bulk-actions/result-store.js';
 import { registerAuditResourcePublisher } from './lib/audit.js';
 import { resolveTrustProxySetting } from './lib/trust-proxy.js';
 import { createRateLimitMiddleware } from './lib/rate-limit/middleware.js';
@@ -232,6 +238,7 @@ class MicrosoftGraphServer {
     tenant?: TenantRow,
     skillPrompts: readonly PromptTemplateDefinition[] = []
   ): McpServer {
+    setBulkResultRuntimeTransportMode(this.options.http ? 'http' : 'stdio');
     // Per-tenant allowlist for tool registration. The augmented
     // `req.tenant` shape from loadTenant carries `enabled_tools_set` —
     // a frozen Set of aliases derived from `tenants.enabled_tools` text
@@ -272,7 +279,9 @@ class MicrosoftGraphServer {
         this.options.readOnly,
         this.options.orgMode,
         this.authManager,
-        this.multiAccount
+        this.multiAccount,
+        this.options.enabledTools,
+        enabledToolsSet
       );
       registerMemoryTools(server, {
         redis: getRedis(),
@@ -298,6 +307,16 @@ class MicrosoftGraphServer {
         capabilityProfile,
         registerTools: false,
       });
+      const connectorDiagnosticsDeps = {
+        server: { name: 'Microsoft365MCP', version: this.version },
+        tenant: tenant ? { id: tenant.id, label: tenant.slug } : { id: 'single-tenant' },
+        surface: 'discovery' as const,
+        transport: this.options.http ? ('streamable-http' as const) : ('stdio' as const),
+        profile: capabilityProfile,
+        metadataUrls: tenant ? { mcp: `/t/${tenant.id}/mcp` } : {},
+        expectedDisplayName: 'Microsoft 365 MCP Gateway',
+      };
+      registerConnectorDiagnosticsTool(server, connectorDiagnosticsDeps);
       registerMcpResources(server, {
         tenant:
           tenant && enabledToolsSet
@@ -312,14 +331,7 @@ class MicrosoftGraphServer {
         readOnly: this.options.readOnly,
         orgMode: this.options.orgMode,
         graphClient: this.graphClient!,
-        connector: {
-          server: { name: 'Microsoft365MCP', version: this.version },
-          surface: 'discovery',
-          transport: this.options.http ? 'streamable-http' : 'stdio',
-          profile: capabilityProfile,
-          metadataUrls: tenant ? { mcp: `/t/${tenant.id}/mcp` } : {},
-          expectedDisplayName: 'Microsoft 365 MCP Gateway',
-        },
+        connector: connectorDiagnosticsDeps,
         resourceSubscriptions: this.resourceSubscriptions,
       });
       registerMcpPrompts(server, {
@@ -945,6 +957,7 @@ class MicrosoftGraphServer {
 
     const outputFormat = this.options.toon ? 'toon' : 'json';
     this.graphClient = new GraphClient(this.authManager, this.secrets, outputFormat);
+    setBulkResultRuntimeTransportMode(this.options.http ? 'http' : 'stdio');
 
     if (!this.options.http) {
       this.server = this.createMcpServer();
@@ -1428,7 +1441,11 @@ class MicrosoftGraphServer {
             });
 
             await server.connect(transport);
-            await transport.handleRequest(req as any, res as any, undefined);
+            await transport.handleRequest(
+              req as ExpressIncomingMessage,
+              res as unknown as ServerResponse,
+              undefined
+            );
           };
 
           try {
@@ -1487,7 +1504,11 @@ class MicrosoftGraphServer {
             });
 
             await server.connect(transport);
-            await transport.handleRequest(req as any, res as any, req.body);
+            await transport.handleRequest(
+              req as ExpressIncomingMessage,
+              res as unknown as ServerResponse,
+              req.body
+            );
           };
 
           try {

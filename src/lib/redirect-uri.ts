@@ -77,6 +77,9 @@ export function validateRedirectUriSafety(
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     return { ok: false, reason: `non-http(s) scheme: ${url.protocol}` };
   }
+  if (url.protocol === 'http:' && !LOOPBACK_HOSTS.has(url.hostname)) {
+    return { ok: false, reason: `non-loopback plaintext redirect URI: ${url.hostname}` };
+  }
 
   return { ok: true, url };
 }

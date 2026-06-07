@@ -15,6 +15,7 @@ import {
   BULK_ACTION_TOOL,
   BULK_LIMITS,
   BulkActionInputZod,
+  BulkConfirmationZod,
   READ_BULK_RESULT_TOOL,
   ReadBulkResultInputZod,
   type BulkActionInput,
@@ -25,6 +26,7 @@ import { buildBulkPlan, bulkPlanPublicSummary, currentContextSnapshot } from './
 import {
   bulkOwnerKey,
   bulkResultStoreAvailable,
+  getBulkResultRuntimeTransportMode,
   readBulkResult,
   storeBulkResult,
   type BulkStoredItem,
@@ -59,6 +61,30 @@ export interface RegisterBulkActionToolsOptions {
 }
 
 const BULK_CONFIRMATION_HMAC_SECRET = randomBytes(32);
+const BULK_CONFIRMATION_SECRET_ENV = 'MS365_MCP_BULK_CONFIRMATION_SECRET';
+
+function configuredBulkConfirmationSecret(): Buffer | undefined {
+  const configured = process.env[BULK_CONFIRMATION_SECRET_ENV]?.trim();
+  if (!configured) return undefined;
+  const secret = Buffer.from(configured, 'utf8');
+  if (secret.length < 32) {
+    throw new Error(`${BULK_CONFIRMATION_SECRET_ENV} must be at least 32 bytes.`);
+  }
+  return secret;
+}
+
+function assertBulkConfirmationSigningConfigured(): void {
+  if (configuredBulkConfirmationSecret()) return;
+  if (getBulkResultRuntimeTransportMode() === 'http') {
+    throw new Error(
+      `${BULK_CONFIRMATION_SECRET_ENV} must be configured for HTTP bulk-action confirmations.`
+    );
+  }
+}
+
+function bulkConfirmationHmacSecret(): Buffer {
+  return configuredBulkConfirmationSecret() ?? BULK_CONFIRMATION_HMAC_SECRET;
+}
 
 function bulkConfirmationSignaturePayload(input: {
   planDigest: string;
@@ -81,7 +107,7 @@ function signBulkConfirmation(input: {
   tenantId: string | undefined;
   ownerKey: string;
 }): string {
-  return createHmac('sha256', BULK_CONFIRMATION_HMAC_SECRET)
+  return createHmac('sha256', bulkConfirmationHmacSecret())
     .update(bulkConfirmationSignaturePayload(input))
     .digest('base64url');
 }
@@ -270,7 +296,7 @@ function compactBulkOutput(input: {
       retryAfterSeconds: item.retryAfterSeconds,
     })),
     nextAction: input.resultId
-      ? 'Call read-bulk-result with resultId to page through sanitized details.'
+      ? `Call read-bulk-result with resultId=${input.resultId} to page through sanitized details.`
       : 'Review the compact summary; detailed result paging is unavailable for this execution.',
   };
 }
@@ -366,11 +392,17 @@ async function handleBulkAction(
       summary: `Bulk action preview created for ${plan.items.length} item${plan.items.length === 1 ? '' : 's'}.`,
       data: renderBulkOutput({ planSummary, outputMode: input.outputMode, status: 'preview' }),
       nextActions: plan.requiresConfirmation
-        ? ['Call bulk-action with mode=execute and the returned confirmation object.']
+        ? ['Call bulk-action with mode=execute and copy the visible confirmation object.']
         : ['Call bulk-action with mode=execute to run the allowed items.'],
       warnings: plan.items.some((item) => item.status !== 'allowed')
         ? ['some_items_blocked_or_invalid']
         : [],
+      textDetails: plan.requiresConfirmation
+        ? {
+            heading: 'Confirmation object for execute:',
+            data: planSummary.confirmation,
+          }
+        : undefined,
       meta: { digestPrefix: plan.planDigest.slice(0, 12), ownerRef: bulkOwnerKey() },
     });
   }
@@ -631,8 +663,14 @@ async function handleBulkAction(
     summary: `Bulk action ${status} for ${results.length} item${results.length === 1 ? '' : 's'}.`,
     data: output,
     nextActions: resultId
-      ? ['Call read-bulk-result with resultId to page through sanitized details.']
+      ? [`Call read-bulk-result with resultId=${resultId} to page through sanitized details.`]
       : ['Review statuses and retry failed items only if safe.'],
+    textDetails: resultId
+      ? {
+          heading: 'Bulk result readback:',
+          data: { resultId, command: { tool: READ_BULK_RESULT_TOOL, resultId, limit: 100 } },
+        }
+      : undefined,
     warnings: [
       ...(status === 'completed' ? [] : ['some_items_failed']),
       ...(outputBudgetWarning ? ['result_details_compacted_after_execution'] : []),
@@ -677,8 +715,25 @@ async function handleReadBulkResult(rawInput: unknown): Promise<CallToolResult> 
     summary: `Read ${outcome.value.items.length} bulk result item${outcome.value.items.length === 1 ? '' : 's'}.`,
     data: outcome.value,
     nextActions: outcome.value.nextCursor
-      ? ['Call read-bulk-result again with nextCursor for more items.']
+      ? [
+          `Call read-bulk-result with resultId=${outcome.value.resultId} cursor=${outcome.value.nextCursor} for the next page.`,
+        ]
       : ['No further bulk result pages remain.'],
+    textDetails: outcome.value.nextCursor
+      ? {
+          heading: 'Next page cursor:',
+          data: {
+            resultId: outcome.value.resultId,
+            cursor: outcome.value.nextCursor,
+            command: {
+              tool: READ_BULK_RESULT_TOOL,
+              resultId: outcome.value.resultId,
+              cursor: outcome.value.nextCursor,
+              limit: parsed.data.limit,
+            },
+          },
+        }
+      : undefined,
     meta: { resultId: outcome.value.resultId, ownerRef: bulkOwnerKey() },
   });
 }
@@ -690,7 +745,7 @@ function patternAllows(pattern: RegExp | undefined, alias: string): boolean {
 }
 
 function setAllows(enabledToolsSet: ReadonlySet<string> | undefined, alias: string): boolean {
-  return enabledToolsSet === undefined || enabledToolsSet.size === 0 || enabledToolsSet.has(alias);
+  return enabledToolsSet === undefined || enabledToolsSet.has(alias);
 }
 
 async function readBulkResultAvailable(options: RegisterBulkActionToolsOptions): Promise<boolean> {
@@ -711,6 +766,7 @@ export function registerBulkActionTools(
     patternAllows(options.enabledToolsPattern, BULK_ACTION_TOOL) &&
     setAllows(options.enabledToolsSet, BULK_ACTION_TOOL)
   ) {
+    assertBulkConfirmationSigningConfigured();
     server.tool(
       BULK_ACTION_TOOL,
       'Preview or execute a catalog-driven bulk action. Items name generated Graph/product tool aliases and parameters; raw URLs, methods, headers, and $batch request shapes are rejected. Preview returns a plan digest; writes, high-risk, open-world, or high-volume plans require executing with the exact confirmation object.',
@@ -729,13 +785,7 @@ export function registerBulkActionTools(
           .min(1)
           .max(BULK_LIMITS.maxItems),
         outputMode: z.enum(['summary', 'errors', 'ids', 'full']).default('summary'),
-        confirmation: z
-          .object({
-            planDigest: z.string(),
-            confirmed: z.literal(true),
-            expiresAt: z.string().datetime(),
-          })
-          .optional(),
+        confirmation: BulkConfirmationZod.optional(),
       },
       { title: BULK_ACTION_TOOL, readOnlyHint: false, destructiveHint: true, openWorldHint: true },
       async (params, extra) =>

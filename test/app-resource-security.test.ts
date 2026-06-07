@@ -1,16 +1,87 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   APP_ASSET_DIST_PATHS,
   APP_ASSET_SOURCE_DIR,
   scanAppAssets,
 } from '../src/lib/mcp-apps/assets.js';
-import { sanitizeHtmlSnippet, validateAppAssetText } from '../src/lib/mcp-apps/security.js';
+import {
+  APP_UI_META,
+  sanitizeHtmlSnippet,
+  validateAppAssetText,
+} from '../src/lib/mcp-apps/security.js';
 
 const FORBIDDEN_MARKERS = ['access_token', 'refresh_token', 'client_secret', '.env'];
 
+async function appUiMetaWithEnv(
+  env: Record<string, string | undefined>
+): Promise<typeof APP_UI_META> {
+  const originalAppDomain = process.env.MS365_MCP_APP_DOMAIN;
+  const originalPublicUrl = process.env.MS365_MCP_PUBLIC_URL;
+  try {
+    if (env.MS365_MCP_APP_DOMAIN === undefined) {
+      delete process.env.MS365_MCP_APP_DOMAIN;
+    } else {
+      process.env.MS365_MCP_APP_DOMAIN = env.MS365_MCP_APP_DOMAIN;
+    }
+    if (env.MS365_MCP_PUBLIC_URL === undefined) {
+      delete process.env.MS365_MCP_PUBLIC_URL;
+    } else {
+      process.env.MS365_MCP_PUBLIC_URL = env.MS365_MCP_PUBLIC_URL;
+    }
+    vi.resetModules();
+    const mod = await import('../src/lib/mcp-apps/security.js');
+    return mod.APP_UI_META;
+  } finally {
+    if (originalAppDomain === undefined) {
+      delete process.env.MS365_MCP_APP_DOMAIN;
+    } else {
+      process.env.MS365_MCP_APP_DOMAIN = originalAppDomain;
+    }
+    if (originalPublicUrl === undefined) {
+      delete process.env.MS365_MCP_PUBLIC_URL;
+    } else {
+      process.env.MS365_MCP_PUBLIC_URL = originalPublicUrl;
+    }
+    vi.resetModules();
+  }
+}
+
 describe('MCP app resource security', () => {
+  it('uses current MCP Apps metadata keys without legacy CSP directives', () => {
+    expect(APP_UI_META.ui).toMatchObject({
+      csp: {
+        connectDomains: [],
+        resourceDomains: [],
+        baseUriDomains: [],
+      },
+      sandbox: 'allow-scripts',
+      prefersBorder: true,
+    });
+    expect(APP_UI_META.ui.csp).not.toHaveProperty('defaultSrc');
+    expect(APP_UI_META.ui.csp).not.toHaveProperty('scriptSrc');
+    expect(APP_UI_META.ui.csp).not.toHaveProperty('connectSrc');
+  });
+
+  it('uses an HTTPS origin with explicit port for app UI domain metadata', async () => {
+    const meta = await appUiMetaWithEnv({
+      MS365_MCP_APP_DOMAIN: undefined,
+      MS365_MCP_PUBLIC_URL: 'https://mcp.example.com:8443/path',
+    });
+
+    expect(meta.ui.domain).toBe('https://mcp.example.com:8443');
+  });
+
+  it('normalizes hostname-only app domain metadata to an HTTPS origin', async () => {
+    const meta = await appUiMetaWithEnv({
+      MS365_MCP_APP_DOMAIN: 'mcp.example.com',
+      MS365_MCP_PUBLIC_URL: undefined,
+    });
+
+    expect(meta.ui.domain).toBe('https://mcp.example.com');
+  });
+
   it('escapes user-provided HTML and text snippets before app rendering', () => {
     const unsafe = '<img src=x onerror="alert(1)"><script>alert("x")</script>&hello';
 

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { requestContext } from '../src/request-context.js';
 import { buildEffectiveCapabilityProfile } from '../src/lib/mcp-capabilities/profile.js';
@@ -9,8 +9,14 @@ import {
   DISCOVERY_META_TOOL_NAMES,
   DISCOVERY_PRESET_VERSION,
 } from '../src/lib/tenant-surface/surface.js';
+import {
+  getBulkResultRuntimeTransportMode,
+  resetBulkResultRuntimeTransportModeForTesting,
+} from '../src/lib/bulk-actions/result-store.js';
 
 const TENANT_ID = '11111111-1111-4111-8111-111111111111';
+const BULK_CONFIRMATION_SECRET_ENV = 'MS365_MCP_BULK_CONFIRMATION_SECRET';
+const ORIGINAL_BULK_CONFIRMATION_SECRET = process.env[BULK_CONFIRMATION_SECRET_ENV];
 
 vi.mock('../src/generated/client.js', () => ({
   api: {
@@ -81,6 +87,22 @@ async function invokeResourcesList(server: McpServer): Promise<{
   }>;
 }
 
+async function callRegisteredTool(
+  server: McpServer,
+  name: string,
+  args: Record<string, unknown> = {}
+): Promise<unknown> {
+  const inner = server as unknown as {
+    _registeredTools: Record<
+      string,
+      { handler: (args: Record<string, unknown>, extra?: unknown) => Promise<unknown> }
+    >;
+  };
+  const tool = inner._registeredTools[name];
+  if (!tool) throw new Error(`${name} tool not registered on McpServer`);
+  return tool.handler(args, {});
+}
+
 async function invokeToolsList(server: McpServer): Promise<{
   tools: Array<{ name: string; _meta?: Record<string, unknown> }>;
 }> {
@@ -108,6 +130,15 @@ function createGraphServer(): MicrosoftGraphServer {
 }
 
 describe('MCP Apps foundation', () => {
+  afterEach(() => {
+    if (ORIGINAL_BULK_CONFIRMATION_SECRET === undefined) {
+      delete process.env[BULK_CONFIRMATION_SECRET_ENV];
+    } else {
+      process.env[BULK_CONFIRMATION_SECRET_ENV] = ORIGINAL_BULK_CONFIRMATION_SECRET;
+    }
+    resetBulkResultRuntimeTransportModeForTesting();
+  });
+
   it('registers ui:// app resources with Apps MIME and strict CSP metadata', async () => {
     const server = new McpServer({ name: 'apps-test', version: '0.0.0' });
     registerMcpApps(server, { tenant: discoveryTenant(), capabilityProfile: appsProfile() });
@@ -119,11 +150,12 @@ describe('MCP Apps foundation', () => {
     expect(app?.mimeType).toBe('text/html;profile=mcp-app');
     expect(app?._meta?.ui).toMatchObject({
       csp: {
-        defaultSrc: ["'none'"],
-        scriptSrc: ["'self'"],
-        connectSrc: ["'self'"],
+        connectDomains: [],
+        resourceDomains: [],
+        baseUriDomains: [],
       },
       sandbox: 'allow-scripts',
+      prefersBorder: true,
     });
   });
 
@@ -133,7 +165,8 @@ describe('MCP Apps foundation', () => {
     expect(result.contents[0].mimeType).toBe('text/html;profile=mcp-app');
     expect(result.contents[0].uri).toBe('ui://m365/connector-diagnostics.html');
     expect(result.contents[0]._meta?.ui).toMatchObject({
-      csp: expect.objectContaining({ scriptSrc: ["'self'"] }),
+      csp: expect.objectContaining({ connectDomains: [] }),
+      prefersBorder: true,
     });
     expect(result.contents[0].text).toContain('Microsoft 365 MCP');
   });
@@ -174,6 +207,38 @@ describe('MCP Apps foundation', () => {
     expect(result.structuredContent?.summary).toBe('Teams digest ready.');
     expect(result._meta?.ui).toBeUndefined();
     expect(result._meta?.fallback).toBe('apps_unsupported');
+  });
+
+  it('registers connector-diagnostics as a text-first server tool in discovery mode', async () => {
+    process.env[BULK_CONFIRMATION_SECRET_ENV] = 'x'.repeat(32);
+    const mcp = createGraphServer().createMcpServer(discoveryTenant() as never);
+    expect(getBulkResultRuntimeTransportMode()).toBe('http');
+    const result = (await callRegisteredTool(mcp, 'connector-diagnostics')) as {
+      content: Array<{ text: string }>;
+      structuredContent?: Record<string, unknown>;
+    };
+
+    expect(result.content[0]!.text).toContain('Server: Microsoft365MCP 0.0.0');
+    expect(result.content[0]!.text).toContain('Health: ok');
+    expect(result.content[0]!.text).toContain(`Tenant: ${TENANT_ID}`);
+    expect(result.content[0]!.text).toContain('Client capabilities:');
+    expect(result.content[0]!.text).toContain('Apps status:');
+    expect(result.content[0]!.text).toContain('Resources status:');
+    expect(result.content[0]!.text).toContain('Structured results status:');
+    expect(result.content[0]!.text).toContain(`Metadata URLs: mcp: /t/${TENANT_ID}/mcp`);
+    expect(result.content[0]!.text).toContain('If Apps UI is unavailable');
+    expect(result.structuredContent).toEqual(
+      expect.objectContaining({ health: expect.objectContaining({ status: 'ok' }) })
+    );
+  });
+
+  it('fails closed for programmatic HTTP discovery server construction without bulk confirmation secret', () => {
+    delete process.env[BULK_CONFIRMATION_SECRET_ENV];
+
+    expect(() => createGraphServer().createMcpServer(discoveryTenant() as never)).toThrow(
+      BULK_CONFIRMATION_SECRET_ENV
+    );
+    expect(getBulkResultRuntimeTransportMode()).toBe('http');
   });
 
   it('static-preset tenants do not expose app tools or resources by default', async () => {

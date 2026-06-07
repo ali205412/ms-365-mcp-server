@@ -8,6 +8,7 @@ import { registerBulkActionTools } from '../../src/lib/bulk-actions/register.js'
 import {
   BULK_ACTION_TOOL,
   BULK_LIMITS,
+  BulkActionInputZod,
   READ_BULK_RESULT_TOOL,
 } from '../../src/lib/bulk-actions/schema.js';
 import {
@@ -136,6 +137,17 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
 }
 
+function visibleConfirmationFrom(result: ToolLikeResult): Record<string, unknown> {
+  const text = result.content[0]?.text ?? '';
+  const marker = 'Confirmation object for execute:\n';
+  const start = text.indexOf(marker);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const afterMarker = text.slice(start + marker.length);
+  const end = afterMarker.indexOf('\n\nNext actions:');
+  const jsonText = (end === -1 ? afterMarker : afterMarker.slice(0, end)).trim();
+  return asRecord(JSON.parse(jsonText));
+}
+
 function graphClientStub(): GraphClient {
   return {} as unknown as GraphClient;
 }
@@ -162,9 +174,11 @@ class FailingCursorRedisFacade extends MemoryRedisFacade {
 const PROCESS_LOCAL_BULK_RESULTS_ENV = 'MS365_MCP_ENABLE_PROCESS_LOCAL_BULK_RESULTS';
 const REDIS_URL_ENV = 'MS365_MCP_REDIS_URL';
 const TRANSPORT_ENV = 'MS365_MCP_TRANSPORT';
+const BULK_CONFIRMATION_SECRET_ENV = 'MS365_MCP_BULK_CONFIRMATION_SECRET';
 const originalProcessLocalBulkResults = process.env[PROCESS_LOCAL_BULK_RESULTS_ENV];
 const originalRedisUrl = process.env[REDIS_URL_ENV];
 const originalTransport = process.env[TRANSPORT_ENV];
+const originalBulkConfirmationSecret = process.env[BULK_CONFIRMATION_SECRET_ENV];
 
 function mcpServerStub(server: unknown): McpServer {
   return server as McpServer;
@@ -192,6 +206,11 @@ describe('generic bulk-action tool', () => {
       delete process.env[TRANSPORT_ENV];
     } else {
       process.env[TRANSPORT_ENV] = originalTransport;
+    }
+    if (originalBulkConfirmationSecret === undefined) {
+      delete process.env[BULK_CONFIRMATION_SECRET_ENV];
+    } else {
+      process.env[BULK_CONFIRMATION_SECRET_ENV] = originalBulkConfirmationSecret;
     }
     resetBulkResultRuntimeTransportModeForTesting();
     __setRedisForTesting(null);
@@ -242,6 +261,61 @@ describe('generic bulk-action tool', () => {
     expect(JSON.stringify(payload)).not.toContain('chat-id');
   });
 
+  it('renders a copyable preview confirmation object in visible text and accepts it on execute', async () => {
+    resetBulkResultStoreForTesting();
+    const { server, handlers } = makeServer();
+    const executeToolAlias = vi.fn(async () => ({
+      content: [{ type: 'text', text: JSON.stringify({ id: 'safe-id' }) }],
+    }));
+    registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias,
+    });
+    const items = [{ id: 'read-1', toolName: 'get-chat', parameters: { chatId: 'chat-id' } }];
+
+    const preview = await withTenant(
+      [BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'],
+      async () => handlers.get(BULK_ACTION_TOOL)!({ mode: 'preview', outputMode: 'ids', items })
+    );
+    const visibleText = preview.content[0]?.text ?? '';
+
+    expect(visibleText).toContain('Confirmation object for execute:');
+    expect(visibleText).toContain('"planDigest"');
+    expect(visibleText).toContain('"confirmed": true');
+    expect(visibleText).toContain('"expiresAt"');
+    expect(visibleText).toContain('"signature"');
+
+    const confirmation = visibleConfirmationFrom(preview);
+    expect(confirmation).toMatchObject({
+      planDigest: expect.any(String),
+      confirmed: true,
+      expiresAt: expect.any(String),
+      signature: expect.any(String),
+    });
+
+    const executed = await withTenant(
+      [BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'],
+      async () =>
+        handlers.get(BULK_ACTION_TOOL)!({
+          mode: 'execute',
+          outputMode: 'ids',
+          confirmation,
+          items,
+        })
+    );
+
+    expect(executed.isError).not.toBe(true);
+    expect(executeToolAlias).toHaveBeenCalledTimes(1);
+    const payload = asRecord(dataFrom(executed));
+    expect(payload.status).toBe('completed');
+    expect((payload.items as Record<string, unknown>[])[0]).toMatchObject({
+      id: 'read-1',
+      status: 'succeeded',
+    });
+  });
+
   it('honors enabled-tools registration filters per synthetic alias', () => {
     const { server, handlers } = makeServer();
     registerBulkActionTools(mcpServerStub(server), {
@@ -256,7 +330,59 @@ describe('generic bulk-action tool', () => {
     expect(handlers.has(READ_BULK_RESULT_TOOL)).toBe(false);
   });
 
-  it('advertises the same required confirmation expiry that the parser enforces', () => {
+  it('requires a shared confirmation secret when registering bulk-action in HTTP mode', () => {
+    delete process.env[BULK_CONFIRMATION_SECRET_ENV];
+    setBulkResultRuntimeTransportMode('http');
+    const { server } = makeServer();
+
+    expect(() =>
+      registerBulkActionTools(mcpServerStub(server), {
+        graphClient: graphClientStub(),
+        readOnly: false,
+        orgMode: true,
+        executeToolAlias: vi.fn(),
+      })
+    ).toThrow(BULK_CONFIRMATION_SECRET_ENV);
+  });
+
+  it('does not require a shared confirmation secret in HTTP mode when bulk-action is excluded', () => {
+    delete process.env[BULK_CONFIRMATION_SECRET_ENV];
+    setBulkResultRuntimeTransportMode('http');
+    const { server, handlers } = makeServer();
+
+    const registered = registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias: vi.fn(),
+      enabledToolsPattern: /^read-bulk-result$/,
+      enabledToolsSet: new Set([READ_BULK_RESULT_TOOL]),
+    });
+
+    expect(registered).toBe(1);
+    expect(handlers.has(BULK_ACTION_TOOL)).toBe(false);
+    expect(handlers.has(READ_BULK_RESULT_TOOL)).toBe(true);
+  });
+
+  it('treats an explicit empty enabled_tools set as no bulk aliases enabled', () => {
+    delete process.env[BULK_CONFIRMATION_SECRET_ENV];
+    setBulkResultRuntimeTransportMode('http');
+    const { server, handlers } = makeServer();
+
+    const registered = registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias: vi.fn(),
+      enabledToolsSet: new Set(),
+    });
+
+    expect(registered).toBe(0);
+    expect(handlers.has(BULK_ACTION_TOOL)).toBe(false);
+    expect(handlers.has(READ_BULK_RESULT_TOOL)).toBe(false);
+  });
+
+  it('advertises and preserves every required confirmation field that the parser enforces', () => {
     const { server, schemas } = makeServer();
     registerBulkActionTools(mcpServerStub(server), {
       graphClient: graphClientStub(),
@@ -265,15 +391,24 @@ describe('generic bulk-action tool', () => {
       executeToolAlias: vi.fn(),
     });
     const schema = z.object(schemas.get(BULK_ACTION_TOOL) as z.ZodRawShape);
-
-    const result = schema.safeParse({
+    const input = {
       mode: 'execute',
       outputMode: 'summary',
-      confirmation: { planDigest: '0'.repeat(64), confirmed: true },
+      confirmation: {
+        planDigest: '0'.repeat(64),
+        confirmed: true,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        signature: 's'.repeat(43),
+      },
       items: [{ id: 'read-1', toolName: 'get-chat', parameters: { chatId: 'chat-id' } }],
-    });
+    };
 
-    expect(result.success).toBe(false);
+    const registeredResult = schema.safeParse(input);
+
+    expect(registeredResult.success).toBe(true);
+    if (!registeredResult.success) return;
+    expect(registeredResult.data.confirmation.signature).toBe(input.confirmation.signature);
+    expect(BulkActionInputZod.safeParse(registeredResult.data).success).toBe(true);
   });
 
   it('does not advertise cross-request full output when durable bulk result storage is unavailable', async () => {
@@ -439,6 +574,56 @@ describe('generic bulk-action tool', () => {
       confirmation: true,
       confirmationId: 'confirm:delete-onedrive-file:high',
     });
+  });
+
+  it('accepts configured shared confirmation secrets and rejects different replica secrets', async () => {
+    process.env[BULK_CONFIRMATION_SECRET_ENV] = 'shared-confirmation-secret-material-32-bytes';
+    resetBulkResultStoreForTesting();
+    const { server, handlers } = makeServer();
+    const executeToolAlias = vi.fn(async () => ({
+      content: [{ type: 'text', text: JSON.stringify({ id: 'deleted-id' }) }],
+    }));
+    registerBulkActionTools(mcpServerStub(server), {
+      graphClient: graphClientStub(),
+      readOnly: false,
+      orgMode: true,
+      executeToolAlias,
+    });
+    const items = [
+      {
+        id: 'delete-1',
+        toolName: 'delete-onedrive-file',
+        parameters: { driveId: 'drive', driveItemId: 'item' },
+      },
+    ];
+    const preview = await withTenant([BULK_ACTION_TOOL, 'delete-onedrive-file'], async () =>
+      handlers.get(BULK_ACTION_TOOL)!({ mode: 'preview', outputMode: 'summary', items })
+    );
+    const confirmation = asRecord(dataFrom(preview)).confirmation as Record<string, unknown>;
+
+    const accepted = await withTenant([BULK_ACTION_TOOL, 'delete-onedrive-file'], async () =>
+      handlers.get(BULK_ACTION_TOOL)!({
+        mode: 'execute',
+        outputMode: 'summary',
+        confirmation,
+        items,
+      })
+    );
+    expect(accepted.isError).not.toBe(true);
+    expect(executeToolAlias).toHaveBeenCalledTimes(1);
+
+    process.env[BULK_CONFIRMATION_SECRET_ENV] = 'different-confirmation-secret-material-32b';
+    const rejected = await withTenant([BULK_ACTION_TOOL, 'delete-onedrive-file'], async () =>
+      handlers.get(BULK_ACTION_TOOL)!({
+        mode: 'execute',
+        outputMode: 'summary',
+        confirmation,
+        items,
+      })
+    );
+    expect(rejected.isError).toBe(true);
+    expect(rejected._meta?.errorCode).toBe('confirmation_mismatch');
+    expect(executeToolAlias).toHaveBeenCalledTimes(1);
   });
 
   it('rejects replayed confirmations with forged later expiry before execution', async () => {
@@ -633,6 +818,10 @@ describe('generic bulk-action tool', () => {
     const payload = asRecord(dataFrom(executed));
     expect(payload.resultId).toEqual(expect.stringMatching(/^bulk_/));
     expect(payload.resultStore).toBe('redis_durable');
+    expect(executed.content[0]?.text).toContain(String(payload.resultId));
+    expect(executed.content[0]?.text).toContain(
+      `Call read-bulk-result with resultId=${String(payload.resultId)}`
+    );
 
     const read = await withTenant([BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'], async () =>
       handlers.get(READ_BULK_RESULT_TOOL)!({ resultId: payload.resultId, limit: 10 })
@@ -748,6 +937,7 @@ describe('generic bulk-action tool', () => {
     );
     const payload = asRecord(dataFrom(executed));
     expect(payload.resultId).toEqual(expect.stringMatching(/^bulk_/));
+    expect(executed.content[0]?.text).toContain(String(payload.resultId));
     const read = await withTenant([BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'], async () =>
       handlers.get(READ_BULK_RESULT_TOOL)!({ resultId: payload.resultId, limit: 10 })
     );
@@ -1081,6 +1271,10 @@ describe('generic bulk-action tool', () => {
       async () => handlers.get(READ_BULK_RESULT_TOOL)!({ resultId, limit: 1 })
     );
     const cursor = asRecord(dataFrom(firstPage)).nextCursor;
+    expect(firstPage.content[0]?.text).toContain(String(resultId));
+    expect(firstPage.content[0]?.text).toContain(`cursor=${String(cursor)}`);
+    expect(firstPage.content[0]?.text).toContain('read-bulk-result');
+    expect(firstPage.content[0]?.text).not.toContain('nextCursor');
 
     const replayOne = await withTenant(
       [BULK_ACTION_TOOL, READ_BULK_RESULT_TOOL, 'get-chat'],

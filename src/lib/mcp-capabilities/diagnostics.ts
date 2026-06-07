@@ -1,6 +1,8 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ClientCapabilityProfile, McpSurfaceMode, McpTransportKind } from './profile.js';
 import { buildEffectiveCapabilityProfile, DEFAULT_SERVER_CAPABILITIES } from './profile.js';
+import { APP_DEFINITIONS } from '../mcp-apps/assets.js';
+import { getRequestCapabilityProfile } from './session-profile.js';
 
 export interface ConnectorDiagnosticsInput {
   server: { name: string; version: string };
@@ -14,14 +16,17 @@ export interface ConnectorDiagnosticsInput {
 
 export interface ConnectorDiagnosticsPayload extends Record<string, unknown> {
   server: { name: string; version: string };
+  health: { status: 'ok'; detail: string };
   tenant: { id: string };
   surface: McpSurfaceMode;
   transport: McpTransportKind;
   capabilities: ClientCapabilityProfile['capabilities'];
   enabledFeatures: readonly string[];
   disabledFeatures: Array<{ name: string; reason: string }>;
+  capabilityStatuses: Array<{ name: string; effective: boolean; reason?: string }>;
   fallbacks: readonly string[];
   metadataUrls: Record<string, string>;
+  fallbackInstructions: readonly string[];
   expectedDisplayName: string;
 }
 
@@ -42,23 +47,39 @@ export interface RegisterConnectorDiagnosticsDeps {
 
 const SECRET_KEY_PATTERN = /authorization|cookie|token|secret|password|body/i;
 const DEFAULT_DISPLAY_NAME = 'Microsoft 365 MCP Gateway';
+const CONNECTOR_DIAGNOSTICS_DASHBOARD = 'connector-diagnostics';
+const CONNECTOR_DIAGNOSTICS_APP_URI = APP_DEFINITIONS.find(
+  (app) => app.slug === CONNECTOR_DIAGNOSTICS_DASHBOARD
+)?.uri;
+const FALLBACK_INSTRUCTIONS = Object.freeze([
+  'If Apps UI is unavailable, use this text response as the authoritative connector diagnostic.',
+  'If resources/read-resource is unavailable, use the metadata URLs listed here directly in the client or browser.',
+  'If structuredContent is unavailable, no extra JSON is required; all critical status is summarized above.',
+]);
 
 export function buildConnectorDiagnostics(
   input: ConnectorDiagnosticsInput
 ): ConnectorDiagnosticsResult {
+  const disabledFeatures = input.profile.disabledFeatures.map((gate) => ({
+    name: gate.name,
+    reason: gate.disabledReason ?? 'disabled',
+  }));
   const structured: ConnectorDiagnosticsPayload = Object.freeze({
     server: Object.freeze({ ...input.server }),
+    health: Object.freeze({
+      status: 'ok' as const,
+      detail: 'Connector diagnostics tool is reachable.',
+    }),
     tenant: Object.freeze({ id: safeTenantId(input.tenant?.id) }),
     surface: input.surface,
     transport: input.profile.transport,
     capabilities: input.profile.capabilities,
     enabledFeatures: input.profile.enabledFeatures,
-    disabledFeatures: input.profile.disabledFeatures.map((gate) => ({
-      name: gate.name,
-      reason: gate.disabledReason ?? 'disabled',
-    })),
+    disabledFeatures,
+    capabilityStatuses: capabilityStatuses(input.profile),
     fallbacks: input.profile.fallbacks,
     metadataUrls: Object.freeze(redactMetadataUrls(input.metadataUrls ?? {})),
+    fallbackInstructions: FALLBACK_INSTRUCTIONS,
     expectedDisplayName: input.expectedDisplayName ?? DEFAULT_DISPLAY_NAME,
   });
   void redactUnknown(input.requestLike);
@@ -67,6 +88,34 @@ export function buildConnectorDiagnostics(
     text: diagnosticsText(structured),
     structured,
   });
+}
+
+function connectorDiagnosticsResources(tenantId: string): Array<{
+  uri: string;
+  name: string;
+  mimeType: string;
+  description: string;
+}> {
+  return [
+    {
+      uri: `m365://tenant/${tenantId}/dashboards/connector-diagnostics.json`,
+      name: 'Connector diagnostics dashboard data',
+      mimeType: 'application/json',
+      description: 'Durable connector capability profile, metadata URL, and fallback diagnostics.',
+    },
+  ];
+}
+
+function diagnosticsTextWithResources(
+  text: string,
+  resources: ReturnType<typeof connectorDiagnosticsResources>
+): string {
+  return [
+    text,
+    '',
+    'Resources:',
+    ...resources.map((resource) => `- Open ${resource.name}: ${resource.uri}`),
+  ].join('\n');
 }
 
 export function registerConnectorDiagnosticsTool(
@@ -80,6 +129,7 @@ export function registerConnectorDiagnosticsTool(
     { title: 'connector-diagnostics', readOnlyHint: true, openWorldHint: false },
     async () => {
       const profile =
+        getRequestCapabilityProfile() ??
         deps.profile ??
         buildEffectiveCapabilityProfile({
           protocolVersion: undefined,
@@ -98,29 +148,75 @@ export function registerConnectorDiagnosticsTool(
         metadataUrls: deps.metadataUrls,
         expectedDisplayName: deps.expectedDisplayName,
       });
+      const resources = connectorDiagnosticsResources(diagnostics.structured.tenant.id);
 
       return {
-        content: [{ type: 'text' as const, text: diagnostics.text }],
-        structuredContent: diagnostics.structured,
+        content: [
+          {
+            type: 'text' as const,
+            text: diagnosticsTextWithResources(diagnostics.text, resources),
+          },
+        ],
+        structuredContent: {
+          ...diagnostics.structured,
+          resources,
+        },
+        _meta: {
+          dashboard: CONNECTOR_DIAGNOSTICS_DASHBOARD,
+          ...(profile.capabilities.apps.effective && CONNECTOR_DIAGNOSTICS_APP_URI
+            ? {
+                ui: { resourceUri: CONNECTOR_DIAGNOSTICS_APP_URI },
+                'ui/resourceUri': CONNECTOR_DIAGNOSTICS_APP_URI,
+              }
+            : { fallback: 'apps_unsupported' }),
+        },
       };
     }
   );
 }
 
+function capabilityStatuses(
+  profile: ClientCapabilityProfile
+): ConnectorDiagnosticsPayload['capabilityStatuses'] {
+  return Object.entries(profile.capabilities).map(([name, gate]) => ({
+    name,
+    effective: gate.effective,
+    ...(gate.disabledReason ? { reason: gate.disabledReason } : {}),
+  }));
+}
+
 function diagnosticsText(payload: ConnectorDiagnosticsPayload): string {
   const disabled = payload.disabledFeatures.map((feature) => `${feature.name}: ${feature.reason}`);
+  const capabilities = payload.capabilityStatuses.map((capability) =>
+    capability.effective
+      ? `${capability.name}=enabled`
+      : `${capability.name}=disabled (${capability.reason ?? 'disabled'})`
+  );
+  const metadataUrls = Object.entries(payload.metadataUrls).map(([name, url]) => `${name}: ${url}`);
   const lines = [
     `${payload.expectedDisplayName} connector diagnostics`,
     `Server: ${payload.server.name} ${payload.server.version}`,
+    `Health: ${payload.health.status} — ${payload.health.detail}`,
     `Tenant: ${payload.tenant.id}`,
     `Surface: ${payload.surface}`,
     `Transport: ${payload.transport}`,
+    `Client capabilities: ${capabilities.join('; ') || 'none advertised'}`,
+    `Apps status: ${payload.capabilities.apps.effective ? 'enabled' : `fallback (${payload.capabilities.apps.disabledReason ?? 'disabled'})`}`,
+    `Resources status: ${payload.capabilities.resources.effective ? 'enabled' : `fallback (${payload.capabilities.resources.disabledReason ?? 'disabled'})`}`,
+    `Structured results status: ${
+      payload.capabilities.structuredToolResults.effective
+        ? 'enabled'
+        : `fallback (${payload.capabilities.structuredToolResults.disabledReason ?? 'disabled'})`
+    }`,
     `Enabled features: ${payload.enabledFeatures.join(', ') || 'none'}`,
     `Disabled features: ${disabled.join('; ') || 'none'}`,
+    `Metadata URLs: ${metadataUrls.join('; ') || 'none'}`,
+    'Fallback instructions:',
+    ...payload.fallbackInstructions.map((instruction) => `- ${instruction}`),
   ];
 
   if (payload.fallbacks.length > 0) {
-    lines.push(...payload.fallbacks);
+    lines.push('Capability fallbacks:', ...payload.fallbacks.map((fallback) => `- ${fallback}`));
   }
   if (
     payload.disabledFeatures.some((feature) => feature.reason.includes('client does not advertise'))

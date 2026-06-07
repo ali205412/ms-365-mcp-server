@@ -167,7 +167,7 @@ export async function readMcpAppResource(uri: string): Promise<ReadResourceResul
         uri,
         mimeType: APP_MIME_TYPE,
         text,
-        _meta: APP_UI_META,
+        _meta: APP_UI_META as unknown as Record<string, unknown>,
       },
     ],
   } as ReadResourceResult;

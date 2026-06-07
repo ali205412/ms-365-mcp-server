@@ -5,7 +5,7 @@
  * the existing selector DSL, while generated Graph and product aliases remain
  * outside that visible preset.
  */
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -21,6 +21,7 @@ import {
 } from '../../src/lib/tool-selection/preset-loader.js';
 import { validateSelectors } from '../../src/lib/tool-selection/registry-validator.js';
 import { requestContext } from '../../src/request-context.js';
+import { setStdioFallback } from '../../src/lib/tool-selection/dispatch-guard.js';
 import { registerDiscoveryTools, discoveryCache } from '../../src/graph-tools.js';
 import {
   DISCOVERY_META_TOOL_NAMES,
@@ -89,8 +90,11 @@ const DISCOVERY_META_ALIASES = [
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const ESSENTIALS_PRESET_PATH = path.join(REPO_ROOT, 'src', 'presets', 'essentials-v1.json');
+const BULK_CONFIRMATION_SECRET_ENV = 'MS365_MCP_BULK_CONFIRMATION_SECRET';
+const TEST_BULK_CONFIRMATION_SECRET = 'discovery-v1-surface-test-bulk-secret-000000';
 
 let tmpDirs: string[] = [];
+let previousBulkConfirmationSecret: string | undefined;
 
 interface CallToolResult {
   content: Array<{ type: 'text'; text: string }>;
@@ -151,12 +155,23 @@ function stageDiscovery(tmp: string, ops: readonly string[] = DISCOVERY_META_ALI
   );
 }
 
+beforeEach(() => {
+  previousBulkConfirmationSecret = process.env[BULK_CONFIRMATION_SECRET_ENV];
+  process.env[BULK_CONFIRMATION_SECRET_ENV] = TEST_BULK_CONFIRMATION_SECRET;
+});
+
 afterEach(() => {
   for (const tmp of tmpDirs) {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
   tmpDirs = [];
   discoveryCache._clear();
+  setStdioFallback(undefined);
+  if (previousBulkConfirmationSecret === undefined) {
+    delete process.env[BULK_CONFIRMATION_SECRET_ENV];
+  } else {
+    process.env[BULK_CONFIRMATION_SECRET_ENV] = previousBulkConfirmationSecret;
+  }
 });
 
 async function callDiscoveryTool(
@@ -392,6 +407,65 @@ describe('Phase 7 Plan 07-02 — discovery catalog separation', () => {
     expect(graphClient.graphRequest).not.toHaveBeenCalled();
   });
 
+  it('enabled-tools regex filters discovery search, schema, and execute-tool dispatch', async () => {
+    const server = new McpServer({ name: 'test', version: '0.0.0' });
+    const graphClient = {
+      graphRequest: vi.fn().mockResolvedValue({
+        content: [{ type: 'text', text: JSON.stringify({ ok: true }) }],
+      }),
+    };
+    registerDiscoveryTools(
+      server,
+      graphClient as unknown as Parameters<typeof registerDiscoveryTools>[1],
+      false,
+      true,
+      undefined,
+      false,
+      '^me\\.ListMessages$'
+    );
+
+    const ctx = {
+      tenantId: '11111111-1111-4111-8111-222222222222',
+      enabledToolsSet: DISCOVERY_META_TOOL_NAMES,
+      presetVersion: DISCOVERY_PRESET_VERSION,
+    };
+
+    const search = await requestContext.run(ctx, () =>
+      callDiscoveryTool(server, 'search-tools', { limit: 10 })
+    );
+    const searchBody = JSON.parse(search.content[0].text) as {
+      tools: Array<{ name: string }>;
+      total: number;
+    };
+    expect(searchBody.total).toBe(1);
+    expect(searchBody.tools.map((tool) => tool.name)).toEqual(['me.ListMessages']);
+
+    const excludedSchema = await requestContext.run(ctx, () =>
+      callDiscoveryTool(server, 'get-tool-schema', { tool_name: 'me.sendMail' })
+    );
+    expect(excludedSchema.isError).toBe(true);
+    expect(excludedSchema.content[0].text).toContain('Tool not enabled for tenant');
+
+    const includedSchema = await requestContext.run(ctx, () =>
+      callDiscoveryTool(server, 'get-tool-schema', { tool_name: 'me.ListMessages' })
+    );
+    expect(includedSchema.isError).toBeFalsy();
+    expect(includedSchema.content[0].text).toContain('me.ListMessages');
+
+    const excludedExecute = await requestContext.run(ctx, () =>
+      callDiscoveryTool(server, 'execute-tool', { tool_name: 'me.sendMail', parameters: {} })
+    );
+    expect(excludedExecute.isError).toBe(true);
+    expect(excludedExecute.content[0].text).toContain('Tool not enabled for tenant');
+    expect(graphClient.graphRequest).not.toHaveBeenCalled();
+
+    const includedExecute = await requestContext.run(ctx, () =>
+      callDiscoveryTool(server, 'execute-tool', { tool_name: 'me.ListMessages', parameters: {} })
+    );
+    expect(includedExecute.isError).toBeFalsy();
+    expect(graphClient.graphRequest).toHaveBeenCalledTimes(1);
+  });
+
   it('discovery tools enforce explicit tenant allowlists before schema or execution', async () => {
     const server = new McpServer({ name: 'test', version: '0.0.0' });
     const graphClient = {
@@ -518,6 +592,74 @@ describe('Phase 7 Plan 07-05 — aggregate memory registration', () => {
     expect(names).toEqual([...DISCOVERY_META_ALIASES].sort());
     expect(names).toHaveLength(30);
   });
+
+  it('stdio discovery fallback hides and rejects disabled connector diagnostics', async () => {
+    const enabledSet = Object.freeze(
+      new Set([...DISCOVERY_META_TOOL_NAMES].filter((alias) => alias !== 'connector-diagnostics'))
+    );
+    setStdioFallback({
+      enabledToolsSet: enabledSet,
+      enabledToolsExplicit: true,
+      tenantId: 'stdio-legacy',
+      presetVersion: DISCOVERY_PRESET_VERSION,
+    });
+
+    const graphServer = new MicrosoftGraphServer(
+      {
+        isMultiAccount: vi.fn(async () => false),
+        listAccounts: vi.fn(async () => []),
+      } as never,
+      { discovery: true, orgMode: true }
+    );
+    const mcp = graphServer.createMcpServer({
+      preset_version: DISCOVERY_PRESET_VERSION,
+      enabled_tools_set: enabledSet,
+    } as never);
+
+    const list = await invokeToolsList(mcp);
+    const names = list.tools.map((tool) => tool.name);
+    expect(names).toContain('search-tools');
+    expect(names).not.toContain('connector-diagnostics');
+
+    const result = await callDiscoveryTool(mcp, 'connector-diagnostics', {});
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('tool_not_enabled_for_tenant');
+  });
+
+  it.each([
+    [
+      'bulk aliases are disabled',
+      Object.freeze(
+        new Set(
+          [...DISCOVERY_META_TOOL_NAMES].filter(
+            (alias) => alias !== 'bulk-action' && alias !== 'read-bulk-result'
+          )
+        )
+      ),
+    ],
+    ['enabled_tools is explicitly empty', Object.freeze(new Set<string>())],
+  ])(
+    'discovery tenant does not require a bulk confirmation secret when %s',
+    async (_label, enabledSet) => {
+      delete process.env[BULK_CONFIRMATION_SECRET_ENV];
+      const graphServer = createServerFactory();
+
+      const mcp = graphServer.createMcpServer({
+        preset_version: DISCOVERY_PRESET_VERSION,
+        enabled_tools_set: enabledSet,
+      } as never);
+      const ctx = {
+        tenantId: '11111111-1111-4111-8111-111111111111',
+        enabledToolsSet: enabledSet,
+        presetVersion: DISCOVERY_PRESET_VERSION,
+      };
+
+      const list = await requestContext.run(ctx, () => invokeToolsList(mcp));
+      const names = list.tools.map((tool) => tool.name);
+      expect(names).not.toContain('bulk-action');
+      expect(names).not.toContain('read-bulk-result');
+    }
+  );
 
   it('discovery tenant exposes discovery, memory, skill, and dashboard tools while search uses the catalog', async () => {
     const graphServer = createServerFactory();
